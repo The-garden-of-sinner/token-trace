@@ -6,15 +6,14 @@
 # 两个设计约束（都是踩出来的）：
 # 1. 每次调用都要重建「这次请求实际看到的完整上下文」，否则看不到缓存命中了什么。
 # 2. 输出必须是纯静态 HTML —— 依赖 <script> 的版本在托管预览里根本不执行。
-import glob
 import html
 import json
 import os
 import re
 import sqlite3
 import sys
+from pathlib import Path
 
-HOME = os.path.expanduser("~")
 SR = re.compile(r"<system-reminder[^>]*>(.*?)</system-reminder>", re.S)
 MAX_TEXT = 3000      # 块字典里存的上限（全文）
 PREVIEW = 600        # 调用内部就地展开时的预览长度
@@ -39,14 +38,44 @@ def trim(ctx, calls, turns, limit=MAX_CALLS):
 
 
 def data_dir():
-    """WorkBuddy 数据目录。支持 WORKBUDDY_HOME 覆盖，便于测试与非默认安装。"""
-    return os.environ.get("WORKBUDDY_HOME") or os.path.join(HOME, ".workbuddy")
+    """WorkBuddy 数据目录，跨平台。
+
+    优先级：WORKBUDDY_HOME 环境变量 > ~/.workbuddy >（仅 Windows）APPDATA/LOCALAPPDATA。
+    Windows 版客户端的数据目录是 %USERPROFILE%\\.workbuddy，与 Linux/macOS 同构，
+    所以 Path.home() 在两边都能直接命中；后两个候选用于非默认安装。
+    """
+    override = os.environ.get("WORKBUDDY_HOME")
+    if override:
+        return Path(override)
+    base = Path.home() / ".workbuddy"
+    if (base / "projects").is_dir():
+        return base
+    if os.name == "nt":
+        for var in ("APPDATA", "LOCALAPPDATA"):
+            d = os.environ.get(var)
+            if d and (Path(d) / "WorkBuddy" / "projects").is_dir():
+                return Path(d) / "WorkBuddy"
+    return base
 
 
 def iter_jsonl():
-    """递归列出全部会话 jsonl。projects/ 下可能存在更深的层级。"""
-    root = os.path.join(data_dir(), "projects")
-    return glob.iglob(os.path.join(root, "**", "*.jsonl"), recursive=True)
+    """递归列出全部会话 jsonl。用 Path.rglob，跨平台且不受路径分隔符影响。"""
+    root = data_dir() / "projects"
+    if not root.is_dir():
+        return
+    for f in sorted(root.rglob("*.jsonl")):
+        if f.is_file():
+            yield str(f)
+
+
+def db_uri(db):
+    """生成本地 sqlite 的 file: 只读 URI。
+
+    Windows 路径含反斜杠与盘符，直接拼 "file:%s?mode=ro" 会让 SQLite 报
+    unable to open database file；Path.as_uri() 会转成 file:///C:/... 并
+    percent-encode 空格与非 ASCII 字符。
+    """
+    return Path(db).resolve().as_uri() + "?mode=ro"
 
 
 def iter_rows(path, stats=None):
@@ -562,11 +591,11 @@ h2.dicth{{font-size:15px;font-weight:500;margin:34px 0 4px;padding-top:18px;bord
 
 def scan_all():
     """扫描所有会话，返回索引条目（db 补 cwd/标题，jsonl 补统计）"""
-    db = os.path.join(data_dir(), "workbuddy.db")
+    db = data_dir() / "workbuddy.db"
     meta = {}
     meta_ok = True
     try:
-        con = sqlite3.connect("file:%s?mode=ro" % db, uri=True)
+        con = sqlite3.connect(db_uri(db), uri=True)
         try:
             for r in con.execute("select id, cwd, title, custom_title, model from sessions"):
                 meta[r[0]] = {"cwd": r[1] or "", "title": r[3] or r[2] or "", "model": r[4] or ""}

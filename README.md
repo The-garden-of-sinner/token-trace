@@ -43,6 +43,13 @@ TRACE_NO_BROWSER=1 ./start.sh    # 只起服务、不开浏览器（无头 / 自
 `-B` 保持零写盘。实测冷启动 **2.0 s**、常驻 **23.5 MB**（未预热，随访问按需增长）；
 停止走 `POST /shutdown` 让服务自己退出，不依赖 `pkill` 找 PID。
 
+### Windows
+
+双击 `windows\start.cmd`，或在 PowerShell 里运行 `.\windows\start.ps1`；
+`.\windows\start.ps1 stop` 停止，`-Port 9000` 换端口。
+首次执行 `.\windows\install-shortcut.ps1` 可创建桌面 / 开始菜单快捷方式。
+详见 [Windows 支持](#windows-支持)。
+
 ### 命令行启动
 
 ```bash
@@ -193,7 +200,7 @@ python3 gen_trace.py --all              # 关掉截断（可能几十 MB 单页�
 | `GET /api/s/<sid>/outputs/<seq>?seg=&offset=&limit=` | 输出全文，分段 + 分片 |
 | `GET /api/s/<sid>/turns/<n>` | 某一轮的全部调用 |
 | `GET /api/search?q=&sid=&scope=&limit=` | 全文搜索，返回命中位置、片段和跳转链接 |
-| `POST /shutdown` | 停止服务，供 `start.sh stop` 调用（只监听本机，无鉴权） |
+| `POST /shutdown` | 停止服务，供 `start.sh stop` 调用；校验 Host/Origin，配置令牌时还需鉴权 |
 
 ```bash
 curl -s "http://127.0.0.1:8765/api/sessions" | python3 -m json.tool
@@ -357,13 +364,43 @@ RSS 只涨 0.7 MB（Python 堆的一次性分配），**第二轮完全不涨**�
 - 静态模式仍保留 150 次调用 / 3000 字的截断，它是离线兜底，不是完整视图。
 - 缓存命中边界是**估算**（接口不给切分位置），块级准确、跨界块内部有误差。
 - 搜索是流式扫描而非倒排索引：冷缓存首次全库搜索约 2.4 s，加 `--warm` 后不到 0.5 s。
-- 服务默认只监听 `127.0.0.1`，无鉴权、无 CORS；要放到别的机器上需自行加反向代理和认证。
+- 服务默认只监听 `127.0.0.1`。绑定非本机地址时必须提供 `--token`；
+  `POST /shutdown` 会校验 Host / Origin / Sec-Fetch-Site，避免跨站关停。
   `POST /shutdown` 是唯一的写操作端点（只是让进程退出，不动磁盘）。
 - `start.sh stop` 的 `pkill` 兜底在 PID namespace 隔离的环境（如 WorkBuddy 的 exec 沙箱）里看不到桌面进程，
   但优先走的 HTTP `/shutdown` 不受影响；极老的、没有该端点的实例只能靠 `pkill` 或重启桌面会话。
 - 积分来自本地记录，云端补扣或赠送的部分不在里面。
 
+## Windows 支持
+
+两个核心 Python 文件只依赖标准库，跨平台；Linux 上的 `start.sh` / `.desktop` 启动器由
+`windows/` 下的三个文件替代：
+
+| 文件 | 作用 |
+| --- | --- |
+| `windows/start.cmd` | 双击入口，转调 PowerShell 并绕过执行策略 |
+| `windows/start.ps1` | 幂等启动 / 停止 / 查看状态；对应 `./start.sh` 与 `./start.sh stop` |
+| `windows/install-shortcut.ps1` | 创建桌面 / 开始菜单 `.lnk`，对应 `install-desktop.sh` |
+
+数据目录与 Linux 同构：会话记录在 `%USERPROFILE%\.workbuddy\projects\`，索引库在
+`%USERPROFILE%\.workbuddy\workbuddy.db`。若装在别处，设置 `WORKBUDDY_HOME` 覆盖。
+
+实现要点：
+
+- sqlite 只读连接用 `Path.as_uri()` 生成 `file:///C:/...?mode=ro`，避开 Windows 路径里的反斜杠与盘符；
+- `/api/health` 的 `rss_mb` 在 Windows 上走 `ctypes` 调 `GetProcessMemoryInfo`（Linux 仍读 `/proc`）；
+- 会话扫描用 `Path.rglob("*.jsonl")`，不依赖路径分隔符，也能覆盖 `projects\` 下的多层目录；
+- 启动器用 `python.exe -WindowStyle Hidden`，不用 `pythonw.exe`（后者 `sys.stdout` 为 `None`，会让 `print()` 崩）；
+- `PYTHONUTF8=1` 避免 Windows 控制台中文乱码；两个 `.ps1` 以 UTF-8 BOM 保存，供 PowerShell 5.1 正确读取。
+
+`TRACE_PORT` / `TRACE_NO_BROWSER` 对应的 PowerShell 参数是 `-Port` / `-NoBrowser`；
+`TRACE_TOKEN` 对应 `-Token`（别名 `-ShutdownToken`），会同时传给服务的 `--token`。
+
+**尚未在真实 Windows 机器上验证**（本次改动在 Linux 沙箱内完成）。需要在 Windows 上确认四点：
+`projects\` 的实际层级深度、中文或空格用户名下 WAL 模式 `workbuddy.db` 的只读打开、
+`python.exe -WindowStyle Hidden` 的隐藏效果、以及含中文路径时 PowerShell 的传参。
+
 ## 依赖
 
-Python 3.8+，仅标准库（`http.server` / `json` / `glob` / `sqlite3` / `re` / `bisect` / `urllib`）。
+Python 3.8+，仅标准库（`http.server` / `json` / `pathlib` / `sqlite3` / `re` / `bisect` / `urllib` / `ctypes`）。
 不需要第三方包，不需要前端构建，不需要数据库服务。

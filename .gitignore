@@ -19,3 +19,8 @@ patch_cli.sh
 .workbuddy/
 .Trash-*/
 .DS_Store
+
+# Windows 运行时产物
+Thumbs.db
+Desktop.ini
+*.lnk

@@ -14,8 +14,8 @@
 | 1 | 输入容错 | P0-1 | `f2632fc` | 10/10 通过 |
 | 2 | 安全边界 | P0-2 / P0-3 | `284c98e` | 23/23 通过 |
 | 3 | 正确性与并发 | P1-4 ~ P1-9 | `d3ade7b` | 32/32 通过 |
-| 4 | 打磨项 | P2 全部 | 待填 | 43/43 通过 |
-| 5 | Windows 跨平台 | 迁移评估 | — | — |
+| 4 | 打磨项 | P2 全部 | `d165c5e` | 43/43 通过 |
+| 5 | Windows 跨平台 | 迁移评估 | 待填 | 54/54 通过 |
 
 ---
 
@@ -229,3 +229,70 @@ full=1 元数据、字符 offset 上限、空上下文边界、HEAD 短路、CHI
 trim 无副作用、启动日志与健康检查、desktop Exec 引号、health 依据、scope 白名单。
 验证：隔离 HOME 端到端 43/43 通过，bash -n / ast.parse 通过。
 ```
+
+---
+
+## 阶段 5 · Windows 跨平台
+
+### 改动
+
+| 文件 | 改动 |
+| --- | --- |
+| `gen_trace.py` | `data_dir()` 改为返回 `Path`，支持 `WORKBUDDY_HOME` 覆盖；除 `~/.workbuddy` 外，Windows 下还会探测 `%APPDATA%\WorkBuddy` / `%LOCALAPPDATA%\WorkBuddy`。删掉 import 时即固定的 `HOME` 常量 |
+| `gen_trace.py` | 新增 `db_uri(db)`：用 `Path.resolve().as_uri() + "?mode=ro"` 生成 sqlite 只读 URI。Windows 路径含反斜杠与盘符，原来的 `"file:%s?mode=ro" % db` 会报 `unable to open database file` |
+| `gen_trace.py` | `iter_jsonl()` 改用 `Path.rglob("*.jsonl")`，跨平台且不受分隔符影响，顺带保证扫描顺序稳定 |
+| `trace_server.py` | 新增 `rss_mb()`：Linux 读 `/proc/self/status`，Windows 走 `ctypes` 调 `GetProcessMemoryInfo`，其它平台返回 `None`。`/api/health` 不再硬依赖 `/proc` |
+| `trace_server.py` | `main()` 开头兜住 `pythonw.exe` 下 `sys.stdout is None` 导致的 `print()` 崩溃，并在 Windows 上把 stdout/stderr 重配为 UTF-8 |
+| `windows/` | 新增 `start.cmd`、`start.ps1`、`install-shortcut.ps1`，替代 Linux 的 `start.sh` / `.desktop` 启动器；与阶段 2 的 `--token` 打通（`-Token` / `TRACE_TOKEN` 会传给服务，浏览器首访用 `?token=` 种 Cookie） |
+| `README.md` | 新增「Windows 支持」章节与快速开始里的 Windows 入口；同步鉴权相关表述（原来写「无鉴权」已不准确） |
+| `.gitignore` | 排除 `Thumbs.db` / `Desktop.ini` / `*.lnk` |
+
+### 验证
+
+`regress.py 5` 是全量回归，前四阶段 43 项全部重跑通过，另加 11 项跨平台断言：
+
+```
+=== 阶段5 Windows 跨平台 ===
+  PASS db_uri 生成合法 file URI         file:///tmp/.../workbuddy.db?mode=ro
+  PASS db_uri 能打开索引库             sessions=2
+  PASS Windows 路径 URI 正确编码        file:///C:/Users/John%20Doe/.workbuddy/workbuddy.db?mode=ro
+  PASS WORKBUDDY_HOME 覆盖生效
+  PASS rss_mb 在 Linux 仍返回数值       rss_mb=28.9
+  PASS rss_mb() 直接调用返回数值
+  PASS iter_jsonl 仍覆盖深层目录
+  PASS 三个 Windows 启动器齐备
+  PASS start.ps1 / install-shortcut.ps1 带 UTF-8 BOM
+  PASS PowerShell 脚本静态结构配平
+=== 汇总 ===  54 项检查，54 通过，0 失败
+```
+
+Windows 路径的 URI 用 `PureWindowsPath.as_uri()` 在 Linux 上模拟验证（不依赖真 Windows）：空格被编码成 `%20`、盘符转成 `file:///C:/`。另外跑了 `python3 -B gen_trace.py` 静态模式、`bash -n` 两个 shell 脚本、`git diff --check`。
+
+**验证边界（如实说明）**：本次改动在 Ubuntu 沙箱内完成，沙箱**没有 Windows，也没有 PowerShell**（尝试下载 Linux 版 `pwsh` 因网络超时失败）。所以三个 `.ps1` / `.cmd` 只做了静态检查（UTF-8 BOM、括号/引号配平），**没有做 PowerShell 语法解析，更没有在 Windows 上运行过**。`ctypes` 分支、`-WindowStyle Hidden` 效果、WAL 库在中文/空格用户名下的只读打开，都需要目标机实测。README 的「Windows 支持」章节列了这四项。
+
+### commit
+
+```
+feat: 补齐 Windows 跨平台支持与启动器（阶段5）
+
+db_uri()/data_dir()/rss_mb() 三处平台改造；新增 windows/ 启动器三件套；
+README 补 Windows 章节。验证：隔离 HOME 端到端 54/54 通过，
+PowerShell 脚本仅静态检查（沙箱无 Windows / pwsh）。
+```
+
+---
+
+## 最终汇总
+
+| 阶段 | commit | 主题 | 累计验证项 |
+| --- | --- | --- | --- |
+| 1 | `f2632fc` | P0-1 输入容错 | 10 |
+| 2 | `284c98e` | P0-2 / P0-3 安全边界 | 23 |
+| 3 | `d3ade7b` | P1 正确性与并发 | 32 |
+| 4 | `d165c5e` | P2 打磨项 | 43 |
+| 5 | 待填 | Windows 跨平台 | 54 |
+
+- 五次提交的 author / committer 均为 `The-garden-of-sinner <50914620+The-garden-of-sinner@users.noreply.github.com>`，与初始 commit `c6d2b4f` 一致。
+- 每阶段都是「改动 → 全量回归 → 提交」，回归脚本用隔离的临时 `HOME` 构造数据，未触碰真实 `~/.workbuddy`；`trace/` 静态产物由 `.gitignore` 排除。
+- **未推送远程**：本次只在本地仓库提交。推送属于远程写操作，需另行确认。
+- **仍需在真实 Windows 上确认**：`projects\` 层级深度、中文/空格用户名下 WAL 模式 `workbuddy.db` 的只读打开、`python.exe -WindowStyle Hidden` 的隐藏效果、含中文路径的 PowerShell 传参，以及三个 `.ps1` / `.cmd` 的语法与运行。

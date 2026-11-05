@@ -32,8 +32,6 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gen_trace as G  # noqa: E402  复用 build / scan_all / brief / cmd_html
 
-HOME = os.path.expanduser("~")
-
 # 每屏渲染上限 —— 调大只会让单页变重，不会让内容变多
 PAGE_TURNS = 20        # 会话页每页轮数
 PAGE_CALLS = 40        # 调用列表每页条数
@@ -180,6 +178,39 @@ class Store(object):
                 "skipped_lines": meta.get("_skipped_lines", 0),
             },
         }
+
+
+def rss_mb():
+    """进程常驻内存（MB）。Linux 读 /proc，Windows 用 ctypes，其他平台返回 None。"""
+    try:
+        if os.name == "nt":
+            import ctypes
+            from ctypes import wintypes
+
+            class PMC(ctypes.Structure):
+                _fields_ = [("cb", wintypes.DWORD),
+                            ("PageFaultCount", wintypes.DWORD),
+                            ("PeakWorkingSetSize", ctypes.c_size_t),
+                            ("WorkingSetSize", ctypes.c_size_t),
+                            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                            ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                            ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                            ("PagefileUsage", ctypes.c_size_t),
+                            ("PeakPagefileUsage", ctypes.c_size_t)]
+
+            m = PMC()
+            m.cb = ctypes.sizeof(m)
+            ctypes.windll.psapi.GetProcessMemoryInfo(
+                ctypes.windll.kernel32.GetCurrentProcess(), ctypes.byref(m), m.cb)
+            return round(m.WorkingSetSize / 1048576.0, 1)
+        with open("/proc/self/status", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("VmRSS:"):
+                    return round(int(line.split()[1]) / 1024.0, 1)
+    except (OSError, AttributeError, ValueError):
+        pass
+    return None
 
 
 STORE = Store()
@@ -1010,18 +1041,10 @@ def api_route(path, q):
             obj, ensure_ascii=False, default=str).encode("utf-8")
 
     if path == "/api/health":
-        rss_kb = 0
-        try:
-            for line in open("/proc/self/status", encoding="utf-8"):
-                if line.startswith("VmRSS:"):
-                    rss_kb = int(line.split()[1])
-                    break
-        except OSError:
-            pass
         return json_bytes(env({
             "status": "ok", "pid": os.getpid(),
             "uptime_s": int(time.time() - START_TS),
-            "rss_mb": round(rss_kb / 1024.0, 1),
+            "rss_mb": rss_mb(),
             "sessions": len(STORE.sessions()),
             "cached_sessions": len(STORE._cache),
             "write_files": False,
@@ -1326,6 +1349,18 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    # pythonw.exe（无控制台）下 sys.stdout/stderr 为 None，print() 会崩；
+    # Windows 控制台默认 GBK，中文输出会乱码。两者都在这里兜住。
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    if os.name == "nt":
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (AttributeError, ValueError, OSError):
+                pass
     ap = argparse.ArgumentParser(description="token-trace 完整模式服务（零脚本、按需渲染）")
     ap.add_argument("--host", default="127.0.0.1", help="默认只监听本机")
     ap.add_argument("--port", type=int, default=8765)
