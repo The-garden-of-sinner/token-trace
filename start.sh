@@ -13,13 +13,23 @@ set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PY=/usr/bin/python3
 PORT="${TRACE_PORT:-8765}"
+TOKEN="${TRACE_TOKEN:-}"
 URL="http://127.0.0.1:${PORT}/"
 
-alive() { curl -fsS --max-time 1 "${URL}health" >/dev/null 2>&1; }
+# 配了令牌就给每个请求带上；用函数包装，避免空数组在老 bash 下的 unbound 问题
+curl_auth() {
+    if [ -n "$TOKEN" ]; then
+        curl -H "Authorization: Bearer $TOKEN" "$@"
+    else
+        curl "$@"
+    fi
+}
+
+alive() { curl_auth -fsS --max-time 1 "${URL}health" >/dev/null 2>&1; }
 
 if [ "${1:-}" = "stop" ]; then
     # 优先让服务自己退出（HTTP），不依赖 pkill —— 沙箱/容器里常看不到桌面进程
-    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 -X POST "${URL}shutdown" 2>/dev/null || true)"
+    code="$(curl_auth -s -o /dev/null -w '%{http_code}' --max-time 2 -X POST "${URL}shutdown" 2>/dev/null || true)"
     if [ "$code" = "200" ]; then
         echo "Token 轨迹服务已停止（$URL）"
     elif pkill -f "trace_server.py --port ${PORT}" 2>/dev/null; then
@@ -34,7 +44,11 @@ if alive; then
     echo "服务已在运行，直接打开：$URL"
 else
     echo "正在启动 Token 轨迹服务…"
-    setsid "$PY" -B "$DIR/trace_server.py" --port "$PORT" </dev/null >/dev/null 2>&1 &
+    if [ -n "$TOKEN" ]; then
+        setsid "$PY" -B "$DIR/trace_server.py" --port "$PORT" --token "$TOKEN" </dev/null >/dev/null 2>&1 &
+    else
+        setsid "$PY" -B "$DIR/trace_server.py" --port "$PORT" </dev/null >/dev/null 2>&1 &
+    fi
     for _ in $(seq 1 40); do
         alive && break
         sleep 0.25
@@ -48,5 +62,7 @@ else
 fi
 
 if [ "${TRACE_NO_BROWSER:-0}" != "1" ]; then
-    ( xdg-open "$URL" >/dev/null 2>&1 & ) || echo "浏览器打开失败，请手动访问 $URL" >&2
+    OPEN_URL="$URL"
+    [ -n "$TOKEN" ] && OPEN_URL="${URL}?token=${TOKEN}"
+    ( xdg-open "$OPEN_URL" >/dev/null 2>&1 & ) || echo "浏览器打开失败，请手动访问 $OPEN_URL" >&2
 fi

@@ -11,8 +11,8 @@
 
 | 阶段 | 主题 | 对应问题 | commit | 验证结果 |
 | --- | --- | --- | --- | --- |
-| 1 | 输入容错 | P0-1 | 待填 | 10/10 通过 |
-| 2 | 安全边界 | P0-2 / P0-3 | — | — |
+| 1 | 输入容错 | P0-1 | `f2632fc` | 10/10 通过 |
+| 2 | 安全边界 | P0-2 / P0-3 | 待填 | 23/23 通过 |
 | 3 | 正确性与并发 | P1-4 ~ P1-9 | — | — |
 | 4 | 打磨项 | P2 全部 | — | — |
 | 5 | Windows 跨平台 | 迁移评估 | — | — |
@@ -77,4 +77,60 @@ fix: jsonl 半行不再让整个会话 500，build/scan_all 容错口径统一�
 新增 iter_rows() 共用逐行解析器，坏行跳过并计数；
 meta/stats/索引/页面/静态页逐层暴露 skipped_lines，用户能看到数据不完整。
 验证：隔离 HOME 端到端 10/10 通过，27 条基线路由全绿。
+```
+
+---
+
+## 阶段 2 · 补上 shutdown 来源校验与非本机绑定的鉴权边界（P0-2 / P0-3）
+
+### 问题
+
+- `do_POST /shutdown` 只看路径，不校验 `Host` / `Origin` / `Sec-Fetch-Site`，也不要求令牌。表单 POST 属于 CORS 简单请求，浏览器不发预检直接送达，因此**任意网页都能静默关停服务**（审阅时实测：`Origin: https://evil.example` 的 POST 返回 200，服务随即退出）。
+- `--host` 允许任意值，但代码没有强制鉴权。绑到 `0.0.0.0` 时，`/api/s/<sid>/blocks/<idx>?full=1` 会把全部会话原文（提问、工具输出、工作区路径）开放到局域网。
+
+### 改动
+
+| 文件 | 改动 |
+| --- | --- |
+| `trace_server.py` | 新增 `--token`（也可由 `TRACE_TOKEN` 提供）。`main()` 在 `--host` 非 loopback 且无令牌时 `argparse.error` 直接拒绝启动 |
+| `trace_server.py` | `Handler._authorized()`：令牌非空时校验 `Authorization: Bearer`、`?token=` 或 Cookie；用 `hmac.compare_digest` 比较。带 `?token=` 首次访问会 `Set-Cookie`，后续零 JS 的 `<a href>` 自动携带，不用给每个链接拼令牌 |
+| `trace_server.py` | `Handler._shutdown_ok()`：Host 必须是 loopback（`127.0.0.1` / `localhost` / `::1`），Origin 若存在必须同源，`Sec-Fetch-Site` 若存在必须为 `same-origin` / `none`；再叠加令牌校验。不通过返回 403 |
+| `trace_server.py` | 抽出 `_reply()` 统一响应头（`Content-Length` / `Cache-Control` / 可选 `Set-Cookie`），`do_GET` / `do_POST` 共用 |
+| `trace_server.py` | 顺带修 P2-14：`_drain_body()` 消费 POST 请求体并 `close_connection`，避免 HTTP/1.1 长连接下残留 body 被当成下一个请求行（审阅时日志里出现过 `Bad request syntax ('x=1')`） |
+| `start.sh` | 支持 `TRACE_TOKEN`：`curl_auth()` 包装给健康检查 / stop 带令牌，启动时传 `--token`，打开浏览器时 URL 带 `?token=` 以便种 Cookie |
+
+默认行为完全不变：不设令牌、绑 `127.0.0.1` 时，桌面双击和 `./start.sh` 的用法与之前一致。
+
+### 验证
+
+`regress.py 2` 在阶段 1 的 10 项基线上追加 13 项安全断言：
+
+```
+=== 阶段2 安全边界 ===
+  PASS 跨站 Origin 的 shutdown 被拒                  code=403
+  PASS 伪造 Host 的 shutdown 被拒                    code=403
+  PASS cross-site 的 shutdown 被拒                   code=403
+  PASS 未知 POST 仍返回 404                          code=404
+  PASS --host 0.0.0.0 无 token 拒绝启动              rc=2
+  PASS 带 token 实例可启动
+  PASS 无 token 的 GET 被拒
+  PASS Bearer 头可通过
+  PASS ?token= 可通过并种 Cookie                     code=200
+  PASS Cookie 可通过后续零 JS 链接
+  PASS 错误 token 被拒
+  PASS 带 token 实例也拒绝跨站 shutdown
+  PASS 本机关停端点仍可用                            code=200
+=== 汇总 ===  23 项检查，23 通过，0 失败
+```
+
+`bash -n start.sh` 通过；两个 Python 文件 `ast.parse` 通过。
+
+### commit
+
+```
+fix: shutdown 校验来源，非本机绑定强制访问令牌（阶段2/P0-2 P0-3）
+
+挡住跨站 POST / DNS rebinding；--token 支持 Bearer/?token=/Cookie，
+浏览器零 JS 链接可续期。顺带修 POST 请求体残留导致的 400。
+验证：隔离 HOME 端到端 23/23 通过。
 ```

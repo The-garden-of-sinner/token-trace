@@ -13,6 +13,7 @@
 
 import argparse
 import bisect
+import hmac
 import html
 import json
 import os
@@ -49,6 +50,8 @@ PALETTE = {"tool_result": "#888780", "injected": "#EF9F27", "user": "#378ADD",
            "tool_call": "#B4B2A9", "assistant": "#1D9E75"}
 CHIP = {"hit": "命中", "miss": "未命中", "part": "跨边界", "none": "上下文"}
 SID_RE = re.compile(r"^[0-9A-Za-z_-]+$")
+TOKEN = ""          # --token / TRACE_TOKEN；非空时所有请求都要鉴权
+LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
 
 
 def esc(s):
@@ -937,7 +940,8 @@ def v_api_doc(q):
     for path, desc in rows:
         body += '<div class="apirow"><code>GET %s</code><span>%s</span></div>' % (path, esc(desc))
     body += ('<div class="apirow"><code>POST /shutdown</code>'
-             '<span>停止服务（<code>start.sh stop</code> 用；只监听本机）</span></div>')
+             '<span>停止服务（<code>start.sh stop</code> 用；校验 Host/Origin/Sec-Fetch-Site，'
+             '配置令牌时还需鉴权）</span></div>')
     body += ('<h2>调用示例</h2><pre class="text">'
              'curl -s "http://127.0.0.1:8765/api/sessions" | python3 -m json.tool\n'
              'curl -s "http://127.0.0.1:8765/api/s/&lt;sid&gt;/calls?limit=5"\n'
@@ -1143,10 +1147,77 @@ class Handler(BaseHTTPRequestHandler):
         if os.environ.get("TRACE_VERBOSE"):
             sys.stderr.write("  %s %s\n" % (self.address_string(), fmt % args))
 
+    def _authorized(self):
+        """--token 非空时校验 Bearer 头 / ?token= / Cookie。
+
+        浏览器首次带 ?token= 访问会种下 Cookie，后续零 JS 的 <a href> 自动带上，
+        不需要给每个链接拼令牌。
+        """
+        if not TOKEN:
+            return True
+        auth = self.headers.get("Authorization") or ""
+        if hmac.compare_digest(auth, "Bearer " + TOKEN):
+            return True
+        q = parse_qs(urlsplit(self.path).query).get("token", [""])[0]
+        if q and hmac.compare_digest(q, TOKEN):
+            self._set_cookie = True
+            return True
+        for part in (self.headers.get("Cookie") or "").split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == "trace_token" and hmac.compare_digest(v, TOKEN):
+                return True
+        return False
+
+    def _shutdown_ok(self):
+        """挡住跨站 POST 与 DNS rebinding：Host 必须 loopback，来源必须同源。"""
+        port = self.server.server_address[1]
+        host = (self.headers.get("Host") or "").lower()
+        host_only = host[1:].split("]")[0] if host.startswith("[") else host.split(":")[0]
+        if host_only not in LOOPBACK:
+            return False
+        origin = (self.headers.get("Origin") or "").rstrip("/").lower()
+        if origin and origin not in ("http://127.0.0.1:%d" % port,
+                                    "http://localhost:%d" % port,
+                                    "http://[::1]:%d" % port):
+            return False
+        sfs = (self.headers.get("Sec-Fetch-Site") or "").lower()
+        if sfs and sfs not in ("same-origin", "none"):
+            return False
+        return self._authorized()
+
+    def _drain_body(self):
+        """消费请求体并关闭连接，避免 HTTP/1.1 下残留 body 被当成下一个请求行。"""
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = 0
+        if n > 0:
+            self.rfile.read(min(n, 65536))
+        self.close_connection = True
+
+    def _reply(self, status, ctype, payload):
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Cache-Control", "no-store")
+            if getattr(self, "_set_cookie", False):
+                self.send_header("Set-Cookie",
+                                 "trace_token=%s; Path=/; HttpOnly; SameSite=Strict" % TOKEN)
+            self.end_headers()
+            if not getattr(self, "_head_only", False):
+                self.wfile.write(payload)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
     def do_GET(self):
         u = urlsplit(self.path)
         path, q = u.path, parse_qs(u.query, keep_blank_values=True)
         t0 = time.time()
+        if not self._authorized():
+            self._reply(401, "application/json; charset=utf-8",
+                        b'{"ok":false,"error":"unauthorized"}')
+            return
         try:
             if path == "/favicon.ico":
                 self.send_response(204)
@@ -1183,16 +1254,7 @@ class Handler(BaseHTTPRequestHandler):
             ctype = "text/html; charset=utf-8"
             payload = page("500", [("索引", "/"), ("错误", "")],
                            '<div class="warn">服务端出错，详见终端日志。</div>').encode("utf-8")
-        try:
-            self.send_response(status)
-            self.send_header("Content-Type", ctype)
-            self.send_header("Content-Length", str(len(payload)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            if not getattr(self, "_head_only", False):
-                self.wfile.write(payload)
-        except (BrokenPipeError, ConnectionResetError):
-            pass
+        self._reply(status, ctype, payload)
         if os.environ.get("TRACE_VERBOSE"):
             sys.stderr.write("  %3d %6.1f KB %5d ms  %s\n" %
                              (status, len(payload) / 1024.0,
@@ -1206,19 +1268,17 @@ class Handler(BaseHTTPRequestHandler):
             self._head_only = False
 
     def do_POST(self):
-        """一键停止：POST /shutdown。服务只监听 127.0.0.1，不依赖外部找 PID。"""
+        """一键停止：POST /shutdown。校验来源，避免任意网页静默关停服务。"""
         if urlsplit(self.path).path != "/shutdown":
+            self._drain_body()
             self.send_error(404)
             return
-        try:
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
-            self.send_header("Content-Length", "2")
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(b"ok")
-        except (BrokenPipeError, ConnectionResetError):
-            pass
+        self._drain_body()
+        if not self._shutdown_ok():
+            self._reply(403, "application/json; charset=utf-8",
+                        b'{"ok":false,"error":"forbidden: cross-site or bad host/token"}')
+            return
+        self._reply(200, "text/plain; charset=utf-8", b"ok")
         threading.Thread(target=self.server.shutdown, daemon=True).start()
 
 
@@ -1228,8 +1288,14 @@ def main():
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--cache", type=int, default=CACHE_SESSIONS, help="内存中保留几个已解析会话")
     ap.add_argument("--warm", action="store_true", help="启动时预解析全部会话（可选，约 3 秒）")
+    ap.add_argument("--token", default=os.environ.get("TRACE_TOKEN") or "",
+                    help="访问令牌；绑定非本机地址时必填，也可由 TRACE_TOKEN 提供")
     a = ap.parse_args()
-    global STORE
+    if a.host not in ("127.0.0.1", "localhost", "::1") and not a.token:
+        ap.error("绑定非本机地址（--host %s）时必须用 --token 设置访问令牌，"
+                 "否则会话原文会暴露在网络上" % a.host)
+    global STORE, TOKEN
+    TOKEN = a.token
     STORE = Store(a.cache)
     ss = STORE.sessions()
     print("索引 %d 个会话 / %d 个工作区" % (len(ss), len(set(s["ws"] for s in ss))))
@@ -1240,6 +1306,8 @@ def main():
         print("预热完成 %.2fs" % (time.time() - t0))
     url = "http://%s:%d/" % (a.host, a.port)
     print("服务已启动: %s" % url)
+    if TOKEN:
+        print("  已启用访问令牌：浏览器用 %s?token=*** 打开，或带 Authorization: Bearer ***" % url)
     print("  纯 HTML 导航，无 JavaScript；每次请求只返回一屏。Ctrl+C 停止。")
     srv = ThreadingHTTPServer((a.host, a.port), Handler)
     srv.daemon_threads = True
