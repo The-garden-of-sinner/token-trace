@@ -83,6 +83,7 @@ class Store(object):
         self._index = None
         self._index_at = 0.0
         self._cache = OrderedDict()
+        self._loading = {}          # sid -> Event，防止并发首访重复解析
 
     def sessions(self, refresh=False):
         with self.lock:
@@ -105,16 +106,32 @@ class Store(object):
                 d = self._cache.pop(sid)
                 self._cache[sid] = d
                 return d
-        s = self.by_id(sid)
-        t0 = time.time()
-        ctx, calls, meta, turns = G.build(s["path"], full=True)
-        d = self._derive(s, ctx, calls, meta, turns)
-        d["parse_ms"] = int((time.time() - t0) * 1000)
-        with self.lock:
-            self._cache[sid] = d
-            while len(self._cache) > self.cap:
-                self._cache.popitem(last=False)
-        return d
+            ev = self._loading.get(sid)
+            owner = ev is None
+            if owner:
+                ev = threading.Event()
+                self._loading[sid] = ev
+        if not owner:
+            ev.wait()
+            with self.lock:
+                if sid in self._cache:
+                    return self._cache[sid]
+            return self.get(sid)      # 缓存已被淘汰或解析失败，重新走一遍
+        try:
+            s = self.by_id(sid)
+            t0 = time.time()
+            ctx, calls, meta, turns = G.build(s["path"], full=True)
+            d = self._derive(s, ctx, calls, meta, turns)
+            d["parse_ms"] = int((time.time() - t0) * 1000)
+            with self.lock:
+                self._cache[sid] = d
+                while len(self._cache) > self.cap:
+                    self._cache.popitem(last=False)
+            return d
+        finally:
+            with self.lock:
+                self._loading.pop(sid, None)
+            ev.set()
 
     @staticmethod
     def _derive(s, ctx, calls, meta, turns):
@@ -166,6 +183,7 @@ class Store(object):
 
 
 STORE = Store()
+CALC_LOCK = threading.RLock()   # stats / search 这类全库遍历串行，避免与 LRU 互相驱逐
 START_TS = time.time()
 
 
@@ -551,6 +569,9 @@ def v_index(q):
                 ("模型调用", nfmt(total_calls)), ("累计积分", "%.1f" % total_cr),
                 ("累计输入 tok", nfmt(sum(s["pin"] for s in ss))),
                 ("累计输出 tok", nfmt(sum(s["pout"] for s in ss)))])
+    if any(not s.get("meta_ok", True) for s in ss):
+        body += ('<div class="warn">workbuddy.db 未读到：会话标题、工作区与模型名已退回兜底值，'
+                 '详情见服务端终端输出。</div>')
     body += ('<form class="searchbox" method="get" action="/search">'
              '<input type="text" name="q" placeholder="搜上下文块 / 输出 / 提问原文（跨全部会话）" value="">'
              '<select name="scope"><option value="all">全部范围</option><option value="blocks">只看上下文块</option>'
@@ -840,7 +861,8 @@ def v_search(q, sid=None):
     scope = qstr(q, "scope", "all")
     d = STORE.get(sid) if sid else None
     t0 = time.time()
-    hits, warn = search(term, sid=sid, scope=scope)
+    with CALC_LOCK:
+        hits, warn = search(term, sid=sid, scope=scope)
     ms = int((time.time() - t0) * 1000)
     action = "/s/%s/search" % sid if sid else "/search"
     crumbs = [("索引", "/")] + ([(d["title"][:24], "/s/%s" % sid)] if d else []) + [("搜索", "")]
@@ -859,8 +881,14 @@ def v_search(q, sid=None):
             len(hits), "这个会话" if sid else "全部 %d 个会话" % len(STORE.sessions()), ms)
         rx = re.compile(re.escape(term), re.I)
         for h in hits:
-            sn = esc(h["snippet"])
-            sn = rx.sub(lambda m: "<mark>%s</mark>" % esc(m.group(0)), sn)
+            raw = h["snippet"]
+            parts, pos = [], 0
+            for m in rx.finditer(raw):
+                parts.append(esc(raw[pos:m.start()]))
+                parts.append("<mark>%s</mark>" % esc(m.group(0)))
+                pos = m.end()
+            parts.append(esc(raw[pos:]))
+            sn = "".join(parts)
             body += ('<a class="row" href="%s" style="display:block;padding:9px 12px">'
                      '<span class="chip t">%s</span> <b style="font-weight:500">%s</b> '
                      '<span class="fine">%s 字 · 命中位置 %s · %s</span>'
@@ -874,7 +902,8 @@ def v_search(q, sid=None):
 
 def v_stats(q):
     t0 = time.time()
-    st = global_stats()
+    with CALC_LOCK:
+        st = global_stats()
     ms = int((time.time() - t0) * 1000)
     body = kpi([("会话", nfmt(st["sessions"])), ("工作区", nfmt(st["workspaces"])),
                 ("模型调用", nfmt(st["calls"])), ("对话轮次", nfmt(st["turns"])),
@@ -999,7 +1028,8 @@ def api_route(path, q):
     if path == "/api/sessions":
         return json_bytes(env([dict(s) for s in STORE.sessions()], total=len(STORE.sessions())))
     if path == "/api/stats":
-        return json_bytes(env(global_stats()))
+        with CALC_LOCK:
+            return json_bytes(env(global_stats()))
     if path == "/api/search":
         sid = qstr(q, "sid") or None
         if sid:
@@ -1007,9 +1037,10 @@ def api_route(path, q):
                 STORE.by_id(sid)
             except KeyError:
                 return json_bytes({"ok": False, "error": "unknown session: " + sid}, 404)
-        hits, warn = search(qstr(q, "q"), sid=sid,
-                            scope=qstr(q, "scope", "all"),
-                            limit=min(API_MAX_LIMIT, qint(q, "limit", SEARCH_MAX, 1)))
+        with CALC_LOCK:
+            hits, warn = search(qstr(q, "q"), sid=sid,
+                                scope=qstr(q, "scope", "all"),
+                                limit=min(API_MAX_LIMIT, qint(q, "limit", SEARCH_MAX, 1)))
         return json_bytes(env(hits, total=len(hits), note=warn))
 
     m = re.match(r"^/api/s/([0-9A-Za-z_-]+)(/.*)?$", path)

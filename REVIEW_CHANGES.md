@@ -12,8 +12,8 @@
 | 阶段 | 主题 | 对应问题 | commit | 验证结果 |
 | --- | --- | --- | --- | --- |
 | 1 | 输入容错 | P0-1 | `f2632fc` | 10/10 通过 |
-| 2 | 安全边界 | P0-2 / P0-3 | 待填 | 23/23 通过 |
-| 3 | 正确性与并发 | P1-4 ~ P1-9 | — | — |
+| 2 | 安全边界 | P0-2 / P0-3 | `284c98e` | 23/23 通过 |
+| 3 | 正确性与并发 | P1-4 ~ P1-9 | 待填 | 32/32 通过 |
 | 4 | 打磨项 | P2 全部 | — | — |
 | 5 | Windows 跨平台 | 迁移评估 | — | — |
 
@@ -133,4 +133,48 @@ fix: shutdown 校验来源，非本机绑定强制访问令牌（阶段2/P0-2 P0
 挡住跨站 POST / DNS rebinding；--token 支持 Bearer/?token=/Cookie，
 浏览器零 JS 链接可续期。顺带修 POST 请求体残留导致的 400。
 验证：隔离 HOME 端到端 23/23 通过。
+```
+
+---
+
+## 阶段 3 · 正确性与并发（P1-4 ~ P1-9）
+
+### 改动
+
+| # | 文件 | 改动 |
+| --- | --- | --- |
+| P1-4 | `trace_server.py` | `v_search` 的高亮改为在**原始** snippet 上用 `finditer` 切段、逐段 `esc()` 后拼 `<mark>`，不再对已转义文本跑正则。修掉 `q=amp` 把 `&amp;` 切成 `&<mark>amp</mark>;` 的问题 |
+| P1-5 | `gen_trace.py` / `trace_server.py` | `scan_all()` 的 sqlite 失败不再 `except: pass`，改为向 stderr 打印原因、索引条目带 `meta_ok`、首页显示黄色警告条；用 `try/finally` 保证连接关闭。顺带检测同名会话 id 并告警 |
+| P1-6 | `trace_server.py` | `Store` 增加 `_loading: sid -> Event`，`get()` 用 per-sid 占位避免并发首访重复解析（原来锁外的 `build()` 可能被两个线程各跑一遍） |
+| P1-7 | `trace_server.py` | 新增 `CALC_LOCK`，`v_stats` / `v_search` / `/api/stats` / `/api/search` 四个调用点串行化，避免两个全库遍历交替把对方的会话挤出 LRU 导致重复解析 |
+| P1-8 | `gen_trace.py` | `build()` 抽出 `model_of(prov)` 与 `val(*pairs)`，两个调用记录分支共用。修掉 `assistant` 分支漏读 `requestModelName` 导致模型显示 `?`；同时把 `or` 回退改为「取第一个非 None」，让合法的 `0` 不再被当成缺失 |
+| P1-9 | `gen_trace.py` | 新增 `data_dir()`（支持 `WORKBUDDY_HOME` 覆盖）与 `iter_jsonl()`（`glob.iglob(..., recursive=True)`），替换只扫一层子目录的 `projects/*/*.jsonl`；删除死代码 `find_jsonl()` |
+
+### 验证
+
+`regress.py 3` 在阶段 1/2 的 23 项基线上追加 9 项：
+
+```
+=== 阶段3 正确性与并发 ===
+  PASS 搜索高亮不再切开 HTML 实体     片段=…对比 A &amp;<mark>amp</mark>; B &lt;tag&gt; 的区别…
+  PASS 搜索高亮仍然生效
+  PASS 深层 jsonl 可被扫到            会话=normal-session,broken-session,deep-session
+  PASS assistant 记录的 model 不再丢失  model='hunyuan-turbo'
+  PASS 索引条目带 meta_ok             3 个会话
+  PASS 0 值 usage 不再被回退          pin=0
+  PASS db 不可读时 meta_ok=False 且有 stderr 提示
+  PASS 并发首访只解析一次             build 调用 1 次（8 线程）
+  PASS 并发 global_stats 结果一致     calls=[4, 4, 4, 4]
+=== 汇总 ===  32 项检查，32 通过，0 失败
+```
+
+高亮那条的输出值得看一眼：修复后是 `A &amp;<mark>amp</mark>; B`，`&` 被单独转义成实体，高亮只包住原文本里的 `amp`，实体结构完整。
+
+### commit
+
+```
+fix: 修正搜索高亮/模型名/深层扫描，消除静默退化与并发重复解析（阶段3/P1）
+
+P1-4~P1-9 六项；新增 data_dir()/iter_jsonl() 与 CALC_LOCK。
+验证：隔离 HOME 端到端 32/32 通过。
 ```

@@ -38,11 +38,15 @@ def trim(ctx, calls, turns, limit=MAX_CALLS):
     return ctx2, keep, turns2, drop
 
 
-def find_jsonl():
-    files = glob.glob(os.path.join(HOME, ".workbuddy/projects/*/*.jsonl"))
-    if not files:
-        sys.exit("找不到 jsonl")
-    return max(files, key=os.path.getmtime)
+def data_dir():
+    """WorkBuddy 数据目录。支持 WORKBUDDY_HOME 覆盖，便于测试与非默认安装。"""
+    return os.environ.get("WORKBUDDY_HOME") or os.path.join(HOME, ".workbuddy")
+
+
+def iter_jsonl():
+    """递归列出全部会话 jsonl。projects/ 下可能存在更深的层级。"""
+    root = os.path.join(data_dir(), "projects")
+    return glob.iglob(os.path.join(root, "**", "*.jsonl"), recursive=True)
 
 
 def iter_rows(path, stats=None):
@@ -144,6 +148,17 @@ def build(path, full=False):
         u = (d.get("message") or {}).get("usage") or {}
         return prov, ru, u
 
+    def model_of(prov):
+        return prov.get("requestModelName") or prov.get("model") or "?"
+
+    def val(*pairs):
+        """按 (dict, key) 顺序取第一个非 None 值；0 是合法值，不能被 or 吃掉。"""
+        for src, k in pairs:
+            v = src.get(k)
+            if v is not None:
+                return v
+        return 0
+
     for d in rows:
         t = d.get("type")
         if t == "function_call":
@@ -151,14 +166,14 @@ def build(path, full=False):
             rec = {
                 "seq": len(calls) + 1,
                 "ts": d.get("timestamp") or 0,
-                "model": prov.get("requestModelName") or prov.get("model") or "?",
+                "model": model_of(prov),
                 "tool": d.get("name") or "",
-                "pin": ru.get("prompt_tokens") or u.get("input_tokens") or 0,
-                "pout": ru.get("completion_tokens") or u.get("output_tokens") or 0,
-                "hit": ru.get("prompt_cache_hit_tokens") or u.get("cache_read_input_tokens") or 0,
+                "pin": val((ru, "prompt_tokens"), (u, "input_tokens")),
+                "pout": val((ru, "completion_tokens"), (u, "output_tokens")),
+                "hit": val((ru, "prompt_cache_hit_tokens"), (u, "cache_read_input_tokens")),
                 "ctxN": len(ctx),
                 "out": out_buf[:],
-                "credit": ru.get("credit") or 0,
+                "credit": val((ru, "credit")),
                 "turn": cur["i"] if cur else 0,
             }
             calls.append(rec)
@@ -194,14 +209,14 @@ def build(path, full=False):
             calls.append({
                 "seq": len(calls) + 1,
                 "ts": d.get("timestamp") or 0,
-                "model": prov.get("model") or "?",
+                "model": model_of(prov),
                 "tool": "最终回答",
-                "pin": ru.get("prompt_tokens") or u.get("input_tokens") or 0,
-                "pout": ru.get("completion_tokens") or u.get("output_tokens") or 0,
-                "hit": ru.get("prompt_cache_hit_tokens") or u.get("cache_read_input_tokens") or 0,
+                "pin": val((ru, "prompt_tokens"), (u, "input_tokens")),
+                "pout": val((ru, "completion_tokens"), (u, "output_tokens")),
+                "hit": val((ru, "prompt_cache_hit_tokens"), (u, "cache_read_input_tokens")),
                 "ctxN": len(ctx),
                 "out": out_buf + [{"kind": "assistant", "label": "回答", "text": keep(txt)}],
-                "credit": ru.get("credit") or 0,
+                "credit": val((ru, "credit")),
                 "turn": cur["i"] if cur else 0,
             })
             if cur:
@@ -547,19 +562,29 @@ h2.dicth{{font-size:15px;font-weight:500;margin:34px 0 4px;padding-top:18px;bord
 
 def scan_all():
     """扫描所有会话，返回索引条目（db 补 cwd/标题，jsonl 补统计）"""
-    db = os.path.join(HOME, ".workbuddy", "workbuddy.db")
+    db = os.path.join(data_dir(), "workbuddy.db")
     meta = {}
+    meta_ok = True
     try:
         con = sqlite3.connect("file:%s?mode=ro" % db, uri=True)
-        for r in con.execute("select id, cwd, title, custom_title, model from sessions"):
-            meta[r[0]] = {"cwd": r[1] or "", "title": r[3] or r[2] or "", "model": r[4] or ""}
-        con.close()
-    except Exception:
-        pass
+        try:
+            for r in con.execute("select id, cwd, title, custom_title, model from sessions"):
+                meta[r[0]] = {"cwd": r[1] or "", "title": r[3] or r[2] or "", "model": r[4] or ""}
+        finally:
+            con.close()
+    except Exception as e:
+        meta_ok = False
+        print("token-trace: 读取 %s 失败：%s: %s（标题/工作区/模型已退回兜底值）"
+              % (db, type(e).__name__, e), file=sys.stderr)
 
     out = []
-    for f in glob.glob(os.path.join(HOME, ".workbuddy/projects/*/*.jsonl")):
+    seen = {}
+    for f in iter_jsonl():
         sid = os.path.basename(f)[:-6]
+        if sid in seen:
+            print("token-trace: 会话 id 重复，后者会覆盖前者：%s / %s" % (seen[sid], f),
+                  file=sys.stderr)
+        seen[sid] = f
         turns = calls = 0
         credit = pin = pout = 0
         ai = ""
@@ -587,6 +612,7 @@ def scan_all():
             "mtime": os.path.getmtime(f),
             "turns": turns, "calls": calls, "credit": credit, "pin": pin, "pout": pout,
             "skipped": skipped["skipped"],
+            "meta_ok": meta_ok,
         })
     out.sort(key=lambda x: (x["ws"], -x["mtime"]))
     return out
