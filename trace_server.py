@@ -157,6 +157,7 @@ class Store(object):
                 "model": (billed[0]["model"] if billed else "?"),
                 "compose": {k: sz[k] for k in ORDER},
                 "cold": len(cold),
+                "skipped_lines": meta.get("_skipped_lines", 0),
             },
         }
 
@@ -600,6 +601,9 @@ def v_session(q, sid):
                 ("未命中（计费）", nfmt(st["miss"])), ("输出 tok", nfmt(st["pout"])),
                 ("累计积分", "%.2f" % st["credit"]), ("冷启动断点", nfmt(st["cold"]))])
     body += '<h3>进入上下文的文本构成 <span class="fine">按字符数，全文口径</span></h3>' + compose_bar(st["compose"])
+    if st.get("skipped_lines"):
+        body += ('<div class="warn">源文件有 %d 行无法解析（多半是 WorkBuddy 写入中途被读到），'
+                 '已跳过；本页统计与上下文不含这些行。刷新页面可重试。</div>' % st["skipped_lines"])
     body += ('<div class="note">这个会话的 %s 次调用、%s 个上下文块、%s 字原文<b>全部可查</b>：'
              '按轮 / 按调用翻页，点任意一次调用看它当时带上的完整块列表，'
              '再点任意一块看<b>不截断</b>的全文（超长块自动分片）。</div>' %

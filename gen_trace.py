@@ -45,6 +45,25 @@ def find_jsonl():
     return max(files, key=os.path.getmtime)
 
 
+def iter_rows(path, stats=None):
+    """逐行产出 jsonl 记录；坏行跳过并计入 stats["skipped"]。
+
+    WorkBuddy 以 append-only 方式写 jsonl，服务读取时末尾常是截断的半行。
+    build() 与 scan_all() 共用本函数，保证两处容错口径一致。
+    stats 由调用方传入，生成器结束后读取，避免为了计数把整个文件读进内存。
+    """
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                yield json.loads(line)
+            except (ValueError, UnicodeError):
+                if stats is not None:
+                    stats["skipped"] += 1
+
+
 def seg_user(text):
     injected = [m.group(1).strip() for m in SR.finditer(text)]
     return SR.sub("", text).strip(), injected
@@ -106,7 +125,8 @@ def build(path, full=False):
     full=True：保留全文，供后端服务按需分片读取，内容零丢失。
     两种模式下 n 都是原文的真实字数，统计口径一致。
     """
-    rows = [json.loads(l) for l in open(path, encoding="utf-8", errors="replace") if l.strip()]
+    skipped = {"skipped": 0}
+    rows = list(iter_rows(path, skipped))
     ctx, calls, out_buf = [], [], []
     call_cmd = {}  # callId -> 该次调用的命令摘要，供结果块回显
     turns = []     # 一轮 = 一条用户消息触发的一串调用
@@ -189,7 +209,9 @@ def build(path, full=False):
             out_buf = []
             push("assistant", "助手的回答", txt)
 
-    meta = next((d for d in rows if d.get("type") == "session-meta"), {})
+    meta = dict(next((d for d in rows if d.get("type") == "session-meta"), {}))
+    if skipped["skipped"]:
+        meta["_skipped_lines"] = skipped["skipped"]
     return ctx, calls, meta, turns
 
 
@@ -488,6 +510,7 @@ h2.dicth{{font-size:15px;font-weight:500;margin:34px 0 4px;padding-top:18px;bord
 <h1>Token 轨迹 · {html.escape(title)}</h1>
 <div class="sub">{html.escape(os.path.basename(src))} · {len(calls)} 次模型调用 · 模型 {html.escape(billed[0]['model'] if billed else '?')}</div>
 {f'<div class="trimnote">这个会话共 {len(calls)+trimmed} 次调用，页面只渲染最近 {len(calls)} 次（更早的 {trimmed} 次已省略，避免单页过大打不开）。</div>' if trimmed else ''}
+{f'<div class="trimnote">源文件有 {meta.get("_skipped_lines", 0)} 行无法解析（多半是写入中途被读到），已跳过；下方统计不含这些行。</div>' if meta.get("_skipped_lines") else ''}
 
 <div class="kpi">
   <div><b>{len(turns)}</b><span>对话轮次</span></div>
@@ -540,14 +563,8 @@ def scan_all():
         turns = calls = 0
         credit = pin = pout = 0
         ai = ""
-        for line in open(f, encoding="utf-8", errors="replace"):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                d = json.loads(line)
-            except Exception:
-                continue
+        skipped = {"skipped": 0}
+        for d in iter_rows(f, skipped):
             t = d.get("type")
             if t == "message" and d.get("role") == "user":
                 turns += 1
@@ -569,6 +586,7 @@ def scan_all():
             "model": info.get("model") or "",
             "mtime": os.path.getmtime(f),
             "turns": turns, "calls": calls, "credit": credit, "pin": pin, "pout": pout,
+            "skipped": skipped["skipped"],
         })
     out.sort(key=lambda x: (x["ws"], -x["mtime"]))
     return out
