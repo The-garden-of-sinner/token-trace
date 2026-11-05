@@ -7,7 +7,11 @@ SRC="$DIR/token-trace.desktop"
 OUT="$HOME/.local/share/applications/token-trace.desktop"
 
 mkdir -p "$(dirname "$OUT")"
-sed "s|@EXEC@|$DIR/start.sh|g" "$SRC" > "$OUT"
+# 路径含空格时必须给 Exec 加引号；同时转义 sed 替换串里的 \ | &
+ESC="${DIR//\\/\\\\}"
+ESC="${ESC//|/\\|}"
+ESC="${ESC//&/\\&}"
+sed "s|@EXEC@|\"$ESC/start.sh\"|g" "$SRC" > "$OUT"
 chmod +x "$OUT"
 echo "应用菜单: $OUT"
 
@@ -17,4 +21,4 @@ if [ -d "$DESK" ]; then
     chmod +x "$DESK/Token 轨迹.desktop"
     echo "桌面图标: $DESK/Token 轨迹.desktop"
 fi
-echo "Exec = $DIR/start.sh"
+echo "Exec = \"$DIR/start.sh\""

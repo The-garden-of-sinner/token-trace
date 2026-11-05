@@ -13,8 +13,8 @@
 | --- | --- | --- | --- | --- |
 | 1 | 输入容错 | P0-1 | `f2632fc` | 10/10 通过 |
 | 2 | 安全边界 | P0-2 / P0-3 | `284c98e` | 23/23 通过 |
-| 3 | 正确性与并发 | P1-4 ~ P1-9 | 待填 | 32/32 通过 |
-| 4 | 打磨项 | P2 全部 | — | — |
+| 3 | 正确性与并发 | P1-4 ~ P1-9 | `d3ade7b` | 32/32 通过 |
+| 4 | 打磨项 | P2 全部 | 待填 | 43/43 通过 |
 | 5 | Windows 跨平台 | 迁移评估 | — | — |
 
 ---
@@ -177,4 +177,55 @@ fix: 修正搜索高亮/模型名/深层扫描，消除静默退化与并发重�
 
 P1-4~P1-9 六项；新增 data_dir()/iter_jsonl() 与 CALC_LOCK。
 验证：隔离 HOME 端到端 32/32 通过。
+```
+
+---
+
+## 阶段 4 · P2 打磨项（11 条）
+
+阶段 2 已顺带修掉 P2-14（POST 请求体残留），阶段 3 已删掉 P2-15（`find_jsonl()` 死代码）并修掉 P2-22 的 usage `or` 回退。本阶段收掉剩余 11 条：
+
+| # | 文件 | 改动 |
+| --- | --- | --- |
+| 10 | `trace_server.py` | `full=1` 时 `limit = max(0, 总长 - offset)`，与 `offset` / `eof` 元数据自洽（原来 `limit` 恒等于全文长度） |
+| 11 | `trace_server.py` | 新增 `MAX_CHARS = 10_000_000`，块/输出的字符 `offset` 不再被 `qint` 默认的 100 万上限截断 |
+| 12 | `trace_server.py` | `call_outline()` 在 `n == 0` 时返回 `boundary = None`，不再显示「缓存边界 #1」却一个块都没有 |
+| 13 | `trace_server.py` | `do_GET` 对 `HEAD /stats`、`/api/stats`、`/search`、`/api/search` 短路，只回状态与头、不执行全库遍历；其余路径仍走真实 GET 以保持状态码语义 |
+| 16 | `trace_server.py` | 删除重复的 `CHIP` 定义，统一用 `G.CHIP` |
+| 17 | `gen_trace.py` | `trim()` 对 `calls` 做浅拷贝后再改 `ctxN`，不再有隐式副作用 |
+| 18 / 19 | `start.sh` | 新增 `TRACE_LOG`（默认 `/dev/null`，保持零写盘，排障时保留启动日志）；`alive()` 改为校验 body 等于 `ok`，端口被别的服务占用时不再误判；启动参数数组化 |
+| 20 | `install-desktop.sh` | `.desktop` 的 `Exec` 值加双引号，并转义路径里的 `\`、`|`、`&`，支持含空格/中文的安装路径 |
+| 21 | `trace_server.py` | `/api/health` 的 `write_files` 不再是孤立常量，附 `write_files_basis` 说明依据（`sys.dont_write_bytecode` 实际值）。注：完整自证需 OS 级 FD 监控，超出本次范围，因此如实标注「非 OS 级探测」 |
+| 22 | `trace_server.py` | `search()` 增加 `scope` 白名单，非法值返回明确提示而不是静默空结果；`pager()` 的 `href` 补 `esc()` |
+
+### 验证
+
+`regress.py 4` 在阶段 1~3 的 32 项基线上追加 11 项：
+
+```
+=== 阶段4 打磨项 ===
+  PASS full=1 与 offset 元数据一致      offset=3 limit=19 total=22 len=19
+  PASS health 给 write_files 附可核对依据
+  PASS 非法 scope 有明确提示
+  PASS HEAD /stats 短路不渲染          HEAD=(200, '0')
+  PASS GET /stats 仍正常渲染
+  PASS 分页 href 已转义
+  PASS CHIP 单点定义
+  PASS 空上下文 boundary 为 None
+  PASS trim 不再修改原 calls
+  PASS 含空格路径的 Exec 带引号        "/tmp/.../路径 带空格/token-trace/start.sh"
+  PASS alive 拒绝 body 非 ok 的 200 响应  alive_rc=1
+=== 汇总 ===  43 项检查，43 通过，0 失败
+```
+
+最后两项是真实子进程验证：`install-desktop.sh` 在含空格与中文的临时目录里执行，检查生成的 `.desktop` 里 `Exec` 带引号；`alive()` 面对一个返回 200 但内容为 `not-ok` 的假服务时返回非零。两个 Python 文件 `ast.parse`、两个 shell 脚本 `bash -n` 均通过。
+
+### commit
+
+```
+refactor: 收尾 P2 打磨项（阶段4）
+
+full=1 元数据、字符 offset 上限、空上下文边界、HEAD 短路、CHIP 单点、
+trim 无副作用、启动日志与健康检查、desktop Exec 引号、health 依据、scope 白名单。
+验证：隔离 HOME 端到端 43/43 通过，bash -n / ast.parse 通过。
 ```

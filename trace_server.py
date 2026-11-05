@@ -42,13 +42,13 @@ PART_CHARS = 12000     # 全文每片字数（约 30 KB HTML）
 SEARCH_MAX = 80        # 搜索结果上限
 CACHE_SESSIONS = 32    # 内存保留几个已解析会话：实测全量 28 个仅 83 MB，默认全缓存
 API_MAX_LIMIT = 500    # /api/ 单次返回条数上限
+MAX_CHARS = 10_000_000  # 块/输出全文的字符 offset 上限，与 limit 同一量级
 
 TYPES = {"user": "你的输入", "injected": "系统注入", "tool_result": "工具结果",
          "tool_call": "工具调用参数", "assistant": "助手回答"}
 ORDER = ["tool_result", "injected", "user", "tool_call", "assistant"]
 PALETTE = {"tool_result": "#888780", "injected": "#EF9F27", "user": "#378ADD",
            "tool_call": "#B4B2A9", "assistant": "#1D9E75"}
-CHIP = {"hit": "命中", "miss": "未命中", "part": "跨边界", "none": "上下文"}
 SID_RE = re.compile(r"^[0-9A-Za-z_-]+$")
 TOKEN = ""          # --token / TRACE_TOKEN；非空时所有请求都要鉴权
 LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
@@ -215,7 +215,7 @@ def call_outline(d, seq):
     ratio = c["hit"] / c["pin"]
     cut_chars = total * ratio
     b = bisect.bisect_left(d["pref"], cut_chars, 0, n + 1)
-    boundary = max(0, min(n - 1, b - 1))
+    boundary = max(0, min(n - 1, b - 1)) if n else None
     # 精确计数（O(n) 的位运算级别，可接受；列表仍按页渲染）
     hit_blocks = sum(1 for i in range(n) if call_state(d, seq, i) == "hit")
     return {"n": n, "chars": total, "ratio": ratio, "cut": cut_chars,
@@ -296,6 +296,8 @@ def search(q, sid=None, scope="all", limit=SEARCH_MAX):
         return [], "关键词至少 2 个字"
     if len(q) > 200:
         return [], "关键词过长"
+    if scope not in ("all", "blocks", "outputs", "turns"):
+        return [], "scope 只能是 all / blocks / outputs / turns"
     rx = re.compile(re.escape(q), re.I)
     hits = []
     truncated = False
@@ -474,10 +476,10 @@ def pager(base, q, p, size, total, label="条"):
         return base + ("?" + urlencode(d) if d else "")
 
     return ('<div class="pager">'
-            '<a class="btn %s" href="%s">← 上一页</a>' % ("off" if p == 0 else "", link(p - 1)) +
+            '<a class="btn %s" href="%s">← 上一页</a>' % ("off" if p == 0 else "", esc(link(p - 1))) +
             '<span class="info">第 %d / %d 页 · 共 %s %s · 本页 %s</span>' %
             (p + 1, pages, nfmt(total), label, nfmt(min(size, max(0, total - p * size)))) +
-            '<a class="btn %s" href="%s">下一页 →</a>' % ("off" if p >= pages - 1 else "", link(p + 1)) +
+            '<a class="btn %s" href="%s">下一页 →</a>' % ("off" if p >= pages - 1 else "", esc(link(p + 1))) +
             '</div>')
 
 
@@ -745,7 +747,7 @@ def v_call(q, sid, seq):
                  '<span class="chip t">%s</span>'
                  '<span class="grow"><b style="font-weight:500">%s</b>%s</span>'
                  '<span class="num">%s 字</span><span class="num" style="color:#378ADD">全文 →</span></a>' %
-                 (esc(sid), j, seq, j, st, CHIP[st], TYPES.get(b["k"], b["k"]),
+                 (esc(sid), j, seq, j, st, G.CHIP[st], TYPES.get(b["k"], b["k"]),
                   esc(b["l"]), cmd, nfmt(b["n"])))
     body += pager("/s/%s/c/%d" % (sid, seq), q, p, PAGE_BLOCKS, len(chosen), "块")
 
@@ -1023,6 +1025,8 @@ def api_route(path, q):
             "sessions": len(STORE.sessions()),
             "cached_sessions": len(STORE._cache),
             "write_files": False,
+            "write_files_basis": ("源码无写文件调用；sys.dont_write_bytecode=%s（非 OS 级探测）"
+                                  % sys.dont_write_bytecode),
             "python": sys.version.split()[0],
         }))
     if path == "/api/sessions":
@@ -1115,8 +1119,9 @@ def api_route(path, q):
                                     "/api/s/%s/blocks/%d/users" % (sid, idx), q))
         text = b["t"]
         full = qstr(q, "full") == "1"
-        off = qint(q, "offset")
-        lim = len(text) if full else qint(q, "limit", PART_CHARS, 1, 2000000)
+        off = qint(q, "offset", 0, 0, MAX_CHARS)
+        lim = (max(0, len(text) - off) if full
+               else qint(q, "limit", PART_CHARS, 1, MAX_CHARS))
         return json_bytes(env({
             "idx": idx, "kind": b["k"], "label": b["l"], "cmd": b["c"],
             "total_chars": len(text), "offset": off, "limit": lim,
@@ -1134,8 +1139,9 @@ def api_route(path, q):
             return json_bytes(env({"seq": seq, "segments": [], "text": ""}))
         seg = min(seg, len(outs) - 1)
         text = outs[seg]["text"]
-        off = qint(q, "offset")
-        lim = len(text) if qstr(q, "full") == "1" else qint(q, "limit", PART_CHARS, 1, 2000000)
+        off = qint(q, "offset", 0, 0, MAX_CHARS)
+        lim = (max(0, len(text) - off) if qstr(q, "full") == "1"
+               else qint(q, "limit", PART_CHARS, 1, MAX_CHARS))
         return json_bytes(env({
             "seq": seq, "seg": seg, "kind": outs[seg]["kind"], "label": outs[seg]["label"],
             "segments": [{"seg": k, "kind": x["kind"], "label": x["label"],
@@ -1255,7 +1261,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
-            if path == "/health":
+            if getattr(self, "_head_only", False) and path in (
+                    "/stats", "/api/stats", "/search", "/api/search"):
+                # HEAD 用于探活/链路检查，不触发全库遍历；其余路径仍走真实 GET 保持状态码语义
+                status, ctype, payload = 200, (
+                    "application/json; charset=utf-8" if path.startswith("/api/")
+                    else "text/html; charset=utf-8"), b""
+            elif path == "/health":
                 status, ctype, payload = 200, "text/plain; charset=utf-8", b"ok"
             elif path.startswith("/api/"):
                 status, ctype, payload = api_route(path, q)

@@ -25,7 +25,7 @@ curl_auth() {
     fi
 }
 
-alive() { curl_auth -fsS --max-time 1 "${URL}health" >/dev/null 2>&1; }
+alive() { [ "$(curl_auth -fsS --max-time 1 "${URL}health" 2>/dev/null)" = "ok" ]; }
 
 if [ "${1:-}" = "stop" ]; then
     # 优先让服务自己退出（HTTP），不依赖 pkill —— 沙箱/容器里常看不到桌面进程
@@ -44,11 +44,10 @@ if alive; then
     echo "服务已在运行，直接打开：$URL"
 else
     echo "正在启动 Token 轨迹服务…"
-    if [ -n "$TOKEN" ]; then
-        setsid "$PY" -B "$DIR/trace_server.py" --port "$PORT" --token "$TOKEN" </dev/null >/dev/null 2>&1 &
-    else
-        setsid "$PY" -B "$DIR/trace_server.py" --port "$PORT" </dev/null >/dev/null 2>&1 &
-    fi
+    LOG="${TRACE_LOG:-/dev/null}"     # 默认仍零写盘；排障时设 TRACE_LOG 保留启动日志
+    ARGS=(--port "$PORT")
+    [ -n "$TOKEN" ] && ARGS+=(--token "$TOKEN")
+    setsid "$PY" -B "$DIR/trace_server.py" "${ARGS[@]}" </dev/null >"$LOG" 2>&1 &
     for _ in $(seq 1 40); do
         alive && break
         sleep 0.25
@@ -56,6 +55,7 @@ else
     if ! alive; then
         echo "启动失败。手动跑一次看报错：" >&2
         echo "  $PY -B $DIR/trace_server.py --port $PORT" >&2
+        echo "  或设置 TRACE_LOG=/tmp/token-trace.log 后重试以保留启动日志" >&2
         exit 1
     fi
     echo "服务已就绪：$URL"

@@ -28,7 +28,7 @@ def trim(ctx, calls, turns, limit=MAX_CALLS):
     if not limit or len(calls) <= limit:
         return ctx, calls, turns, 0
     drop = len(calls) - limit
-    keep = calls[drop:]
+    keep = [dict(c) for c in calls[drop:]]   # 浅拷贝，避免改到调用方持有的记录
     start = keep[0]["ctxN"]
     ctx2 = ctx[start:]
     for c in keep:
