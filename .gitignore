@@ -1,0 +1,21 @@
+# 生成的轨迹页：内嵌会话原文 —— 工作区绝对路径、用户提问、工具输出全文
+# 隐私密度最高，绝不入库；随时可用 python3 gen_trace.py 从本机 jsonl 重建
+trace/
+token-trace.html
+_compat.html
+
+# 运行时产物（服务以 -B 启动，正常情况下不会产生）
+__pycache__/
+*.py[cod]
+*.log
+*.bak
+*.bak-*
+*.local.desktop
+
+# 本机系统补丁：改的是 /opt 下的 WorkBuddy CLI 文件，与工具本身无关
+patch_cli.sh
+
+# 上层目录里的 WorkBuddy 项目记忆 / 回收站：本仓库范围外，留作双保险
+.workbuddy/
+.Trash-*/
+.DS_Store

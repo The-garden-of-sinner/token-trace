@@ -1,0 +1,13 @@
+# 模板：由 ./install-desktop.sh 把 @EXEC@ 替换为本机 start.sh 的绝对路径后安装
+# 不要直接双击本文件；校验与安装都用脚本生成的副本
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Token 轨迹
+Comment=一键启动本地 Token 轨迹服务并在浏览器打开
+Exec=@EXEC@
+Icon=utilities-system-monitor
+Terminal=false
+Categories=Utility;
+StartupNotify=true
+Keywords=token;trace;workbuddy;
