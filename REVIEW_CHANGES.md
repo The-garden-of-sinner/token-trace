@@ -15,7 +15,7 @@
 | 2 | 安全边界 | P0-2 / P0-3 | `284c98e` | 23/23 通过 |
 | 3 | 正确性与并发 | P1-4 ~ P1-9 | `d3ade7b` | 32/32 通过 |
 | 4 | 打磨项 | P2 全部 | `d165c5e` | 43/43 通过 |
-| 5 | Windows 跨平台 | 迁移评估 | 待填 | 54/54 通过 |
+| 5 | Windows 跨平台 | 迁移评估 | `e133e32` | 54/54 通过 |
 
 ---
 
@@ -290,9 +290,9 @@ PowerShell 脚本仅静态检查（沙箱无 Windows / pwsh）。
 | 2 | `284c98e` | P0-2 / P0-3 安全边界 | 23 |
 | 3 | `d3ade7b` | P1 正确性与并发 | 32 |
 | 4 | `d165c5e` | P2 打磨项 | 43 |
-| 5 | 待填 | Windows 跨平台 | 54 |
+| 5 | `e133e32` | Windows 跨平台 | 54 |
 
-- 五次提交的 author / committer 均为 `The-garden-of-sinner <50914620+The-garden-of-sinner@users.noreply.github.com>`，与初始 commit `c6d2b4f` 一致。
+- 五次阶段提交的 author / committer 均为 `The-garden-of-sinner <50914620+The-garden-of-sinner@users.noreply.github.com>`，与初始 commit `c6d2b4f` 一致；之后那次 `docs` 提交仅用于回填本文件里的 commit 引用，账户相同。
 - 每阶段都是「改动 → 全量回归 → 提交」，回归脚本用隔离的临时 `HOME` 构造数据，未触碰真实 `~/.workbuddy`；`trace/` 静态产物由 `.gitignore` 排除。
 - **未推送远程**：本次只在本地仓库提交。推送属于远程写操作，需另行确认。
 - **仍需在真实 Windows 上确认**：`projects\` 层级深度、中文/空格用户名下 WAL 模式 `workbuddy.db` 的只读打开、`python.exe -WindowStyle Hidden` 的隐藏效果、含中文路径的 PowerShell 传参，以及三个 `.ps1` / `.cmd` 的语法与运行。
