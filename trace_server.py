@@ -489,6 +489,122 @@ def find_blocks(term, sid=None, refresh=False):
     return result
 
 
+SHELL_TOOLS = ("Bash", "Shell", "execute_command")
+SHELL_SKIP = {"sudo", "env", "time", "nohup", "command", "exec", "eval", "builtin"}
+SHELL_CTRL = {"cd", "export", "set", "source", ".", "for", "if", "while",
+              "case", "do", "done", "then", "else", "fi", "esac", "[", "{"}
+SHELL_DECOR = {"echo", "printf", ":"}
+
+
+def prog_of(cmd):
+    """从 shell 命令摘要里 best-effort 抽「实际程序名」。
+
+    跳过 cd/export/控制流前缀段（本机 1345 条命令以 `cd <dir> &&` 开头），
+    以及后面还有实质命令的装饰性 echo 段。非 shell 内容由调用方过滤。
+    """
+    if not cmd or "://" in cmd[:12]:
+        return ""
+    segs = [x.strip() for x in re.split(r";|&&|\|\||\||\n", cmd.strip()) if x.strip()]
+    for n, seg in enumerate(segs):
+        toks = seg.split()
+        while toks and (re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", toks[0])
+                        or toks[0] in SHELL_SKIP):
+            toks = toks[1:]
+        if not toks or toks[0] in SHELL_CTRL:
+            continue
+        p = os.path.basename(toks[0]).lstrip("(\\")
+        if not p or p[0] in "-'\"$#" or len(p) > 40:
+            continue
+        if p in SHELL_DECOR and n < len(segs) - 1:
+            continue
+        return p
+    return "(shell 控制流)"
+
+
+def tool_stats(sid=None):
+    """按工具名聚合 token / 积分，按 shell 程序名聚合执行次数。"""
+    targets = [STORE.by_id(sid)] if sid else STORE.sessions()
+    tools, progs = {}, {}
+    total_calls, total_credit = 0, 0.0
+    for s in targets:
+        d = STORE.get(s["id"])
+        for c in d["calls"]:
+            name = c["tool"] or "最终回答"
+            t = tools.setdefault(name, {"tool": name, "calls": 0, "credit": 0.0,
+                                        "pin": 0, "hit": 0, "pout": 0,
+                                        "sessions": set(), "last_ts": 0})
+            t["calls"] += 1
+            t["credit"] += c.get("credit") or 0
+            t["pin"] += c["pin"]
+            t["hit"] += c["hit"]
+            t["pout"] += c["pout"]
+            t["sessions"].add(s["id"])
+            t["last_ts"] = max(t["last_ts"], c.get("ts") or 0)
+            total_calls += 1
+            total_credit += c.get("credit") or 0
+        for b in d["ctx"]:
+            if b["k"] != "tool_result" or not b["c"]:
+                continue
+            if not any(x in b["l"] for x in SHELL_TOOLS):
+                continue
+            p = prog_of(b["c"])
+            if not p:
+                continue
+            g = progs.setdefault(p, {"prog": p, "runs": 0, "chars": 0})
+            g["runs"] += 1
+            g["chars"] += b["n"]
+    for t in tools.values():
+        t["session_count"] = len(t["sessions"])
+        del t["sessions"]
+        t["rate"] = t["hit"] / t["pin"] if t["pin"] else 0
+        t["credit"] = round(t["credit"], 2)
+        t["last"] = (time.strftime("%m-%d %H:%M", time.localtime(t["last_ts"] / 1000))
+                     if t["last_ts"] else "")
+    return {"tools": sorted(tools.values(), key=lambda x: -x["calls"]),
+            "progs": sorted(progs.values(), key=lambda x: -x["runs"]),
+            "sessions": len(targets), "total_calls": total_calls,
+            "total_credit": round(total_credit, 2),
+            "shell_runs": sum(g["runs"] for g in progs.values())}
+
+
+TOOL_CACHE = OrderedDict()
+TOOL_CACHE_TTL = 60
+
+
+def tool_stats_cached(sid=None, refresh=False):
+    """全库遍历较慢且结果稳定，缓存 60 秒（与会话索引同 TTL）。"""
+    key = sid or ""
+    now = time.time()
+    if not refresh and key in TOOL_CACHE:
+        ts, val = TOOL_CACHE[key]
+        if now - ts < TOOL_CACHE_TTL:
+            TOOL_CACHE.move_to_end(key)
+            return val
+    with CALC_LOCK:
+        val = tool_stats(sid)
+    TOOL_CACHE[key] = (now, val)
+    TOOL_CACHE.move_to_end(key)
+    while len(TOOL_CACHE) > 4:
+        TOOL_CACHE.popitem(last=False)
+    return val
+
+
+def tool_calls(sid, tool, offset=0, limit=40):
+    """某个工具的全部调用行（可跨会话），按积分降序，供点击下钻。"""
+    rows = []
+    for s in ([STORE.by_id(sid)] if sid else STORE.sessions()):
+        d = STORE.get(s["id"])
+        for i, c in enumerate(d["calls"]):
+            if (c["tool"] or "最终回答") != tool:
+                continue
+            rows.append({"sid": s["id"], "ws": s["ws"], "seq": c["seq"],
+                         "turn": c["turn"], "credit": c.get("credit") or 0,
+                         "pin": c["pin"], "hit": c["hit"], "ts": c.get("ts") or 0,
+                         "href": "/s/%s/c/%d" % (s["id"], i + 1)})
+    rows.sort(key=lambda x: -x["credit"])
+    return rows[offset:offset + limit], len(rows)
+
+
 # ---------------------------------------------------------------- HTML 外观
 
 CSS = """
@@ -714,6 +830,7 @@ def v_index(q):
              '<option value="outputs">只看模型输出</option><option value="turns">只看提问</option></select>'
              '<button type="submit">搜索</button></form>')
     body += ('<div class="tabs"><a class="btn" href="/find">按块检索</a>'
+             '<a class="btn" href="/tools">工具与命令</a>'
              '<a class="btn" href="/stats">全局统计与冷启动断点</a>'
              '<a class="btn" href="/api">后端 API 契约</a>'
              '<a class="btn" href="/?refresh=1">重新扫描源文件</a>'
@@ -773,7 +890,7 @@ def v_session(q, sid):
              '<input type="text" name="q" placeholder="只在这个会话里搜（含 58 万字的长块）">'
              '<button type="submit">搜索</button></form>' % esc(sid))
     body += ('<div class="tabs"><a class="btn" href="/s/%s/find">按块检索（列出命中块 + 跳到命中分片）</a>'
-             '</div>' % esc(sid))
+             '<a class="btn" href="/s/%s/tools">工具与命令</a></div>' % (esc(sid), esc(sid)))
     body += ('<div class="tabs"><a class="btn %s" href="/s/%s?view=turns">按轮浏览</a>' %
              ("on" if view == "turns" else "", esc(sid)) +
              '<a class="btn %s" href="/s/%s?view=calls">按调用浏览</a>' %
@@ -1128,6 +1245,84 @@ def v_find(q, sid=None):
     return page("块检索", crumbs, body, sub="按块聚合 · 命中分片直跳 · 零脚本")
 
 
+def v_tools(q, sid=None):
+    """工具与命令聚合：按工具看 token / 积分，按 shell 程序看执行频次。"""
+    raw_q = qstr(q, "q")
+    term = raw_q.strip().lower()
+    tool = qstr(q, "tool").strip()
+    view = qstr(q, "view", "tools")
+    if view not in ("tools", "progs"):
+        view = "tools"
+    p = qint(q, "p")
+    st = tool_stats_cached(sid=sid, refresh=qstr(q, "refresh") == "1")
+    base = "/s/%s/tools" % sid if sid else "/tools"
+    d = STORE.get(sid) if sid else None
+    crumbs = [("索引", "/")] + ([(d["title"][:24], "/s/%s" % sid)] if d else []) + [("工具与命令", "")]
+    body = ('<form class="searchbox" method="get" action="%s">'
+            '<input type="text" name="q" value="%s" placeholder="筛选工具名 / 程序名">'
+            '<button type="submit">筛选</button></form>' % (base, esc(raw_q)))
+    body += kpi([("工具种类", nfmt(len(st["tools"]))),
+                 ("总调用", nfmt(st["total_calls"])),
+                 ("Shell 执行", nfmt(st["shell_runs"])),
+                 ("程序种类", nfmt(len(st["progs"]))),
+                 ("累计积分", "%.2f" % st["total_credit"]),
+                 ("范围", "%d 个会话" % st["sessions"])])
+    body += ('<div class="note">工具统计来自每次调用的 usage 与积分；程序名只从 '
+             '<b>Bash / Shell 类工具</b>的命令摘要里 best-effort 提取：跳过 '
+             '<code>cd / export / 控制流</code> 前缀段与装饰性 <code>echo</code>，'
+             '取第一个实际程序。URL、搜索词、生图描述等不参与；'
+             '纯控制流命令归入「(shell 控制流)」。点工具名可下钻到它的全部调用。</div>')
+    if tool:
+        rows, total = tool_calls(sid, tool, p * PAGE_CALLS, PAGE_CALLS)
+        body += '<h2>工具 %s 的调用 <small>共 %s 次 · 按积分降序</small></h2>' % (
+            esc(tool), nfmt(total))
+        for r in rows:
+            body += ('<a class="row" href="%s" style="grid-template-columns:74px 1fr 70px 92px 88px 82px">'
+                     '<span class="idx">#%d</span><span class="grow">%s</span>'
+                     '<span class="num">轮 %d</span><span class="num">in %s</span>'
+                     '<span class="num credit">%.2f 分</span><span class="num">%s</span></a>' %
+                     (esc(r["href"]), r["seq"], esc(r["ws"]), r["turn"], nfmt(r["pin"]),
+                      r["credit"],
+                      time.strftime("%m-%d %H:%M", time.localtime(r["ts"] / 1000))
+                      if r["ts"] else ""))
+        body += pager(base, q, p, PAGE_CALLS, total, "次调用")
+    else:
+        body += '<div class="tabs">' + "".join(
+            '<a class="btn %s" href="%s">%s</a>' %
+            ("on" if view == v else "",
+             esc(base + "?" + urlencode({"view": v, "q": raw_q})), lab)
+            for v, lab in (("tools", "按工具"), ("progs", "按程序"))) + '</div>'
+        if view == "tools":
+            rows = [x for x in st["tools"] if term in x["tool"].lower()]
+            mx = max((x["calls"] for x in st["tools"]), default=1) or 1
+            body += '<h2>工具调用 <small>共 %s 种</small></h2>' % nfmt(len(rows))
+            for x in rows[p * PAGE_CALLS:(p + 1) * PAGE_CALLS]:
+                body += ('<div class="row" style="grid-template-columns:142px 1fr 76px 84px 88px 68px 82px">'
+                         '<span class="grow"><a href="%s">%s</a></span>'
+                         '<span class="bar"><i class="h" style="width:%.1f%%"></i></span>'
+                         '<span class="num">%s 次</span><span class="num">命中 %.0f%%</span>'
+                         '<span class="num credit">%.2f 分</span>'
+                         '<span class="num">%d 会话</span><span class="num">%s</span></div>' %
+                         (esc(base + "?" + urlencode({"tool": x["tool"]})), esc(x["tool"]),
+                          x["calls"] / mx * 100, nfmt(x["calls"]), x["rate"] * 100,
+                          x["credit"], x["session_count"], esc(x["last"])))
+        else:
+            rows = [x for x in st["progs"] if term in x["prog"].lower()]
+            mx = max((x["runs"] for x in st["progs"]), default=1) or 1
+            body += '<h2>Shell 程序 <small>共 %s 种</small></h2>' % nfmt(len(rows))
+            for x in rows[p * PAGE_CALLS:(p + 1) * PAGE_CALLS]:
+                body += ('<div class="row" style="grid-template-columns:180px 1fr 88px 110px">'
+                         '<span class="grow">%s</span>'
+                         '<span class="bar"><i class="h" style="width:%.1f%%"></i></span>'
+                         '<span class="num">%s 次</span>'
+                         '<span class="num">结果 %s 字</span></div>' %
+                         (esc(x["prog"]), x["runs"] / mx * 100,
+                          nfmt(x["runs"]), nfmt(x["chars"])))
+        body += pager(base, q, p, PAGE_CALLS, len(rows), "种")
+    return page("工具与命令", crumbs, body,
+                sub="工具 usage 聚合 · Shell 程序 best-effort 提取")
+
+
 def v_stats(q):
     t0 = time.time()
     with CALC_LOCK:
@@ -1189,6 +1384,7 @@ def v_api_doc(q):
         ("/api/search?q=&amp;sid=&amp;scope=&amp;limit=", "全文搜索，返回命中片段与跳转链接"),
         ("/api/find?q=&amp;sid=&amp;offset=&amp;limit=", "按块精确检索：命中块、块内命中数、命中分片与直跳链接"),
         ("/api/s/&lt;sid&gt;/blocks/&lt;idx&gt;/find?q=&amp;offset=&amp;limit=", "单块内全部命中位置与所在分片（分页）"),
+        ("/api/tools?sid=&amp;view=tools%7Cprogs&amp;tool=&amp;offset=&amp;limit=", "工具 usage 聚合 / Shell 程序频次；带 tool 时下钻到该工具的全部调用"),
     ]
     body = ('<div class="note">所有接口只读、返回 JSON，统一信封 '
             '<code>{"ok":true,"data":...,"meta":{...}}</code>；出错为 '
@@ -1215,7 +1411,8 @@ def v_api_doc(q):
              '<div class="apirow"><code>GET /s/&lt;sid&gt;/b/&lt;idx&gt;?part=&amp;q=</code><span>块全文分片（<code>raw=1</code> 出纯文本；<code>q=</code> 高亮并列出命中片）</span></div>'
              '<div class="apirow"><code>GET /s/&lt;sid&gt;/o/&lt;seq&gt;?seg=&amp;part=</code><span>输出全文分片</span></div>'
              '<div class="apirow"><code>GET /search?q=</code><span>全文搜索</span></div>'
-             '<div class="apirow"><code>GET /find?q=&amp;p=</code><span>按块精确检索（跨会话 / 会话内 <code>/s/&lt;sid&gt;/find</code>）</span></div>')
+             '<div class="apirow"><code>GET /find?q=&amp;p=</code><span>按块精确检索（跨会话 / 会话内 <code>/s/&lt;sid&gt;/find</code>）</span></div>'
+             '<div class="apirow"><code>GET /tools?tool=&amp;view=&amp;q=</code><span>工具与命令聚合（会话内 <code>/s/&lt;sid&gt;/tools</code>）</span></div>')
     return page("后端 API", [("索引", "/"), ("API", "")], body,
                 sub="零 JavaScript 的前端，本身就建立在这套按需查询之上")
 
@@ -1285,6 +1482,29 @@ def api_route(path, q):
         resp = paged(rows[off:off + lim], len(rows), off, lim, "/api/find", q)
         resp["meta"].update({"scan_ms": ms, "sessions": nsessions, "note": warn,
                              "total_hits": sum(r["count"] for r in rows)})
+        return json_bytes(resp)
+
+    if path == "/api/tools":
+        sid = qstr(q, "sid") or None
+        if sid:
+            try:
+                STORE.by_id(sid)
+            except KeyError:
+                return json_bytes({"ok": False, "error": "unknown session: " + sid}, 404)
+        off = qint(q, "offset")
+        lim = min(API_MAX_LIMIT, qint(q, "limit", 50, 1))
+        tool = qstr(q, "tool").strip()
+        if tool:
+            rows, total = tool_calls(sid, tool, off, lim)
+            return json_bytes(paged(rows, total, off, lim, "/api/tools", q))
+        st = tool_stats_cached(sid=sid, refresh=qstr(q, "refresh") == "1")
+        key = "progs" if qstr(q, "view", "tools") == "progs" else "tools"
+        data = st[key]
+        resp = paged(data[off:off + lim], len(data), off, lim, "/api/tools", q)
+        resp["meta"].update({"sessions": st["sessions"],
+                             "total_calls": st["total_calls"],
+                             "total_credit": st["total_credit"],
+                             "shell_runs": st["shell_runs"]})
         return json_bytes(resp)
 
     m = re.match(r"^/api/s/([0-9A-Za-z_-]+)(/.*)?$", path)
@@ -1430,8 +1650,10 @@ HTML_ROUTES = [
     (r"^/api$", lambda q, m: v_api_doc(q)),
     (r"^/search$", lambda q, m: v_search(q)),
     (r"^/find$", lambda q, m: v_find(q)),
+    (r"^/tools$", lambda q, m: v_tools(q)),
     (r"^/s/([0-9A-Za-z_-]+)/search$", lambda q, m: v_search(q, m.group(1))),
     (r"^/s/([0-9A-Za-z_-]+)/find$", lambda q, m: v_find(q, m.group(1))),
+    (r"^/s/([0-9A-Za-z_-]+)/tools$", lambda q, m: v_tools(q, m.group(1))),
     (r"^/s/([0-9A-Za-z_-]+)/calls$", lambda q, m: v_session(dict(q, view=["calls"]), m.group(1))),
     (r"^/s/([0-9A-Za-z_-]+)/t/(\d+)$", lambda q, m: v_turn(q, m.group(1), int(m.group(2)))),
     (r"^/s/([0-9A-Za-z_-]+)/c/(\d+)$", lambda q, m: v_call(q, m.group(1), int(m.group(2)))),
@@ -1528,7 +1750,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if getattr(self, "_head_only", False) and path in (
                     "/stats", "/api/stats", "/search", "/api/search",
-                    "/find", "/api/find"):
+                    "/find", "/api/find", "/tools", "/api/tools"):
                 # HEAD 用于探活/链路检查，不触发全库遍历；其余路径仍走真实 GET 保持状态码语义
                 status, ctype, payload = 200, (
                     "application/json; charset=utf-8" if path.startswith("/api/")

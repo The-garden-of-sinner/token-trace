@@ -46,6 +46,7 @@
 - 思考过程与最终回答按段分片查看（这部分不占输入上下文）
 - 全库全文搜索，命中片段带跳转链接；按命中 / 未命中 / 跨边界筛选
 - **块检索**：按块聚合列出全部命中，给出块内命中总数与所在分片，点片号直跳并高亮
+- **工具与命令聚合**：按工具看调用次数 / 积分 / 命中率，按 shell 程序看执行频次，可下钻到该工具的每一次调用
 - 跨会话统计：字数构成、最贵调用、最大块、冷启动断点、计费单价
 - 12 个 JSON 端点，统一 `{ok, data, meta}` 信封，供脚本调用
 - Linux / Windows 各有一键启动与停止脚本，幂等、自动开浏览器
@@ -177,6 +178,7 @@ python3 scripts/build_win_bat.py     # -> dist/TokenTrace.bat
 | `/stats` | 跨会话聚合、最贵 20 次调用、最大 20 个块、冷启动断点 |
 | `/search?q=&scope=` | 全文搜索；`scope=blocks\|outputs\|turns\|all` |
 | `/find?q=&p=` | **按块精确检索**（跨会话）；`/s/<sid>/find?q=` 为会话内 |
+| `/tools?tool=&view=&q=&p=` | **工具与命令聚合**；`view=tools\|progs` 切换，`tool=` 下钻到该工具全部调用；会话内为 `/s/<sid>/tools` |
 | `/s/<sid>?view=turns\|calls&p=` | 会话概览，按轮或按调用分页 |
 | `/s/<sid>/t/<n>` | 单轮的全部调用 |
 | `/s/<sid>/c/<seq>?state=&p=` | 单次调用的上下文块清单；`state=all\|hit\|miss\|part` |
@@ -207,6 +209,7 @@ python3 scripts/build_win_bat.py     # -> dist/TokenTrace.bat
 | `GET /api/search?q=&sid=&scope=&limit=` | 全文搜索，返回命中位置、片段与跳转链接（块结果带 `part`） |
 | `GET /api/find?q=&sid=&offset=&limit=` | 按块聚合检索：命中块、块内命中数、命中分片与直跳链接 |
 | `GET /api/s/<sid>/blocks/<idx>/find?q=&offset=&limit=` | 单块内全部命中位置与所在分片（分页） |
+| `GET /api/tools?sid=&view=&tool=&offset=&limit=` | 工具 usage 聚合 / Shell 程序频次；带 `tool` 时下钻到该工具的全部调用 |
 | `POST /shutdown` | 停止服务，供 `start.sh stop` 调用；校验 Host / Origin / Sec-Fetch-Site |
 
 ```bash
@@ -273,6 +276,21 @@ Windows 的 `start.ps1` 对应参数是 `-Port` / `-NoBrowser` / `-Token`（别�
 
 结果按 `(关键词, 会话)` 缓存在进程内，8 个词 / 60 秒 TTL（与会话索引同步失效）；
 翻页、回看、点进块页都不重扫 940 万字。源文件新增会话后点「强制重检」或加 `refresh=1`。
+
+## 工具与命令聚合
+
+`tool_stats()` 从 `calls` 里按工具名累加次数、积分、输入/输出 token 与命中率；
+程序名只从 `tool_result` 块中 **Bash / Shell 类**工具的命令摘要 `c` 里提取 ——
+这份摘要是 `brief(args)` 的结果，URL、搜索词、生图描述都不参与。
+`prog_of()` 会跳过 `cd` / `export` / 控制流前缀段和后面还有实质命令的装饰性 `echo`，
+取第一个实际程序（本机 1345 条命令以 `cd <dir> &&` 开头，不跳就会全部归成一类）。
+点工具名进入下钻页，按积分降序列出该工具的每一次调用，每行直达调用详情。
+
+**实测**（29 会话 / 5933 次调用）：20 种工具，Bash 2799 次 / 527.47 分占大头，
+其后是最终回答 1338 次、Edit 812 次、Read 431 次；2797 条 shell 命令归出 173 种程序，
+Top 为 `python3` 552、`ls` 251、`grep` 216。聚合结果缓存 60 秒，
+首次 3.6 s（含冷解析）、之后 0.01 s；页面 8–22 KB、零 `<script>`。
+程序名是 best-effort 归类，纯控制流命令会归入「(shell 控制流)」，不是精确的执行追踪。
 
 ## 实测数据
 
