@@ -45,6 +45,7 @@
 - 每个块单独看全文，超长块自动分片；可反查「哪些调用带过它」
 - 思考过程与最终回答按段分片查看（这部分不占输入上下文）
 - 全库全文搜索，命中片段带跳转链接；按命中 / 未命中 / 跨边界筛选
+- **块检索**：按块聚合列出全部命中，给出块内命中总数与所在分片，点片号直跳并高亮
 - 跨会话统计：字数构成、最贵调用、最大块、冷启动断点、计费单价
 - 12 个 JSON 端点，统一 `{ok, data, meta}` 信封，供脚本调用
 - Linux / Windows 各有一键启动与停止脚本，幂等、自动开浏览器
@@ -175,10 +176,11 @@ python3 scripts/build_win_bat.py     # -> dist/TokenTrace.bat
 | `/` | 会话索引；`?sort=mtime\|credit\|calls`、`?ws=`、`?refresh=1` |
 | `/stats` | 跨会话聚合、最贵 20 次调用、最大 20 个块、冷启动断点 |
 | `/search?q=&scope=` | 全文搜索；`scope=blocks\|outputs\|turns\|all` |
+| `/find?q=&p=` | **按块精确检索**（跨会话）；`/s/<sid>/find?q=` 为会话内 |
 | `/s/<sid>?view=turns\|calls&p=` | 会话概览，按轮或按调用分页 |
 | `/s/<sid>/t/<n>` | 单轮的全部调用 |
 | `/s/<sid>/c/<seq>?state=&p=` | 单次调用的上下文块清单；`state=all\|hit\|miss\|part` |
-| `/s/<sid>/b/<idx>?part=&ref=` | 块全文分片；`raw=1` 返回纯文本 |
+| `/s/<sid>/b/<idx>?part=&q=&ref=` | 块全文分片；`raw=1` 纯文本，`q=` 高亮命中并列出命中片 |
 | `/s/<sid>/o/<seq>?seg=&part=` | 该次调用的输出（思考 / 回答）分片 |
 | `/api` | API 契约说明页 |
 
@@ -202,7 +204,9 @@ python3 scripts/build_win_bat.py     # -> dist/TokenTrace.bat
 | `GET /api/s/<sid>/blocks/<idx>/users` | 哪些调用带上了这个块 |
 | `GET /api/s/<sid>/outputs/<seq>?seg=&offset=&limit=` | 输出全文，分段 + 分片 |
 | `GET /api/s/<sid>/turns/<n>` | 某一轮的全部调用 |
-| `GET /api/search?q=&sid=&scope=&limit=` | 全文搜索，返回命中位置、片段与跳转链接 |
+| `GET /api/search?q=&sid=&scope=&limit=` | 全文搜索，返回命中位置、片段与跳转链接（块结果带 `part`） |
+| `GET /api/find?q=&sid=&offset=&limit=` | 按块聚合检索：命中块、块内命中数、命中分片与直跳链接 |
+| `GET /api/s/<sid>/blocks/<idx>/find?q=&offset=&limit=` | 单块内全部命中位置与所在分片（分页） |
 | `POST /shutdown` | 停止服务，供 `start.sh stop` 调用；校验 Host / Origin / Sec-Fetch-Site |
 
 ```bash
@@ -210,6 +214,8 @@ curl -s "http://127.0.0.1:8765/api/sessions" | python3 -m json.tool
 curl -s "http://127.0.0.1:8765/api/s/<sid>/calls?limit=5"
 curl -s "http://127.0.0.1:8765/api/s/<sid>/blocks/42?offset=0&limit=1000"
 curl -s "http://127.0.0.1:8765/api/search?q=缓存冷启动"
+curl -s "http://127.0.0.1:8765/api/find?q=缓存冷启动&limit=5"
+curl -s "http://127.0.0.1:8765/api/s/<sid>/blocks/42/find?q=缓存"
 ```
 
 `/health`（纯文本 `ok`）、`HEAD`、404 / 500 都按 HTTP 语义处理；响应带
@@ -237,6 +243,36 @@ Windows 的 `start.ps1` 对应参数是 `-Port` / `-NoBrowser` / `-Token`（别�
 | `PAGE_TURNS` / `PAGE_CALLS` / `PAGE_BLOCKS` | 20 / 40 / 40 | 各列表每页条数 |
 | `PART_CHARS` | 12 000 | 全文每片字数 |
 | `SEARCH_MAX` / `API_MAX_LIMIT` | 80 / 500 | 搜索与 API 单次返回上限 |
+| `FIND_MAX_BLOCKS` | 40 | 块检索结果每页块数 |
+| `FIND_MAX_HITS` / `FIND_MAX_PARTS` | 500 / 60 | 单块最多记录多少处命中 / 导航最多列多少片 |
+| `FIND_CACHE_MAX` / `FIND_CACHE_TTL` | 8 / 60 s | 检索结果缓存条数与有效期 |
+| `HL_MAX` | 200 | 单片最多高亮多少处（守住单页体积） |
+
+## 块检索：怎么定位到具体块
+
+全文搜索回答「哪些地方出现了这个词」，块检索回答「**哪些块含有它、块内有多少处、分别落在哪一片**」。
+
+旧实现里 `search()` 用 `rx.search()` 只取每块第一处命中，跳转链接是 `/b/<idx>`，
+一律落在第 1 片。58 万字的大块切成 49 片，命中在第 27 片就得手翻 26 次，
+进去之后也没有任何高亮。现在分两层，**都不建倒排索引**：
+
+| 层 | 做什么 | 代价 |
+| --- | --- | --- |
+| `search()` | `rx.search` 找首处，链接直接带 `part=<pos//PART_CHARS>&q=` | 命中即停，最快 |
+| `find_blocks()` | `rx.finditer` 扫完每块，按块聚合成一行，记 `count` / `positions` / `parts` | 全量扫描，热缓存约 0.4–0.6 s |
+
+`parts` 是命中位置整除 `PART_CHARS` 后的去重分片号 —— 不需要额外索引，
+`O(命中数)` 就能把「块内第 266 137 字」翻译成「第 22 片」。打开
+`/b/2387?part=22&q=Stdout`，后端只渲染这一片（12 000 字），用
+**先切原文、再逐段 esc** 的方式包 `<mark>`：先 esc 整段再跑正则会把 `&amp;`
+从中间切开，拼出坏 HTML。
+
+零 JS 保持不变：命中片号是一排 `<a class="btn">`，「下一处命中」也是普通链接。
+体积靠三道闸守住：结果 40 块/页、列表页每块最多 8 个片链接（超出给「全部 N 片 →」）、
+单片最多高亮 200 处。实测 6 000 字全命中时 HTML 仅 8.6 KB。
+
+结果按 `(关键词, 会话)` 缓存在进程内，8 个词 / 60 秒 TTL（与会话索引同步失效）；
+翻页、回看、点进块页都不重扫 940 万字。源文件新增会话后点「强制重检」或加 `refresh=1`。
 
 ## 实测数据
 
@@ -266,6 +302,16 @@ Windows 的 `start.ps1` 对应参数是 `-Port` / `-NoBrowser` / `-Token`（别�
 | 会话页 | 24.7 KB | 351 |
 | 调用详情（1328 页，中位） | 27.7 KB | — |
 | 块全文分片 | 17.2 KB | 113 |
+| 块检索 `/find`（40 块/页） | 39–41 KB | — |
+| 命中片并高亮 `/b/2387?part=24&q=` | 29.9 KB | — |
+
+**块检索实测**（29 会话 / 940 万字）
+
+- 全库 `缓存` 命中 403 个块 / 1 071 处；`Stdout` 2 792 块 / 2 932 处；`token` 2 057 块 / 7 644 处；
+- 最大块 579 969 字里 `Stdout` 命中 4 处，分布在片 22 / 24 / 27，首个位置 266 137 字；
+- 直接打开 `?part=24&q=Stdout` 落在第 25 片并高亮，页内给出「下一处命中」；
+- 首次检索 **3.5 s**（含冷解析 29 个会话），同词翻页 **0.012 s**；
+- `q=amp` 不产生破损 HTML 实体；6 000 字全命中时高亮封顶 200 处、HTML 8.6 KB。
 
 对照静态模式：同一会话只保留 150 次调用就要 1.9 MB 单页；按同口径不裁调用数生成
 约 220 MB、最大单页 4.6 MB。完整模式把单页压到 10–53 KB，同时把 1328 次调用和
@@ -341,6 +387,9 @@ RSS 仍是 84.0 MB —— Python 不把 arena 归还 OS。它限制的是缓存�
    `projects\` 的实际层级深度、中文或空格用户名下 WAL 模式 `workbuddy.db` 的只读打开、
    控制台隐藏效果、含中文路径时的传参。
 9. `~/.workbuddy/projects/*.jsonl` 会随新对话增长，但那是 WorkBuddy 写的，本工具只读。
+10. **块检索结果按关键词缓存 60 秒**（最多 8 个词），期间新写入的会话不出现在旧结果里；
+    点「强制重检」或加 `refresh=1`。单块命中位置封顶 500 处，列表页每块最多列 8 个片链接，
+    单片最多高亮 200 处 —— 都是为守住单页体积，全文仍可通过 API 完整取回。
 
 ## 数据来源与口径
 

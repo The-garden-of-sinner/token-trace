@@ -38,6 +38,12 @@ PAGE_CALLS = 40        # 调用列表每页条数
 PAGE_BLOCKS = 40       # 单次调用的上下文块列表每页条数
 PART_CHARS = 12000     # 全文每片字数（约 30 KB HTML）
 SEARCH_MAX = 80        # 搜索结果上限
+FIND_MAX_BLOCKS = 40   # 块检索结果每页块数（与 PAGE_BLOCKS 同量级）
+FIND_MAX_HITS = 500    # 单块最多记录多少处命中位置
+FIND_MAX_PARTS = 60    # 单块导航最多列多少个命中分片
+FIND_CACHE_MAX = 8     # 缓存几个检索词的全库扫描结果，翻页不重扫 940 万字
+FIND_CACHE_TTL = 60    # 与会话索引同 TTL；源文件新增会话后结果不会一直陈旧
+HL_MAX = 200           # 单片最多高亮多少处（守住单页体积）
 CACHE_SESSIONS = 32    # 内存保留几个已解析会话：实测全量 28 个仅 83 MB，默认全缓存
 API_MAX_LIMIT = 500    # /api/ 单次返回条数上限
 MAX_CHARS = 10_000_000  # 块/输出全文的字符 offset 上限，与 limit 同一量级
@@ -341,11 +347,13 @@ def search(q, sid=None, scope="all", limit=SEARCH_MAX):
                 if not m:
                     continue
                 lo, hi = max(0, m.start() - 60), min(len(b["t"]), m.end() + 90)
+                part = m.start() // PART_CHARS
                 hits.append({"kind": "block", "sid": s["id"], "ws": s["ws"],
                              "idx": i, "label": b["l"], "btype": b["k"],
-                             "chars": b["n"], "pos": m.start(),
+                             "chars": b["n"], "pos": m.start(), "part": part,
                              "snippet": b["t"][lo:hi],
-                             "href": "/s/%s/b/%d" % (s["id"], i)})
+                             "href": "/s/%s/b/%d?%s" %
+                                     (s["id"], i, urlencode({"part": part, "q": q}))})
                 if len(hits) >= limit:
                     truncated = True
                     break
@@ -384,6 +392,101 @@ def search(q, sid=None, scope="all", limit=SEARCH_MAX):
         if truncated:
             break
     return hits, ("结果超过 %d 条，已截断；缩小范围或换更具体的词" % limit) if truncated else ""
+
+
+def hl_text(text, term, max_hits=HL_MAX):
+    """在**原文**上按命中切段，再逐段 esc。
+
+    先 esc 整段再跑正则会把 &amp; 之类实体从中间切开，拼出坏 HTML；
+    切段后每段独立转义就不会。返回 (HTML, 实际高亮处数)。
+    """
+    if not term:
+        return esc(text), 0
+    rx = re.compile(re.escape(term), re.I)
+    out, pos, n = [], 0, 0
+    for m in rx.finditer(text):
+        if n >= max_hits:
+            break
+        out.append(esc(text[pos:m.start()]))
+        out.append("<mark>%s</mark>" % esc(m.group(0)))
+        pos = m.end()
+        n += 1
+    out.append(esc(text[pos:]))
+    return "".join(out), n
+
+
+def block_hits(text, term):
+    """某块里关键词的全部命中位置（封顶 FIND_MAX_HITS）与它们落在哪些分片。"""
+    if not term:
+        return [], []
+    rx = re.compile(re.escape(term), re.I)
+    pos, parts = [], set()
+    for m in rx.finditer(text):
+        pos.append(m.start())
+        parts.add(m.start() // PART_CHARS)
+        if len(pos) >= FIND_MAX_HITS:
+            break
+    return pos, sorted(parts)
+
+
+FIND_CACHE = OrderedDict()   # (term, sid) -> (ts, (rows, warn, sessions, ms))
+
+
+def find_blocks(term, sid=None, refresh=False):
+    """按块聚合的精确检索：一个块一行，记下全部命中位置与分片分布。
+
+    不建倒排索引，仍是流式正则扫描；结果按 (关键词, 会话) 缓存在进程内，
+    翻页 / 回看 / 点进块页都不会重扫 940 万字。调用方需持有 CALC_LOCK。
+    """
+    term = (term or "").strip()
+    if len(term) < 2:
+        return [], "关键词至少 2 个字", 0, 0
+    if len(term) > 200:
+        return [], "关键词过长", 0, 0
+    key = (term, sid or "")
+    now = time.time()
+    if not refresh and key in FIND_CACHE:
+        ts, cached = FIND_CACHE[key]
+        if now - ts < FIND_CACHE_TTL:
+            FIND_CACHE.move_to_end(key)
+            return cached
+        del FIND_CACHE[key]
+    t0 = time.time()
+    rx = re.compile(re.escape(term), re.I)
+    rows = []
+    targets = [STORE.by_id(sid)] if sid else STORE.sessions()
+    for s in targets:
+        d = STORE.get(s["id"])
+        for i, b in enumerate(d["ctx"]):
+            pos = []
+            capped = False
+            for m in rx.finditer(b["t"]):
+                pos.append(m.start())
+                if len(pos) >= FIND_MAX_HITS:
+                    capped = True
+                    break
+            if not pos:
+                continue
+            parts = sorted(set(p // PART_CHARS for p in pos))
+            lo, hi = max(0, pos[0] - 60), min(len(b["t"]), pos[0] + len(term) + 90)
+            rows.append({
+                "kind": "block", "sid": s["id"], "ws": s["ws"], "idx": i,
+                "label": b["l"], "btype": b["k"], "chars": b["n"],
+                "count": len(pos), "capped": capped,
+                "positions": pos[:5], "parts": parts[:FIND_MAX_PARTS],
+                "parts_total": len(parts), "pos": pos[0],
+                "snippet": b["t"][lo:hi],
+                "href": "/s/%s/b/%d?%s" %
+                        (s["id"], i, urlencode({"part": parts[0], "q": term})),
+            })
+    warn = ("部分块命中超过 %d 处，只记录前 %d 处位置" % (FIND_MAX_HITS, FIND_MAX_HITS)
+            if any(r["capped"] for r in rows) else "")
+    result = (rows, warn, len(targets), int((time.time() - t0) * 1000))
+    FIND_CACHE[key] = (now, result)
+    FIND_CACHE.move_to_end(key)
+    while len(FIND_CACHE) > FIND_CACHE_MAX:
+        FIND_CACHE.popitem(last=False)
+    return result
 
 
 # ---------------------------------------------------------------- HTML 外观
@@ -610,7 +713,8 @@ def v_index(q):
              '<select name="scope"><option value="all">全部范围</option><option value="blocks">只看上下文块</option>'
              '<option value="outputs">只看模型输出</option><option value="turns">只看提问</option></select>'
              '<button type="submit">搜索</button></form>')
-    body += ('<div class="tabs"><a class="btn" href="/stats">全局统计与冷启动断点</a>'
+    body += ('<div class="tabs"><a class="btn" href="/find">按块检索</a>'
+             '<a class="btn" href="/stats">全局统计与冷启动断点</a>'
              '<a class="btn" href="/api">后端 API 契约</a>'
              '<a class="btn" href="/?refresh=1">重新扫描源文件</a>'
              '<span class="fine" style="align-self:center;margin-left:6px">源文件 68 MB · 只读</span></div>')
@@ -668,6 +772,8 @@ def v_session(q, sid):
     body += ('<form class="searchbox" method="get" action="/s/%s/search">'
              '<input type="text" name="q" placeholder="只在这个会话里搜（含 58 万字的长块）">'
              '<button type="submit">搜索</button></form>' % esc(sid))
+    body += ('<div class="tabs"><a class="btn" href="/s/%s/find">按块检索（列出命中块 + 跳到命中分片）</a>'
+             '</div>' % esc(sid))
     body += ('<div class="tabs"><a class="btn %s" href="/s/%s?view=turns">按轮浏览</a>' %
              ("on" if view == "turns" else "", esc(sid)) +
              '<a class="btn %s" href="/s/%s?view=calls">按调用浏览</a>' %
@@ -808,6 +914,7 @@ def v_block(q, sid, idx):
     ref = qint(q, "ref")
     part = qint(q, "part")
     raw = qstr(q, "raw") == "1"
+    term = qstr(q, "q").strip()
     text = b["t"]
     total_parts = max(1, (len(text) + PART_CHARS - 1) // PART_CHARS)
     part = min(part, total_parts - 1)
@@ -815,6 +922,15 @@ def v_block(q, sid, idx):
     if raw:
         return 200, "text/plain; charset=utf-8", chunk.encode("utf-8")
 
+    qenc = urlencode({"q": term}) if term else ""
+
+    def blk_url(p, keep_term=True):
+        u = "/s/%s/b/%d?part=%d&ref=%d" % (sid, idx, p, ref)
+        if keep_term and qenc:
+            u += "&" + qenc
+        return esc(u)
+
+    hit_pos, hit_parts = block_hits(text, term)
     users = block_users(d, idx)
     crumbs = [("索引", "/"), (d["title"][:20], "/s/%s" % sid),
               ("调用 #%d" % ref if ref else "上下文块", "/s/%s/c/%d" % (sid, ref) if ref else ""),
@@ -826,15 +942,33 @@ def v_block(q, sid, idx):
                 ("被带上", "%s 次调用" % nfmt(len(users)))])
     if b["c"]:
         body += '<div class="note"><b>产生这个结果的原始指令</b><span class="cmd">$ %s</span></div>' % esc(b["c"])
-    body += ('<div class="tabs"><a class="btn" href="/s/%s/b/%d?raw=1&amp;part=%d">本片纯文本</a>' %
-             (esc(sid), idx, part) +
-             '<a class="btn" href="/api/s/%s/blocks/%d?offset=%d&amp;limit=%d">这一片的 JSON</a>' %
-             (esc(sid), idx, part * PART_CHARS, PART_CHARS) +
-             '<a class="btn %s" href="/s/%s/b/%d?part=%d&amp;ref=%d">← 上一片</a>' %
-             ("off" if part == 0 else "", esc(sid), idx, part - 1, ref) +
-             '<a class="btn %s" href="/s/%s/b/%d?part=%d&amp;ref=%d">下一片 →</a>' %
-             ("off" if part >= total_parts - 1 else "", esc(sid), idx, part + 1, ref) + '</div>')
-    body += '<pre class="text">%s</pre>' % esc(chunk)
+    body += ('<div class="tabs"><a class="btn" href="%s">本片纯文本</a>' %
+             esc("/s/%s/b/%d?raw=1&part=%d" % (sid, idx, part)) +
+             '<a class="btn" href="%s">这一片的 JSON</a>' %
+             esc("/api/s/%s/blocks/%d?offset=%d&limit=%d" %
+                 (sid, idx, part * PART_CHARS, PART_CHARS)) +
+             '<a class="btn %s" href="%s">← 上一片</a>' %
+             ("off" if part == 0 else "", blk_url(part - 1)) +
+             '<a class="btn %s" href="%s">下一片 →</a>' %
+             ("off" if part >= total_parts - 1 else "", blk_url(part + 1)) + '</div>')
+
+    if term:
+        body += ('<div class="warn">关键词 <b>%s</b>：本块共 <b>%s</b> 处命中，'
+                 '分布在 %d 个分片。点片号直接跳过去，命中处已高亮。</div>' %
+                 (esc(term), nfmt(len(hit_pos)), len(hit_parts)))
+        if hit_parts:
+            links = "".join('<a class="btn %s" href="%s">片 %d</a>' %
+                            ("on" if p == part else "", blk_url(p), p + 1)
+                            for p in hit_parts[:FIND_MAX_PARTS])
+            nxt = next((p for p in hit_parts if p > part), None)
+            if nxt is not None:
+                links += '<a class="btn" href="%s">下一处命中 →</a>' % blk_url(nxt)
+            body += '<div class="tabs">%s</div>' % links
+    html_chunk, hl_n = hl_text(chunk, term)
+    body += '<pre class="text">%s</pre>' % html_chunk
+    if term and hl_n >= HL_MAX:
+        body += ('<div class="warn">本片命中超过 %d 处，只高亮前 %d 处；'
+                 '用上面的分片导航或 API 继续看。</div>' % (HL_MAX, HL_MAX))
     if total_parts > 1:
         body += ('<div class="fine">这是第 %d/%d 片（每片 %s 字）。全文共 %s 字，'
                  '一片都不缺，用「下一片」翻完，或用 API 一次取全文。</div>' %
@@ -907,6 +1041,11 @@ def v_search(q, sid=None):
                 (k, "selected" if scope == k else "", lab)
                 for k, lab in (("all", "全部范围"), ("blocks", "只看上下文块"),
                                ("outputs", "只看模型输出"), ("turns", "只看提问")))))
+    fq = urlencode({"q": term}) if term else ""
+    fbase = "/s/%s/find" % sid if sid else "/find"
+    body += ('<div class="tabs"><a class="btn" href="%s">按块精确检索 →</a>'
+             '<span class="fine" style="align-self:center">列出全部命中块并跳到命中分片</span></div>' %
+             esc(fbase + ("?" + fq if fq else "")))
     if warn:
         body += '<div class="warn">%s</div>' % esc(warn)
     if term:
@@ -931,6 +1070,62 @@ def v_search(q, sid=None):
     else:
         body += '<div class="note">输入关键词搜索；结果里的每一条都能点进去看不截断的全文。</div>'
     return page("全文搜索", crumbs, body, sub="服务端检索 940 万字原文，不建索引、不落盘")
+
+
+def v_find(q, sid=None):
+    """按块聚合的精确检索：列出所有命中块，并直接跳到命中所在分片。"""
+    term = qstr(q, "q")
+    p = qint(q, "p")
+    d = STORE.get(sid) if sid else None
+    with CALC_LOCK:
+        rows, warn, nsessions, ms = find_blocks(
+            term, sid=sid, refresh=qstr(q, "refresh") == "1")
+    total = len(rows)
+    lo = p * FIND_MAX_BLOCKS
+    shown = rows[lo:lo + FIND_MAX_BLOCKS]
+    action = "/s/%s/find" % sid if sid else "/find"
+    base = "/s/%s/find" % sid if sid else "/find"
+    crumbs = [("索引", "/")] + ([(d["title"][:24], "/s/%s" % sid)] if d else []) + [("块检索", "")]
+    body = ('<form class="searchbox" method="get" action="%s">'
+            '<input type="text" name="q" value="%s" placeholder="关键词：列出所有命中的上下文块">'
+            '<button type="submit">检索</button></form>' % (action, esc(term)))
+    body += ('<div class="note">按<b>块</b>聚合：一个块只列一行，给出块内命中总数与它们落在'
+             '哪些 %s 字分片。点片号直接跳到该片并高亮，超长块不用手翻几十页。'
+             '与<a href="%s">全文搜索</a>共用同一份原文，不建索引、不落盘。</div>' %
+             (nfmt(PART_CHARS), esc("/s/%s/search" % sid if sid else "/search")))
+    body += ('<div class="fine">结果按关键词缓存 %d 秒，翻页与回看不重扫；源文件有新增会话时'
+             '点<a href="%s">强制重检</a>。首次检索含解析会话全文，约几秒。</div>' %
+             (FIND_CACHE_TTL,
+              esc(base + ("?" + urlencode({"q": term, "refresh": "1"}) if term else ""))))
+    if warn:
+        body += '<div class="warn">%s</div>' % esc(warn)
+    if term:
+        body += '<h2>命中 %s 个块 <small>共 %s 处 · 扫描 %d 个会话 · %d ms</small></h2>' % (
+            nfmt(total), nfmt(sum(r["count"] for r in rows)), nsessions, ms)
+        max_chips = 8
+        for r in shown:
+            furl = "/s/%s/b/%d?" % (r["sid"], r["idx"])
+            chips = "".join(
+                '<a class="btn" href="%s">片 %d</a>' %
+                (esc(furl + urlencode({"part": pt, "q": term})), pt + 1)
+                for pt in r["parts"][:max_chips])
+            if r["parts_total"] > max_chips:
+                chips += '<a class="btn" href="%s">全部 %d 片 →</a>' % (
+                    esc(r["href"]), r["parts_total"])
+            sn, _ = hl_text(r["snippet"], term, max_hits=20)
+            body += ('<div class="row" style="display:block;padding:9px 12px">'
+                     '<span class="chip t">%s</span> '
+                     '<a href="%s"><b style="font-weight:500">块 #%d · %s</b></a> '
+                     '<span class="fine">%s 字 · 命中 %s 处 · 首处 %s · %s</span>'
+                     '<div class="tabs" style="margin-top:6px">%s</div>'
+                     '<div class="snip">…%s…</div></div>' %
+                     (esc(TYPES.get(r["btype"], r["btype"])), esc(r["href"]),
+                      r["idx"], esc(r["label"]), nfmt(r["chars"]), nfmt(r["count"]),
+                      nfmt(r["pos"]), esc(r["ws"]), chips, sn))
+        body += pager(base, q, p, FIND_MAX_BLOCKS, total, "个块")
+    else:
+        body += '<div class="note">输入至少 2 个字开始检索。</div>'
+    return page("块检索", crumbs, body, sub="按块聚合 · 命中分片直跳 · 零脚本")
 
 
 def v_stats(q):
@@ -992,6 +1187,8 @@ def v_api_doc(q):
         ("/api/s/&lt;sid&gt;/outputs/&lt;seq&gt;?seg=&amp;offset=&amp;limit=", "某次调用的输出全文（分段+分片）"),
         ("/api/s/&lt;sid&gt;/turns/&lt;n&gt;", "某一轮的全部调用"),
         ("/api/search?q=&amp;sid=&amp;scope=&amp;limit=", "全文搜索，返回命中片段与跳转链接"),
+        ("/api/find?q=&amp;sid=&amp;offset=&amp;limit=", "按块精确检索：命中块、块内命中数、命中分片与直跳链接"),
+        ("/api/s/&lt;sid&gt;/blocks/&lt;idx&gt;/find?q=&amp;offset=&amp;limit=", "单块内全部命中位置与所在分片（分页）"),
     ]
     body = ('<div class="note">所有接口只读、返回 JSON，统一信封 '
             '<code>{"ok":true,"data":...,"meta":{...}}</code>；出错为 '
@@ -1008,14 +1205,17 @@ def v_api_doc(q):
              'curl -s "http://127.0.0.1:8765/api/sessions" | python3 -m json.tool\n'
              'curl -s "http://127.0.0.1:8765/api/s/&lt;sid&gt;/calls?limit=5"\n'
              'curl -s "http://127.0.0.1:8765/api/s/&lt;sid&gt;/blocks/42?offset=0&amp;limit=1000"\n'
-             'curl -s "http://127.0.0.1:8765/api/search?q=缓存冷启动"</pre>')
+             'curl -s "http://127.0.0.1:8765/api/search?q=缓存冷启动"\n'
+             'curl -s "http://127.0.0.1:8765/api/find?q=缓存冷启动&amp;limit=5"\n'
+             'curl -s "http://127.0.0.1:8765/api/s/&lt;sid&gt;/blocks/42/find?q=缓存"</pre>')
     body += ('<h2>HTML 路由</h2><div class="apirow"><code>GET /</code><span>索引</span></div>'
              '<div class="apirow"><code>GET /s/&lt;sid&gt;?view=turns|calls&amp;p=</code><span>会话（按轮 / 按调用分页）</span></div>'
              '<div class="apirow"><code>GET /s/&lt;sid&gt;/t/&lt;n&gt;</code><span>单轮</span></div>'
              '<div class="apirow"><code>GET /s/&lt;sid&gt;/c/&lt;seq&gt;?state=&amp;p=</code><span>单次调用的完整块清单</span></div>'
-             '<div class="apirow"><code>GET /s/&lt;sid&gt;/b/&lt;idx&gt;?part=</code><span>块全文分片（<code>raw=1</code> 出纯文本）</span></div>'
+             '<div class="apirow"><code>GET /s/&lt;sid&gt;/b/&lt;idx&gt;?part=&amp;q=</code><span>块全文分片（<code>raw=1</code> 出纯文本；<code>q=</code> 高亮并列出命中片）</span></div>'
              '<div class="apirow"><code>GET /s/&lt;sid&gt;/o/&lt;seq&gt;?seg=&amp;part=</code><span>输出全文分片</span></div>'
-             '<div class="apirow"><code>GET /search?q=</code><span>全文搜索</span></div>')
+             '<div class="apirow"><code>GET /search?q=</code><span>全文搜索</span></div>'
+             '<div class="apirow"><code>GET /find?q=&amp;p=</code><span>按块精确检索（跨会话 / 会话内 <code>/s/&lt;sid&gt;/find</code>）</span></div>')
     return page("后端 API", [("索引", "/"), ("API", "")], body,
                 sub="零 JavaScript 的前端，本身就建立在这套按需查询之上")
 
@@ -1069,6 +1269,23 @@ def api_route(path, q):
                                 scope=qstr(q, "scope", "all"),
                                 limit=min(API_MAX_LIMIT, qint(q, "limit", SEARCH_MAX, 1)))
         return json_bytes(env(hits, total=len(hits), note=warn))
+
+    if path == "/api/find":
+        sid = qstr(q, "sid") or None
+        if sid:
+            try:
+                STORE.by_id(sid)
+            except KeyError:
+                return json_bytes({"ok": False, "error": "unknown session: " + sid}, 404)
+        with CALC_LOCK:
+            rows, warn, nsessions, ms = find_blocks(
+                qstr(q, "q"), sid=sid, refresh=qstr(q, "refresh") == "1")
+        off = qint(q, "offset")
+        lim = min(API_MAX_LIMIT, qint(q, "limit", FIND_MAX_BLOCKS, 1))
+        resp = paged(rows[off:off + lim], len(rows), off, lim, "/api/find", q)
+        resp["meta"].update({"scan_ms": ms, "sessions": nsessions, "note": warn,
+                             "total_hits": sum(r["count"] for r in rows)})
+        return json_bytes(resp)
 
     m = re.match(r"^/api/s/([0-9A-Za-z_-]+)(/.*)?$", path)
     if not m:
@@ -1127,6 +1344,29 @@ def api_route(path, q):
             "prev_call": ("/api/s/%s/calls/%d" % (sid, seq - 1)) if seq > 1 else None,
             "next_call": ("/api/s/%s/calls/%d" % (sid, seq + 1)) if seq < len(d["calls"]) else None,
         }))
+    mm = re.match(r"^/blocks/(\d+)/find$", rest)
+    if mm:
+        idx = int(mm.group(1))
+        if idx < 0 or idx >= len(d["ctx"]):
+            return json_bytes({"ok": False, "error": "block out of range"}, 404)
+        term = qstr(q, "q").strip()
+        # 与 /api/search、/api/find 保持一致：短词/超长词是 200 + note，不是错误
+        if len(term) < 2 or len(term) > 200:
+            return json_bytes(env([], total=0, term=term, idx=idx,
+                                  note=("关键词至少 2 个字" if len(term) < 2 else "关键词过长")))
+        text = d["ctx"][idx]["t"]
+        pos, parts = block_hits(text, term)
+        off = qint(q, "offset")
+        lim = min(API_MAX_LIMIT, qint(q, "limit", 100, 1))
+        hits = [{"pos": p, "part": p // PART_CHARS,
+                 "html_url": "/s/%s/b/%d?%s" %
+                             (sid, idx, urlencode({"part": p // PART_CHARS, "q": term}))}
+                for p in pos[off:off + lim]]
+        resp = paged(hits, len(pos), off, lim,
+                     "/api/s/%s/blocks/%d/find" % (sid, idx), q)
+        resp["meta"].update({"term": term, "idx": idx, "total_chars": len(text),
+                             "parts": parts, "capped": len(pos) >= FIND_MAX_HITS})
+        return json_bytes(resp)
     mm = re.match(r"^/blocks/(\d+)(/users)?$", rest)
     if mm:
         idx = int(mm.group(1))
@@ -1189,7 +1429,9 @@ HTML_ROUTES = [
     (r"^/stats$", lambda q, m: v_stats(q)),
     (r"^/api$", lambda q, m: v_api_doc(q)),
     (r"^/search$", lambda q, m: v_search(q)),
+    (r"^/find$", lambda q, m: v_find(q)),
     (r"^/s/([0-9A-Za-z_-]+)/search$", lambda q, m: v_search(q, m.group(1))),
+    (r"^/s/([0-9A-Za-z_-]+)/find$", lambda q, m: v_find(q, m.group(1))),
     (r"^/s/([0-9A-Za-z_-]+)/calls$", lambda q, m: v_session(dict(q, view=["calls"]), m.group(1))),
     (r"^/s/([0-9A-Za-z_-]+)/t/(\d+)$", lambda q, m: v_turn(q, m.group(1), int(m.group(2)))),
     (r"^/s/([0-9A-Za-z_-]+)/c/(\d+)$", lambda q, m: v_call(q, m.group(1), int(m.group(2)))),
@@ -1285,7 +1527,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             if getattr(self, "_head_only", False) and path in (
-                    "/stats", "/api/stats", "/search", "/api/search"):
+                    "/stats", "/api/stats", "/search", "/api/search",
+                    "/find", "/api/find"):
                 # HEAD 用于探活/链路检查，不触发全库遍历；其余路径仍走真实 GET 保持状态码语义
                 status, ctype, payload = 200, (
                     "application/json; charset=utf-8" if path.startswith("/api/")
