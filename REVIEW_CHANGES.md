@@ -3,7 +3,7 @@
 本文件记录一次代码审阅后对仓库的分阶段修改。每阶段按「改动 → 验证 → 提交」推进，验证通过后立即 commit，文档随该次提交一起更新。
 
 - **基线 commit**：`c6d2b4f`（`初始化 Token 轨迹工具仓库`）
-- **提交账户**：`The-garden-of-sinner <50914620+The-garden-of-sinner@users.noreply.github.com>`，author 与 committer 一致，沿用初始 commit
+- **提交账户**：沿用仓库初始 commit 的 author / committer 身份（GitHub noreply 地址），两者一致
 - **验证环境**：Ubuntu 24.04.3 LTS / Python 3.11.1；用隔离的临时 `HOME` 构造 `~/.workbuddy` 数据，不触碰真实数据目录
 - **验证脚本**：见各阶段「验证」小节，均为独立复现脚本，未加入仓库
 
@@ -292,7 +292,7 @@ PowerShell 脚本仅静态检查（沙箱无 Windows / pwsh）。
 | 4 | `d165c5e` | P2 打磨项 | 43 |
 | 5 | `e133e32` | Windows 跨平台 | 54 |
 
-- 五次阶段提交的 author / committer 均为 `The-garden-of-sinner <50914620+The-garden-of-sinner@users.noreply.github.com>`，与初始 commit `c6d2b4f` 一致；之后那次 `docs` 提交仅用于回填本文件里的 commit 引用，账户相同。
+- 五次阶段提交的 author / committer 与初始 commit `c6d2b4f` 一致；之后那次 `docs` 提交仅用于回填本文件里的 commit 引用。
 - 每阶段都是「改动 → 全量回归 → 提交」，回归脚本用隔离的临时 `HOME` 构造数据，未触碰真实 `~/.workbuddy`；`trace/` 静态产物由 `.gitignore` 排除。
-- **未推送远程**：本次只在本地仓库提交。推送属于远程写操作，需另行确认。
+- **推送状态**：本文件记录的是离线审阅阶段（当时仅在本地提交）；上述提交现已合并并推送至 `main`。
 - **仍需在真实 Windows 上确认**：`projects\` 层级深度、中文/空格用户名下 WAL 模式 `workbuddy.db` 的只读打开、`python.exe -WindowStyle Hidden` 的隐藏效果、含中文路径的 PowerShell 传参，以及三个 `.ps1` / `.cmd` 的语法与运行。

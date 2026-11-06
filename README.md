@@ -1,79 +1,334 @@
 # Token 轨迹
 
-把 WorkBuddy 的会话记录还原成逐次调用的 token 轨迹：每一轮花了多少积分、分几次模型调用、
-每次调用带上了哪些上下文、缓存命中到哪里。
+**把 WorkBuddy 的会话记录还原成逐次调用的 token 轨迹。**  
+每一次调用花了多少积分、带上了哪些上下文、缓存命中到哪里，都能逐条回溯到原文；
+页面零 JavaScript、运行期零写盘，只依赖 Python 3.8+ 标准库。
 
-**两种模式，按需选：**
+![Python](https://img.shields.io/badge/python-3.8%2B-blue) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey) ![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen) ![JavaScript](https://img.shields.io/badge/JavaScript-0-orange) ![License](https://img.shields.io/badge/license-MIT-green)
 
-| 模式 | 入口 | 内容 | 前端负担 | 适用 |
-|---|---|---|---|---|
-| **完整模式（推荐）** | `trace_server.py` + 浏览器 | 零截断，全部调用 / 全部原文 | 每屏 10–50 KB、110–520 个标签 | 日常排查、要看全文 |
-| **静态模式（兜底）** | `gen_trace.py` → `trace/index.html` | 最近 150 次调用、每块 3000 字 | 单页 1–4.6 MB | 离线拷给别人、双击就开 |
+## 亮点
 
-完整模式解决的是旧架构里那对矛盾：**内容要全，页面又不能重**。
-做法是把「展开」变成一次后端请求 —— 翻页、点某次调用、看某个块的全文，
-都由服务端查数据、算缓存边界、渲染好一屏 HTML 再返回。浏览器拿到的永远只有一屏，
-但任何一条数据都能顺着链接走到，一个字符都不丢。
+- **看得全** —— 1328 次调用、2575 个上下文块全部可单独打开；最大的一块 579 969 字
+  分 49 片取回，拼接后与 API 全文逐字一致。旧静态页只保留最近 150 次调用。
+- **页面轻** —— 单页 10–53 KB、113–517 个 HTML 标签、0 个 `<script>`。
+  正文不进列表页，58 万字的大块在列表里只是一行引用。
+- **装得上** —— 两个 Python 文件、纯标准库；Linux 双击桌面图标、Windows 双击
+  `start.cmd`，都自动起服务并打开浏览器，重复点不会多起进程。
+- **不添乱** —— 源数据只读，运行期 0 字节写盘（连 `__pycache__` 都关掉）；
+  两轮 600 请求后 RSS 稳定在 88.7 MB，第二轮完全不涨。
 
-所有页面**零 JavaScript**。这是 v3 踩出来的硬约束：托管预览（`/static-html/<hash>/`）不执行
-`<script>`，所以核心路径全部是 `<a href>` + `<details>`，禁用脚本照样能用。
+## 两种模式
 
----
+| 维度 | 完整模式（推荐） | 静态模式（离线兜底） |
+| --- | --- | --- |
+| 入口 | `trace_server.py` + 浏览器 | `gen_trace.py` → `trace/index.html` |
+| 内容 | 零截断，全部调用与原文 | 最近 150 次调用、每块 3000 字 |
+| 前端负担 | 每屏 10–53 KB | 单页 1–4.6 MB |
+| 搜索 / 筛选 / JSON API | 有 | 无 |
+| 额外要求 | 本地起一个服务 | 无，`file://` 双击即开 |
+| 适用 | 日常排查、看全文、脚本取数 | 拷给别人、归档、无 Python 环境查看 |
 
-## 快速开始
+完整模式解决的是一对矛盾：**内容要全，页面又不能重**。做法是把「展开」变成一次后端请求 ——
+翻页、点某次调用、看某个块的全文，都由服务端查数据、算缓存边界、渲染好一屏再返回。
+浏览器永远只拿一屏，但任何一条数据都能顺着链接走到，一个字符都不丢。
 
-### 桌面一键启动（最省事）
+零 JavaScript 是踩出来的硬约束：托管预览（`/static-html/<hash>/`）不执行 `<script>`，
+所以核心路径全部是 `<a href>` + 原生 `<details>`，禁用脚本照样能用。
 
-双击桌面上的「**Token 轨迹**」图标即可：服务没在跑就后台启动 → 等就绪 → 自动打开浏览器；
-已经在跑就直接打开浏览器，**不会多起一个进程**。全程不用开终端。
+选型建议：本机排查一律用完整模式；只有要把结果发给别人、或目标机器不能跑 Python 时，
+才用静态模式生成一份 HTML。两者共用同一套解析原语，不会算出两套数字。
+
+## 功能
+
+- 按工作区分组的会话索引，可按时间 / 积分 / 调用数排序
+- 逐轮、逐调用回溯：usage、积分、缓存命中边界、带上了哪些上下文块
+- 每个块单独看全文，超长块自动分片；可反查「哪些调用带过它」
+- 思考过程与最终回答按段分片查看（这部分不占输入上下文）
+- 全库全文搜索，命中片段带跳转链接；按命中 / 未命中 / 跨边界筛选
+- 跨会话统计：字数构成、最贵调用、最大块、冷启动断点、计费单价
+- 12 个 JSON 端点，统一 `{ok, data, meta}` 信封，供脚本调用
+- Linux / Windows 各有一键启动与停止脚本，幂等、自动开浏览器
+
+## 安装
+
+### 前置条件
+
+| 组件 | 说明 |
+| --- | --- |
+| Python 3.8+ | 仅标准库；实测 3.8 与 3.13 均可 |
+| WorkBuddy 会话数据 | `~/.workbuddy/projects/**/*.jsonl` 与 `~/.workbuddy/workbuddy.db`，由客户端产生，本工具只读 |
+| 浏览器 | 任意；不需要 JS、不需要构建 |
+| Windows：PowerShell 5.1+ | 系统自带，仅启动器用到；核心 Python 文件不依赖它 |
+
+### Linux：一键启动
 
 ```bash
-./start.sh                       # 命令行手动跑，效果同上
-./start.sh stop                  # 一键停止
-TRACE_PORT=9000 ./start.sh       # 换端口（避免和别的服务冲突）
-TRACE_NO_BROWSER=1 ./start.sh    # 只起服务、不开浏览器（无头 / 自动化）
+./start.sh                     # 后台起服务 → 等就绪 → 开浏览器
+./start.sh stop                # 停止
+TRACE_PORT=9000 ./start.sh     # 换端口
+TRACE_NO_BROWSER=1 ./start.sh  # 只起服务、不开浏览器（无头 / 自动化）
 ```
 
-本机已装好 `~/桌面/Token 轨迹.desktop`（桌面双击）和
-`~/.local/share/applications/token-trace.desktop`（应用菜单）。
-克隆到新机器上跑一次 `./install-desktop.sh`：它把 `token-trace.desktop` 模板里的 `@EXEC@`
-替换成当前目录的 `start.sh` 绝对路径后再安装，不写死任何用户名或目录。
+双击桌面图标效果相同。克隆到新机器时先跑一次 `./install-desktop.sh`：它把
+`token-trace.desktop` 模板里的 `@EXEC@` 替换成当前目录的 `start.sh` 绝对路径，
+再装到桌面与 `~/.local/share/applications/`，不写死任何用户名或目录。
 
-`start.sh` 用系统自带的 `/usr/bin/python3 -B`（3.8 实测可跑，不依赖 WorkBuddy 内部解释器），
-`-B` 保持零写盘。实测冷启动 **2.0 s**、常驻 **23.5 MB**（未预热，随访问按需增长）；
+`start.sh` 用系统 `python3 -B`（`-B` 保持零写盘），实测冷启动 2.0 s、未预热常驻 23.5 MB；
 停止走 `POST /shutdown` 让服务自己退出，不依赖 `pkill` 找 PID。
 
-### Windows
+### Windows：一键启动
 
-双击 `windows\start.cmd`，或在 PowerShell 里运行 `.\windows\start.ps1`；
-`.\windows\start.ps1 stop` 停止，`-Port 9000` 换端口。
-首次执行 `.\windows\install-shortcut.ps1` 可创建桌面 / 开始菜单快捷方式。
-详见 [Windows 支持](#windows-支持)。
-
-### 命令行启动
-
-```bash
-cd token-trace
-
-# 完整模式：起一个只监听本机的服务
-python3 trace_server.py                  # http://127.0.0.1:8765/
-python3 trace_server.py --port 9000 --warm   # 换端口；启动时预解析全部会话
-python3 trace_server.py --cache 4        # 内存吃紧时用 LRU 只留 4 个会话
-
-# 静态模式：生成纯 HTML（默认行为不变）
-python3 gen_trace.py                     # 全部会话 → trace/index.html + s-*.html
-python3 gen_trace.py path/to/x.jsonl -o out.html
-python3 gen_trace.py --all              # 关掉截断（可能几十 MB 单页，慎用）
+```powershell
+.\windows\start.cmd                    # 双击或命令行，一键启动
+.\windows\start.ps1 stop               # 停止
+.\windows\start.ps1 restart            # 重启
+.\windows\start.ps1 status             # 查看状态
+.\windows\start.ps1 -Port 9000         # 换端口
+.\windows\install-shortcut.ps1         # 首次：创建桌面 / 开始菜单快捷方式
 ```
 
-完整模式启动后打开首页：按工作区分组 → 会话 → 轮 / 调用 → 上下文块清单 → 块全文。
-每一级都是独立 URL，可以直接收藏、分享、用 `curl` 取。
+数据目录默认 `%USERPROFILE%\.workbuddy`；客户端装在别处时用 `-WorkBuddyHome`
+或环境变量 `WORKBUDDY_HOME` 覆盖。
 
-`Ctrl+C` 停止服务。服务**只读**源文件，不写 `~/.workbuddy/` 下任何东西。
+### 命令行
 
----
+```bash
+python3 trace_server.py                       # http://127.0.0.1:8765/
+python3 trace_server.py --port 9000 --warm    # 换端口并预解析全部会话
+python3 trace_server.py --cache 4             # 内存吃紧时只缓存 4 个会话
 
-## 架构总览
+python3 gen_trace.py                          # 静态模式：全部会话 → trace/
+python3 gen_trace.py path/to/x.jsonl -o out.html
+python3 gen_trace.py --all                    # 静态模式保留全部调用（正文仍截 3000 字）
+```
+
+`Ctrl+C` 停止服务。`--all` 只取消「最多 150 次调用」的裁剪，正文截断由静态模式自身的
+`MAX_TEXT` 控制，所以它不等于完整模式。
+
+### 不需要的操作
+
+- **不需要 `pip install`** —— 没有第三方依赖
+- **不需要建库 / 建倒排索引** —— 直接只读 jsonl 与 WorkBuddy 现成的 SQLite
+- **不需要前端构建、不需要联网** —— 页面由后端现渲染
+- **不需要 root / 管理员权限** —— 只读用户目录，启动器也装在用户目录
+- **不会改动 WorkBuddy 的任何文件** —— 服务运行期零写盘
+
+## 使用
+
+### 页面导航
+
+打开首页后按「工作区 → 会话 → 轮 / 调用 → 上下文块 → 块全文」逐层进入。
+每一级都是独立 URL，可收藏、分享、用 `curl` 直接取。
+
+| 路由 | 内容 |
+| --- | --- |
+| `/` | 会话索引；`?sort=mtime\|credit\|calls`、`?ws=`、`?refresh=1` |
+| `/stats` | 跨会话聚合、最贵 20 次调用、最大 20 个块、冷启动断点 |
+| `/search?q=&scope=` | 全文搜索；`scope=blocks\|outputs\|turns\|all` |
+| `/s/<sid>?view=turns\|calls&p=` | 会话概览，按轮或按调用分页 |
+| `/s/<sid>/t/<n>` | 单轮的全部调用 |
+| `/s/<sid>/c/<seq>?state=&p=` | 单次调用的上下文块清单；`state=all\|hit\|miss\|part` |
+| `/s/<sid>/b/<idx>?part=&ref=` | 块全文分片；`raw=1` 返回纯文本 |
+| `/s/<sid>/o/<seq>?seg=&part=` | 该次调用的输出（思考 / 回答）分片 |
+| `/api` | API 契约说明页 |
+
+`<sid>` 必须匹配 `[0-9A-Za-z_-]+` 且存在于会话索引，防目录穿越；所有输出统一 `html.escape`。
+
+### JSON API
+
+统一信封 `{"ok":true,"data":...,"meta":{...}}`；出错是 `{"ok":false,"error":"..."}` 加 4xx/5xx。
+分页统一 `offset` / `limit`，`meta` 给 `total` / `offset` / `limit`，有下一页时给 `next` 完整 URL。
+
+| 端点 | 说明 |
+| --- | --- |
+| `GET /api/health` | 状态、`pid`、`rss_mb`、`uptime_s`、会话数、缓存数、`write_files=false` |
+| `GET /api/sessions` | 全部会话摘要 |
+| `GET /api/stats` | 跨会话全量聚合 |
+| `GET /api/s/<sid>` | 会话统计 + 每轮摘要 + 冷启动调用号 |
+| `GET /api/s/<sid>/calls?offset=&limit=&turn=` | 调用列表（不含正文） |
+| `GET /api/s/<sid>/calls/<seq>` | 单次调用：usage、缓存边界、块总数、输出段索引 |
+| `GET /api/s/<sid>/calls/<seq>/context?offset=&limit=&state=` | 块清单（不含正文，可按状态筛选） |
+| `GET /api/s/<sid>/blocks/<idx>?offset=&limit=&full=1` | 块全文，Range 语义（`limit` 按字符）；`full=1` 一次取完 |
+| `GET /api/s/<sid>/blocks/<idx>/users` | 哪些调用带上了这个块 |
+| `GET /api/s/<sid>/outputs/<seq>?seg=&offset=&limit=` | 输出全文，分段 + 分片 |
+| `GET /api/s/<sid>/turns/<n>` | 某一轮的全部调用 |
+| `GET /api/search?q=&sid=&scope=&limit=` | 全文搜索，返回命中位置、片段与跳转链接 |
+| `POST /shutdown` | 停止服务，供 `start.sh stop` 调用；校验 Host / Origin / Sec-Fetch-Site |
+
+```bash
+curl -s "http://127.0.0.1:8765/api/sessions" | python3 -m json.tool
+curl -s "http://127.0.0.1:8765/api/s/<sid>/calls?limit=5"
+curl -s "http://127.0.0.1:8765/api/s/<sid>/blocks/42?offset=0&limit=1000"
+curl -s "http://127.0.0.1:8765/api/search?q=缓存冷启动"
+```
+
+`/health`（纯文本 `ok`）、`HEAD`、404 / 500 都按 HTTP 语义处理；响应带
+`Cache-Control: no-store`，源文件改了刷新即可看到新数据，不会拿到陈旧页。
+
+### 配置
+
+| 参数 | 环境变量 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `--port` | `TRACE_PORT` | `8765` | 监听端口，启动器同样支持 |
+| `--host` | — | `127.0.0.1` | 绑定非本机地址时**必须**同时给 `--token`，否则拒绝启动 |
+| `--token` | `TRACE_TOKEN` | 空 | 访问令牌；非空时所有请求都要带 `?token=` 或 `Authorization: Bearer` |
+| `--cache` | — | `32` | LRU 保留几个已解析会话 |
+| `--warm` | — | 关 | 启动时预解析全部会话（约 3–7 s，换更快的首次搜索） |
+| 不开浏览器 | `TRACE_NO_BROWSER=1` | — | 无头 / 自动化场景 |
+| 数据目录 | `WORKBUDDY_HOME` | `~/.workbuddy` | Windows 启动器也支持 `-WorkBuddyHome` |
+
+Windows 的 `start.ps1` 对应参数是 `-Port` / `-NoBrowser` / `-Token`（别名 `-ShutdownToken`）/
+`-WorkBuddyHome`，动作支持 `start | stop | restart | status`。
+
+单页渲染上限在 `trace_server.py` 顶部：
+
+| 常量 | 值 | 含义 |
+| --- | --- | --- |
+| `PAGE_TURNS` / `PAGE_CALLS` / `PAGE_BLOCKS` | 20 / 40 / 40 | 各列表每页条数 |
+| `PART_CHARS` | 12 000 | 全文每片字数 |
+| `SEARCH_MAX` / `API_MAX_LIMIT` | 80 / 500 | 搜索与 API 单次返回上限 |
+
+## 实测数据
+
+### 完整性与页面体积
+
+> 测量环境：本机 WorkBuddy 数据，29 个会话；取调用数最多的一个（1328 次调用 /
+> 2575 块 / 256 万字）。数字随新会话增长，页面上的统计全部实时重算，不是写死的结论。
+
+**内容可达性**
+
+| 项目 | 结果 |
+| --- | --- |
+| 调用详情页 | 1328 / 1328 全部 200 |
+| 块全文页 | 2575 / 2575 全部 200 |
+| 最大块 | 579 969 字 / 49 片，逐片拼回与 API 全文逐字一致 |
+| `<script>` 标签 | 全部页面 0 个 |
+| JSON 端点 | 12 / 12 返回 `{ok:true, data, meta}` |
+
+**单页体积**
+
+| 页面 | 大小 | 标签数 |
+| --- | ---: | ---: |
+| 索引 `/` | 23.2 KB | 372 |
+| 全局统计 `/stats` | 32.2 KB | 517 |
+| 搜索结果（80 条） | 52.9 KB | 515 |
+| 会话页 | 24.7 KB | 351 |
+| 调用详情（1328 页，中位） | 27.7 KB | — |
+| 块全文分片 | 17.2 KB | 113 |
+
+对照静态模式：同一会话只保留 150 次调用就要 1.9 MB 单页；按同口径不裁调用数生成
+约 220 MB、最大单页 4.6 MB。完整模式把单页压到 10–53 KB，同时把 1328 次调用和
+2575 个块全部变成可访问的 URL。
+
+**旧静态模式的四处裁剪，完整模式全部取消：**
+
+| 旧限制 | 完整模式 |
+| --- | --- |
+| `MAX_CALLS=150`，超长会话只留最近 150 次 | 全部调用可访问，40 条/页翻 |
+| `MAX_TEXT=3000`，块正文截到 3000 字 | 原文全存，12 000 字/片翻完 |
+| `PREVIEW=600` / `INLINE_BLOCKS=3`，其余只给标题 | 块清单全列，正文点开即完整 |
+| 无搜索、无筛选 | 全库全文搜索 + 状态筛选 + 排序 |
+
+### 磁盘与内存
+
+**运行期零写盘。** 服务里没有 `open(...,'w')`、没有日志落盘、没有缓存文件、没有数据库写入；
+读源数据只有只读 `open()` 与 `sqlite3 mode=ro`，页面直接经 socket 返回。启动时在
+`import gen_trace` 之前设 `sys.dont_write_bytecode = True`，连 Python 默认会写的
+`__pycache__/*.pyc`（实测 141 KB）都不再产生。静态模式会写 `trace/`（约 45 MB），那是它的产物。
+
+> RSS 是进程真正驻留在物理内存里的页，Linux 读 `/proc/<pid>/status` 的 `VmRSS`；
+> 不含 VSZ 里预留未驻留的部分。共享库按进程各算一份，Python 释放对象后分配器通常
+> 不把 arena 归还系统，所以 **RSS 不下降不等于泄漏**，看趋势才有意义。
+
+**两轮共 600 个请求**（索引、统计、搜索、6 个会话的会话页 / 调用页 / 块页 / API）
+
+| 时刻 | RSS | 缓存会话 | 目录字节 | 文件数 | `__pycache__` |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 刚启动（`--warm` 预热 29 会话） | 88.0 MB | 29 | 46 332 588 | 32 | 不存在 |
+| 第 1 轮 300 请求后 | 88.7 MB | 29 | 46 332 588 | 32 | 不存在 |
+| 第 2 轮 300 请求后 | 88.7 MB | 29 | 46 332 588 | 32 | 不存在 |
+
+磁盘 0 字节、0 文件变化；RSS 只涨 0.7 MB（Python 堆的一次性分配），第二轮完全不涨。
+压测里的 5 个 404 是同一个越界 URL（某会话只有 1 次调用，请求 `/c/2`），属正确边界行为。
+
+**88 MB 花在哪**（测量进程稳态 84.3 MB / VSZ 116.1 MB）
+
+| 组成 | 大小 |
+| --- | ---: |
+| Python 解释器 + 标准库基线 | 19.9 MB |
+| 模块代码、常量、29 个会话索引 | 7.4 MB |
+| 会话全文与派生索引 | 57.1 MB |
+| └ 去重后的原文字符串 13 441 个 | 30.2 MB |
+
+剩余约 27 MB 是 dict / list / `pref` 前缀和 / `by_turn` 等容器开销；运行中的服务
+比测量进程多约 4 MB（HTTP 线程栈与请求期堆峰值）。占 15.1 GiB 内存的 0.57%，
+只访问 1 个最大会话时是 60.6 MB。
+
+**`--cache` 不是内存硬上限。** 实测 `--cache 4` 遍历完 29 个会话后，逻辑上只留 4 个，
+RSS 仍是 84.0 MB —— Python 不把 arena 归还 OS。它限制的是缓存条目数与重复解析，
+不是进程峰值；想真正压低驻留得限制峰值（少用会遍历全部会话的 `/stats`）或重启服务。
+默认全缓存反而划算：内存一样涨到 ~88 MB，还省掉反复解析。
+
+`GET /api/health` 随时会自报 `pid` / `rss_mb` / `uptime_s` / `cached_sessions` / `write_files`。
+
+## 已知限制
+
+1. **完整模式需要本地起服务**，不能像静态页那样 `file://` 双击打开。
+2. **静态模式仍会截断**（150 次调用 / 3000 字），它是离线兜底，不是完整视图。
+3. **缓存命中边界是估算**：接口只给命中 token 总数，不给切分位置。按「可见字数 ×
+   命中比例」在块边界上切，块级基本准确，跨界那一块内部有误差；两个模式口径一致。
+4. **搜索是流式扫描而非倒排索引**：冷缓存首次全库搜索约 2.4 s，加 `--warm` 后不到 0.5 s。
+5. **默认只监听 `127.0.0.1` 且无鉴权**。绑定非本机地址时强制要求 `--token`；
+   `POST /shutdown` 校验 Host / Origin / Sec-Fetch-Site，避免跨站关停。
+   它是唯一的写操作端点（只让进程退出，不动磁盘）。
+6. **`start.sh stop` 的 `pkill` 兜底**在 PID namespace 隔离的环境（如 WorkBuddy 的
+   exec 沙箱）里看不到桌面进程，但优先走的 HTTP `/shutdown` 不受影响。
+7. **积分来自本地记录**，云端补扣或赠送的部分不在里面。
+8. **Windows 版尚未在真实 Windows 机器上验证**（改动在 Linux 沙箱内完成）。
+   待确认四点：`projects\` 的实际层级深度、中文或空格用户名下 WAL 模式
+   `workbuddy.db` 的只读打开、`python.exe -WindowStyle Hidden` 的隐藏效果、
+   含中文路径时 PowerShell 的传参。
+9. `~/.workbuddy/projects/*.jsonl` 会随新对话增长，但那是 WorkBuddy 写的，本工具只读。
+
+## 数据来源与口径
+
+全部来自本地文件，只读，不联网：
+
+| 路径 | 内容 |
+| --- | --- |
+| `~/.workbuddy/projects/**/*.jsonl` | 每次调用记录：消息、工具调用与结果、`providerData.rawUsage` |
+| `~/.workbuddy/workbuddy.db` | `sessions` 表提供 `cwd`、标题、模型名 |
+
+`rawUsage` 用到 `prompt_tokens`、`prompt_cache_hit_tokens`、`completion_tokens`、`credit`。
+并行工具调用里只有第一个 `function_call` 带 usage，其余标「并列调用 · 无独立 usage」。
+末尾半行（客户端正在写入时）会跳过而不是让整个会话报错。
+
+**积分单价（本机实测，2026-11）**
+
+| 类型 | 单价 |
+| --- | --- |
+| 未命中输入 | 0.29 分 / 万 token |
+| 缓存命中输入 | 0.014 分 / 万 token |
+
+差 21 倍，所以「积分差异基本等于未命中量差异」，不是单价在变。
+
+**可见上下文 ≠ 完整请求。** jsonl 里只有消息和工具结果，不含系统提示与工具 schema，
+所以「本次带上 N 字」和「接口报 M token」不能换算，两者都列出来仅供参考。
+
+## 这个工具能回答什么
+
+以下是在本机样本上跑出来的结论，页面 `/stats` 会实时重算，不用再手写脚本：
+
+1. **输入的大头是缓存，不是新内容。** 全库 8.24 亿输入 token，98.33% 命中缓存，
+   真正计费的是剩余部分加输出。
+2. **上下文构成里，用户输入只占很小一块。** 工具结果与系统注入占绝对多数，
+   想省 token 先管工具输出。
+3. **缓存失效是常态。** 全库找出 49 次「前一次 >80% 命中、这次 <50%」的断点，
+   短间隔（1–10 分钟）最常见，触发机制无法从本地数据确定。
+4. **重启很贵。** 重启后第一次调用要重算整段历史，成本 ≈ 上下文 token × 0.29 / 万。
+   实测 33.7 万上下文 → 9.47 分，第二次调用就恢复到 0.43 分。
+
+## 实现说明
 
 ```
 ~/.workbuddy/projects/**/*.jsonl   workbuddy.db
@@ -82,9 +337,9 @@ python3 gen_trace.py --all              # 关掉截断（可能几十 MB 单页�
 ┌─────────────────────────────────────────────────────────┐
 │ 数据层  gen_trace.build(path, full=True) + Store          │
 │  · 重建 ctx 全局块序列，每个 call 存 ctxN 快照            │
-│  · full=True 保留原文（旧静态模式仍用默认的截断版）       │
+│  · full=True 保留原文（静态模式仍用默认的截断版）         │
 │  · 前缀和 pref[]、ctxNs[]、by_turn、cold 断点             │
-│  · LRU 缓存已解析会话，默认 32（实测全量常驻 83 MB）      │
+│  · LRU 缓存已解析会话，默认 32（全量常驻实测 83 MB）      │
 ├─────────────────────────────────────────────────────────┤
 │ 计算层  call_state / call_outline / block_users / search │
 │  · O(1) 判块状态，二分求反向索引，正则流式全文检索        │
@@ -100,307 +355,62 @@ python3 gen_trace.py --all              # 关掉截断（可能几十 MB 单页�
 ```
 
 四层都在 `trace_server.py` 一个文件里；`gen_trace.py` 只提供解析原语（`build`、
-`scan_all`、`brief`、`cmd_html`、`seg_user`），两个模式共用同一套口径，不会算出两套数字。
+`scan_all`、`brief`、`cmd_html`、`seg_user`），两个模式共用同一套口径。
 
-### 数据层：一次解析，全文常驻
+**数据层：一次解析，全文常驻。** `Store.sessions()` 常驻会话索引（60 秒或
+`/?refresh=1` 失效），从 `workbuddy.db` 补 `cwd` / 标题 / 模型，从 jsonl 补统计。
+`Store.get(sid)` 第一次访问某会话时调 `build(path, full=True)`，最大会话解析 0.69 s；
+`_derive()` 一次算好 `pref[]` 累积字数前缀和、`ctxNs[]` 每次调用前的块数、
+`by_turn` 归属、冷启动断点与全量 KPI。**不建倒排索引、不落盘、不改源文件。**
 
-- `Store.sessions()` 常驻会话索引（28 条摘要，60 秒或 `/?refresh=1` 失效），
-  从 `workbuddy.db` 补 `cwd` / 标题 / 模型，从 jsonl 补统计。
-- `Store.get(sid)` 第一次访问某会话时调 `gen_trace.build(path, full=True)`。
-  最大会话 1328 次调用 / 2575 块 / 256 万字，解析 **0.69 s**。
-- 派生索引在 `Store._derive()` 一次算好：
-  - `pref[]` 累积字数前缀和 → 任意区间的可见字数 O(1)；
-  - `ctxNs[]` 每次调用前的块数（单调不减）→ 供二分；
-  - `by_turn` 调用归属、`cold` 冷启动断点、`stats` 全量 KPI、按类型的字数构成。
-- **不建倒排索引、不落盘、不改源文件**。28 个会话全部常驻实测 **83 MB RSS**，
-  预热 7.1 s；预热后翻页、搜索、统计都是内存操作。
-
-### 计算层：后端把重活干完
+**计算层：重活全在后端。**
 
 | 函数 | 做的事 | 复杂度 |
-|---|---|---|
-| `call_state(d, seq, i)` | 第 seq 次调用里第 i 块是命中 / 未命中 / 跨边界 | **O(1)**，用 `pref` 前缀和比边界，不展开整个上下文 |
-| `call_outline(d, seq)` | 本次带上几块 / 多少字 / 命中比例 / 缓存边界落在第几块 | 边界用 `bisect` 定位 |
-| `block_users(d, idx)` | 哪些调用带上了这个块 | `bisect_right(ctxNs, idx)`，O(log C) |
-| `global_stats()` | 跨会话聚合构成、最贵调用、最大块、冷启动断点、计费单价 | 内存遍历一次 |
-| `search()` | 940 万字原文里找关键词，返回命中片段与跳转链接 | `re.compile(escape(q), I)` 直接扫原文，不复制小写副本 |
+| --- | --- | --- |
+| `call_state(d, seq, i)` | 第 seq 次调用里第 i 块是命中 / 未命中 / 跨边界 | **O(1)**，用前缀和比边界，不展开上下文 |
+| `call_outline(d, seq)` | 本次带上几块 / 多少字 / 命中比例 / 边界落在第几块 | 边界用 `bisect` 定位 |
+| `block_users(d, idx)` | 哪些调用带上了这个块 | `bisect_right(ctxNs, idx)` |
+| `global_stats()` | 跨会话聚合、最贵调用、最大块、冷启动断点、单价 | 内存遍历一次 |
+| `search()` | 940 万字原文里找关键词，返回片段与跳转链接 | `re.compile(escape(q), I)` 直接扫原文，不复制小写副本 |
 
-**缓存边界仍是估算**：接口只给命中 token 总数，不给切分位置。按「可见字数 × 命中比例」
-在块边界上切，块级基本准确，跨界那一块标「跨边界」。这一点和静态模式口径完全一致。
+**前端：为什么最终渲染得很少。** 浏览器只做三件事：显示 HTML、点链接、原生
+`<details>` 折叠。没有虚拟滚动库、没有一次性注入的大 JSON、没有前端模板。
+关键是**正文不进列表页** —— 调用详情页只列块的「序号 / 状态 / 类型 / 标题 /
+字数 / 命令摘要」，点进去才由 `/b/<idx>` 单独返回一片正文。同一个 58 万字的大块
+无论被 800 次调用带上，列表页都只出现一行引用，全文放在自己那一页分 49 片。
 
-### 前端：为什么最终渲染得很少
+**跨平台要点。** 两个核心 Python 文件只依赖标准库：
 
-浏览器从头到尾只做三件事：显示 HTML、点链接、原生 `<details>` 折叠。
-没有虚拟滚动库、没有一次性注入的大 JSON、没有前端模板。
+- 数据目录由 `data_dir()` 统一解析，优先级 `WORKBUDDY_HOME` > `~/.workbuddy` >
+  （仅 Windows）`APPDATA` / `LOCALAPPDATA`；
+- sqlite 只读连接用 `Path.as_uri()` 生成 `file:///C:/...?mode=ro`，
+  避开 Windows 路径里的反斜杠与盘符；
+- `/api/health` 的 `rss_mb` 在 Windows 上走 `ctypes` 调 `GetProcessMemoryInfo`，Linux 仍读 `/proc`；
+- 会话扫描用 `Path.rglob("*.jsonl")`，不依赖路径分隔符，也能覆盖多层目录；
+- 启动器用 `python.exe -WindowStyle Hidden`，不用 `pythonw.exe`
+  （后者 `sys.stdout` 为 `None`，会让 `print()` 崩）；
+- `PYTHONUTF8=1` 避免 Windows 控制台中文乱码，两个 `.ps1` 以 UTF-8 BOM 保存，
+  供 PowerShell 5.1 正确读取。
 
-| 控制点 | 常量 | 值 |
-|---|---|---|
-| 会话页每页轮数 | `PAGE_TURNS` | 20 |
-| 调用列表每页条数 | `PAGE_CALLS` | 40 |
-| 单次调用的上下文块清单每页 | `PAGE_BLOCKS` | 40 |
-| 块 / 输出全文每片字数 | `PART_CHARS` | 12 000 |
-| 搜索结果上限 | `SEARCH_MAX` | 80 |
-| API 单次返回上限 | `API_MAX_LIMIT` | 500 |
-
-关键在**正文不进列表页**：调用详情页只列块的「序号 / 状态 / 类型 / 标题 / 字数 / 命令摘要」，
-点进去才由 `/b/<idx>` 单独返回该块的一片正文。同一个 58 万字的大块无论被 800 次调用带上，
-列表页都只出现一行引用，全文放在自己那一页分 49 片。
-
-**实测（2026-11-05，取本机调用数最多的一个会话）**
-
-| 页面 | 大小 | 标签数 |
-|---|---:|---:|
-| 索引 `/` | 23.2 KB | 372 |
-| 全局统计 `/stats` | 32.2 KB | 517 |
-| 搜索结果（80 条） | 52.9 KB | 515 |
-| 会话页 | 24.7 KB | 351 |
-| 调用详情（1328 页，区间 10.1–28.2 KB） | 27.7 KB（中位） | — |
-| 块全文分片 | 17.2 KB | 113 |
-
-对照静态模式：同一个会话只保留 150 次调用就要 **1.9 MB** 单页；不截断全量生成是
-**220 MB**、最大单页 4.6 MB。完整模式把单页压到 **10–53 KB**，同时把 1328 次调用
-和 2575 个块全部变成可访问的 URL。
-
----
-
-## 后端 call：路由与 API
-
-### HTML 路由（每次点击 = 一次后端请求）
-
-| 路由 | 返回 |
-|---|---|
-| `/` | 会话索引，按工作区分组；`?sort=mtime\|credit\|calls`、`?ws=`、`?refresh=1` |
-| `/stats` | 跨会话全量聚合、最贵 20 次调用、最大 20 个块、冷启动断点 |
-| `/search?q=&scope=` | 全文搜索；`scope=blocks\|outputs\|turns\|all` |
-| `/s/<sid>?view=turns\|calls&p=` | 会话概览；按轮或按调用分页 |
-| `/s/<sid>/t/<n>` | 单轮的全部调用 |
-| `/s/<sid>/c/<seq>?state=&p=` | 单次调用的**完整上下文块清单**；`state=all\|hit\|miss\|part` |
-| `/s/<sid>/b/<idx>?part=&ref=` | 块全文分片；`raw=1` 返回纯文本 |
-| `/s/<sid>/o/<seq>?seg=&part=` | 该次调用的输出（思考 / 回答）全文分片 |
-| `/api` | API 契约说明页 |
-
-`<sid>` 必须匹配 `[0-9A-Za-z_-]+` 且存在于会话索引，防目录穿越；所有输出统一 `html.escape`。
-
-### JSON API（给脚本 / 外部工具）
-
-统一信封：`{"ok":true,"data":...,"meta":{...}}`；出错是 `{"ok":false,"error":"..."}` 加 4xx/5xx。
-分页统一 `offset` / `limit`，`meta` 给 `total`、`offset`、`limit`，有下一页时给 `next` 完整 URL。
-
-| 端点 | 说明 |
-|---|---|
-| `GET /api/health` | 状态、`pid`、`rss_mb`、`uptime_s`、会话数、缓存会话数、`write_files=false` |
-| `GET /api/sessions` | 全部会话摘要 |
-| `GET /api/stats` | 跨会话全量聚合 |
-| `GET /api/s/<sid>` | 会话统计 + 每一轮摘要 + 冷启动调用号 |
-| `GET /api/s/<sid>/calls?offset=&limit=&turn=` | 调用列表（不含正文） |
-| `GET /api/s/<sid>/calls/<seq>` | 单次调用：usage、缓存边界、块总数、输出段索引 |
-| `GET /api/s/<sid>/calls/<seq>/context?offset=&limit=&state=` | 块清单（不含正文，可按状态筛选） |
-| `GET /api/s/<sid>/blocks/<idx>?offset=&limit=&full=1` | 块全文，**Range 语义**（`limit` 按字符）；`full=1` 一次取完 |
-| `GET /api/s/<sid>/blocks/<idx>/users` | 哪些调用带上了这个块 |
-| `GET /api/s/<sid>/outputs/<seq>?seg=&offset=&limit=` | 输出全文，分段 + 分片 |
-| `GET /api/s/<sid>/turns/<n>` | 某一轮的全部调用 |
-| `GET /api/search?q=&sid=&scope=&limit=` | 全文搜索，返回命中位置、片段和跳转链接 |
-| `POST /shutdown` | 停止服务，供 `start.sh stop` 调用；校验 Host/Origin，配置令牌时还需鉴权 |
-
-```bash
-curl -s "http://127.0.0.1:8765/api/sessions" | python3 -m json.tool
-curl -s "http://127.0.0.1:8765/api/s/<sid>/calls?limit=5"
-curl -s "http://127.0.0.1:8765/api/s/<sid>/blocks/42?offset=0&limit=1000"
-curl -s "http://127.0.0.1:8765/api/search?q=缓存冷启动"
-```
-
-`/health`（纯文本 `ok`）、`HEAD`、404/500 都按 HTTP 语义处理；响应带 `Cache-Control: no-store`，
-源文件改了刷新即可看到新数据，不会拿到陈旧页。
-
----
-
-## 内容完整性：逐项对照
-
-旧静态模式为压体积做了四处裁剪，完整模式全部取消：
-
-| 旧限制 | 完整模式 |
-|---|---|
-| `MAX_CALLS=150`，超长会话只留最近 150 次 | 全部调用可访问，按 40 条/页翻 |
-| `MAX_TEXT=3000`，块正文截到 3000 字 | 原文全存，按 12 000 字/片翻完 |
-| `PREVIEW=600` / `INLINE_BLOCKS=3`，其余只给标题 | 块清单全列，正文点开即完整 |
-| 无搜索、无筛选 | 全库全文搜索 + 按命中状态筛选 + 排序 |
-
-**实测验证（2026-11-05）**
-
-- 最大会话 **1328 / 1328** 个调用详情页全部 200；
-- **2575 / 2575** 个块全文页全部 200；
-- 最大的块 **579 969 字 / 49 片**，逐片取回拼接后与 API 全文**逐字一致**；
-- 全部页面 `<script>` 标签 **0 个**；
-- 12 个 JSON 端点全部返回 `{ok:true, data, meta}`；
-- 全库：28 会话 / 5357 次调用 / 378 轮 / 10 465 块 / 948 万字 / 8.24 亿输入 tok /
-  98.33% 命中 / 893.26 积分 / 49 次冷启动断点。
-
-数字会随新会话增长，页面上的都是实时算的，不是写死的结论。
-
----
-
-## 磁盘与内存行为（实测过）
-
-**结论：服务运行期零写盘，也不会每打开一次页面就多占一份存储。**
-
-`trace_server.py` 里没有任何 `open(...,'w')`、日志落盘、缓存文件或数据库写入。
-读源数据只有只读 `open()` 和 `sqlite3.connect(..., mode=ro)`；页面直接通过 socket 返回，
-不生成临时文件。启动时在 `import gen_trace` **之前**设了 `sys.dont_write_bytecode = True`，
-所以连 Python 默认会写的 `__pycache__/*.pyc`（曾实测 141 KB）都不再产生。
-
-> 对照：**静态模式 `gen_trace.py` 会写 `trace/`（约 45 MB）**，那是它的产物，与服务无关。
-> 服务不写 `~/.workbuddy/` 下任何文件。源文件会随新会话增长，但那是 WorkBuddy 写的。
-
-**内存有硬上限，不随点击累积。** 会话全文放在 `Store` 的 LRU 里，上限 `--cache 32`（默认），
-超出淘汰最久未用的；重复打开同一会话命中缓存，不会重复占用。每请求由
-`ThreadingHTTPServer` 起一个线程，返回即释放。`GET /api/health` 会自报
-`pid` / `rss_mb` / `uptime_s` / `cached_sessions` / `write_files`，随时可以核对。
-
-**但 LRU 淘汰不等于 RSS 回落。** 实测 `--cache 4` 遍历完 29 个会话后，逻辑上只留 4 个，
-进程 RSS 仍是 84.0 MB —— Python 分配器释放对象后通常不把 arena 归还 OS。
-所以 `--cache` 限制的是缓存条目数和重复解析，**不是进程峰值内存**；
-想真正压低驻留，得限制峰值（少用会遍历全部会话的 `/stats`、`/api/stats`）或重启服务。
-默认全缓存反而更划算：内存一样会涨到 ~88 MB，还省掉反复解析。
-
-**RSS ≈ 88 MB 花在哪**（测量进程稳态 84.3 MB / VSZ 116.1 MB）
-
-| 组成 | 大小 |
-|---|---:|
-| Python 解释器 + 标准库基线 | 19.9 MB |
-| 模块代码、常量、29 个会话索引 | 7.4 MB |
-| 会话全文与派生索引（29 个会话） | 57.1 MB |
-| 其中：去重后的原文字符串 13 441 个 | 30.2 MB |
-
-剩余约 27 MB 是 dict / list / 数值对象、`pref` 前缀和、`by_turn` 等容器开销。
-运行中的服务比测量进程多约 4 MB，来自 HTTP 线程栈和请求期堆峰值。
-占本机 15.1 GiB 内存的 **0.57%**。只访问 1 个最大会话时是 60.6 MB。
-
-**压测：两轮共 600 个请求**（覆盖索引、统计、搜索、6 个会话的会话页 / 调用页 / 块页 / API）
-
-| 时刻 | RSS | 缓存会话 | 目录字节 | 文件数 | `__pycache__` |
-|---|---:|---:|---:|---:|---|
-| 刚启动（`--warm` 预热 29 会话） | 88.0 MB | 29 | 46 332 588 | 32 | 不存在 |
-| 第 1 轮 300 请求后 | 88.7 MB | 29 | 46 332 588 | 32 | 不存在 |
-| 第 2 轮 300 请求后 | 88.7 MB | 29 | 46 332 588 | 32 | 不存在 |
-
-RSS 只涨 0.7 MB（Python 堆的一次性分配），**第二轮完全不涨**；磁盘 **0 字节、0 文件变化**。
-压测里出现的 5 个 404 是同一个 URL：某会话只有 1 次调用，请求 `/c/2` 越界，属正确边界行为。
-
-## 文件
-
-| 文件 | 作用 |
-|---|---|
-| `trace_server.py` | **完整模式**：数据层 + 计算层 + HTML 渲染 + JSON API + HTTP 服务；运行期零写盘 |
-| `start.sh` | 一键启动 / 停止脚本；幂等、自动开浏览器、`-B` 零写盘 |
-| `token-trace.desktop` | 启动器模板（`Exec=@EXEC@`，不直接双击） |
-| `install-desktop.sh` | 按当前路径生成并安装桌面 / 应用菜单启动器 |
-| `.gitignore` | 排除含会话原文的静态页与运行时产物 |
-| `gen_trace.py` | 解析原语 + 静态模式生成器；`build(path, full=True)` 供服务复用 |
-| `trace/` | 静态模式产物（`index.html` + `s-<id>.html`），与完整模式互不依赖 |
-
----
-
-## Git 仓库与隐私
-
-本目录本身是一个独立的 git 仓库（仓库根即 `token-trace/`）。**刻意不入库**的东西：
-
-| 排除项 | 原因 |
-|---|---|
-| `trace/*.html`（约 45 MB） | 静态页内嵌会话原文：工作区绝对路径、用户提问、工具输出全文，隐私密度最高 |
-| `.workbuddy/`、`.Trash-0/` | 上层目录的项目记忆与回收站，本就不在仓库范围内，`.gitignore` 里另留了双保险 |
-| `__pycache__/`、`*.pyc`、`*.log`、`*.bak*` | 运行时产物；服务以 `-B` 启动，正常不会产生 |
-| `token-trace.html`、`_compat.html` | 单文件模式的临时输出 |
-| `patch_cli.sh` | 本机系统补丁：改 `/opt` 下的 WorkBuddy CLI 文件，与工具本身无关 |
-
-`trace/` 随时可用 `python3 gen_trace.py` 从本机 jsonl 重建，不需要版本管理。
-代码里的本机绝对路径都已去掉：数据目录用 `os.path.expanduser("~")` 动态取，
-启动器是模板、由 `install-desktop.sh` 按当前目录生成 Exec；文档只保留聚合统计，
-不含会话 id。仓库地址：<https://github.com/The-garden-of-sinner/token-trace>（分支 `main`）。
-
-## 数据来源与口径
-
-全部来自本地文件，只读，不联网：
-
-| 路径 | 内容 |
-|---|---|
-| `~/.workbuddy/projects/**/*.jsonl` | 每次调用记录：消息、工具调用与结果、`providerData.rawUsage` |
-| `~/.workbuddy/workbuddy.db` | `sessions` 表提供 `cwd`、标题、模型名 |
-
-`rawUsage` 用到 `prompt_tokens`、`prompt_cache_hit_tokens`、`completion_tokens`、`credit`。
-并行工具调用里只有第一个 `function_call` 带 usage，其余标「并列调用 · 无独立 usage」。
-
-**积分单价（本机实测，2026-11）**
-
-| 类型 | 单价 |
-|---|---|
-| 未命中输入 | 0.29 分 / 万 token |
-| 缓存命中输入 | 0.014 分 / 万 token |
-
-差 21 倍，所以「积分差异基本等于未命中量差异」，不是单价在变。
-
-**可见上下文 ≠ 完整请求。** jsonl 里只有消息和工具结果，不含系统提示与工具 schema，
-所以「本次带上 N 字」和「接口报 M token」不能换算，两者都列出来仅供参考。
-
----
-
-## 这个工具查出来的几件事
-
-1. **输入的大头是缓存，不是新内容。** 全库 8.24 亿输入 token，98.33% 命中缓存，
-   真正计费的是剩余部分加输出。
-2. **上下文构成里，你的输入只占很小一块。** 工具结果与系统注入占绝对多数，
-   想省 token 先管工具输出，不是少说话。
-3. **缓存失效是常态。** 全库找出 49 次「前一次 >80% 命中、这次 <50%」的断点，
-   短间隔（1–10 分钟）最常见，触发机制无法从本地数据确定。
-4. **重启很贵。** 重启后第一次调用要重算整段历史，成本 ≈ 上下文 token × 0.29 / 万。
-   实测 33.7 万上下文 → 9.47 分，第二次调用就恢复到 0.43 分。
-
-这些结论现在都能在 `/stats` 里实时重算，不用再手写脚本统计。
-
----
-
-## 已知限制
-
-- 完整模式需要本地起服务，不能像静态页那样 `file://` 双击打开。
-- 静态模式仍保留 150 次调用 / 3000 字的截断，它是离线兜底，不是完整视图。
-- 缓存命中边界是**估算**（接口不给切分位置），块级准确、跨界块内部有误差。
-- 搜索是流式扫描而非倒排索引：冷缓存首次全库搜索约 2.4 s，加 `--warm` 后不到 0.5 s。
-- 服务默认只监听 `127.0.0.1`。绑定非本机地址时必须提供 `--token`；
-  `POST /shutdown` 会校验 Host / Origin / Sec-Fetch-Site，避免跨站关停。
-  `POST /shutdown` 是唯一的写操作端点（只是让进程退出，不动磁盘）。
-- `start.sh stop` 的 `pkill` 兜底在 PID namespace 隔离的环境（如 WorkBuddy 的 exec 沙箱）里看不到桌面进程，
-  但优先走的 HTTP `/shutdown` 不受影响；极老的、没有该端点的实例只能靠 `pkill` 或重启桌面会话。
-- 积分来自本地记录，云端补扣或赠送的部分不在里面。
-
-## Windows 支持
-
-两个核心 Python 文件只依赖标准库，跨平台；Linux 上的 `start.sh` / `.desktop` 启动器由
-`windows/` 下的三个文件替代：
+## 仓库内容
 
 | 文件 | 作用 |
 | --- | --- |
-| `windows/start.cmd` | 双击入口，转调 PowerShell 并绕过执行策略 |
-| `windows/start.ps1` | 幂等启动 / 停止 / 查看状态；对应 `./start.sh` 与 `./start.sh stop` |
-| `windows/install-shortcut.ps1` | 创建桌面 / 开始菜单 `.lnk`，对应 `install-desktop.sh` |
+| `trace_server.py` | 完整模式：数据层 + 计算层 + HTML 渲染 + JSON API + HTTP 服务；运行期零写盘 |
+| `gen_trace.py` | 解析原语 + 静态模式生成器；`build(path, full=True)` 供服务复用 |
+| `start.sh` / `install-desktop.sh` / `token-trace.desktop` | Linux 一键启动、启动器安装与模板 |
+| `windows/` | Windows 版 `start.cmd` / `start.ps1` / `install-shortcut.ps1` |
+| `REVIEW_CHANGES.md` | 安全与跨平台改造的分阶段变更记录 |
+| `.gitignore` | 排除含会话原文的静态页与运行时产物 |
+| `trace/` | 静态模式产物（不入库），随时可由 `gen_trace.py` 重建 |
 
-数据目录与 Linux 同构：会话记录在 `%USERPROFILE%\.workbuddy\projects\`，索引库在
-`%USERPROFILE%\.workbuddy\workbuddy.db`。若装在别处，设置 `WORKBUDDY_HOME` 覆盖。
+**刻意不入库**：`trace/*.html`（约 45 MB，内嵌会话原文、工作区绝对路径与工具输出全文，
+隐私密度最高）、`__pycache__/`、`*.pyc` / `*.log` / `*.bak*`、临时单页输出，
+以及 `patch_cli.sh`（本机系统补丁，与工具无关）。代码里的本机绝对路径都已去掉，
+文档只保留聚合统计，不含会话 id。
 
-实现要点：
+仓库地址：<https://github.com/The-garden-of-sinner/token-trace>（分支 `main`）。
 
-- sqlite 只读连接用 `Path.as_uri()` 生成 `file:///C:/...?mode=ro`，避开 Windows 路径里的反斜杠与盘符；
-- `/api/health` 的 `rss_mb` 在 Windows 上走 `ctypes` 调 `GetProcessMemoryInfo`（Linux 仍读 `/proc`）；
-- 会话扫描用 `Path.rglob("*.jsonl")`，不依赖路径分隔符，也能覆盖 `projects\` 下的多层目录；
-- 启动器用 `python.exe -WindowStyle Hidden`，不用 `pythonw.exe`（后者 `sys.stdout` 为 `None`，会让 `print()` 崩）；
-- `PYTHONUTF8=1` 避免 Windows 控制台中文乱码；两个 `.ps1` 以 UTF-8 BOM 保存，供 PowerShell 5.1 正确读取。
+## License
 
-`TRACE_PORT` / `TRACE_NO_BROWSER` 对应的 PowerShell 参数是 `-Port` / `-NoBrowser`；
-`TRACE_TOKEN` 对应 `-Token`（别名 `-ShutdownToken`），会同时传给服务的 `--token`。
-
-**尚未在真实 Windows 机器上验证**（本次改动在 Linux 沙箱内完成）。需要在 Windows 上确认四点：
-`projects\` 的实际层级深度、中文或空格用户名下 WAL 模式 `workbuddy.db` 的只读打开、
-`python.exe -WindowStyle Hidden` 的隐藏效果、以及含中文路径时 PowerShell 的传参。
-
-## 依赖
-
-Python 3.8+，仅标准库（`http.server` / `json` / `pathlib` / `sqlite3` / `re` / `bisect` / `urllib` / `ctypes`）。
-不需要第三方包，不需要前端构建，不需要数据库服务。
+MIT
