@@ -483,7 +483,7 @@ RSS 仍是 84.0 MB —— Python 不把 arena 归还 OS。它限制的是缓存�
 │ 数据层  gen_trace.build(path, full=True) + Store          │
 │  · 重建 ctx 全局块序列，每个 call 存 ctxN 快照            │
 │  · full=True 保留原文（静态模式仍用默认的截断版）         │
-│  · 前缀和 pref[]、ctxNs[]、by_turn、cold 断点             │
+│  · 前缀和 pref[]、ctxns[]、by_turn、cold 断点             │
 │  · LRU 缓存已解析会话，默认 32（全量常驻实测 83 MB）      │
 ├─────────────────────────────────────────────────────────┤
 │ 计算层  call_state / call_outline / block_users / search │
@@ -505,7 +505,7 @@ RSS 仍是 84.0 MB —— Python 不把 arena 归还 OS。它限制的是缓存�
 **数据层：一次解析，全文常驻。** `Store.sessions()` 常驻会话索引（60 秒或
 `/?refresh=1` 失效），从 `workbuddy.db` 补 `cwd` / 标题 / 模型，从 jsonl 补统计。
 `Store.get(sid)` 第一次访问某会话时调 `build(path, full=True)`，最大会话解析 0.69 s；
-`_derive()` 一次算好 `pref[]` 累积字数前缀和、`ctxNs[]` 每次调用前的块数、
+`_derive()` 一次算好 `pref[]` 累积字数前缀和、`ctxns[]` 每次调用前的块数、
 `by_turn` 归属、冷启动断点与全量 KPI。**不建倒排索引、不落盘、不改源文件。**
 
 **计算层：重活全在后端。**
@@ -514,7 +514,7 @@ RSS 仍是 84.0 MB —— Python 不把 arena 归还 OS。它限制的是缓存�
 | --- | --- | --- |
 | `call_state(d, seq, i)` | 第 seq 次调用里第 i 块是命中 / 未命中 / 跨边界 | **O(1)**，用前缀和比边界，不展开上下文 |
 | `call_outline(d, seq)` | 本次带上几块 / 多少字 / 命中比例 / 边界落在第几块 | 边界用 `bisect` 定位 |
-| `block_users(d, idx)` | 哪些调用带上了这个块 | `bisect_right(ctxNs, idx)` |
+| `block_users(d, idx)` | 哪些调用带上了这个块 | `bisect_right(ctxns, idx)` |
 | `global_stats()` | 跨会话聚合、最贵调用、最大块、冷启动断点、单价 | 内存遍历一次 |
 | `search()` | 940 万字原文里找关键词，返回片段与跳转链接 | `re.compile(escape(q), I)` 直接扫原文，不复制小写副本 |
 
@@ -545,7 +545,7 @@ RSS 仍是 84.0 MB —— Python 不把 arena 归还 OS。它限制的是缓存�
 | `gen_trace.py` | 解析原语 + 静态模式生成器；`build(path, full=True)` 供服务复用 |
 | `start.sh` / `install-desktop.sh` / `token-trace.desktop` | Linux 一键启动、启动器安装与模板 |
 | `windows/` | Windows 版 `start.cmd` / `start.ps1` / `install-shortcut.ps1` |
-| `scripts/` | 发行构建：`build_win_bat.py`（单文件 bat）、`build_deb.sh`、`release.sh`、`VERSION` |
+| `scripts/` | 发行构建：`build_win_bat.py`（单文件 bat）、`build_deb.sh`、`release.sh`、`VERSION`；回归：`selftest.py` |
 | `REVIEW_CHANGES.md` | 安全与跨平台改造的分阶段变更记录 |
 | `.gitignore` | 排除含会话原文的静态页与运行时产物 |
 | `trace/` | 静态模式产物（不入库），随时可由 `gen_trace.py` 重建 |
@@ -556,6 +556,26 @@ RSS 仍是 84.0 MB —— Python 不把 arena 归还 OS。它限制的是缓存�
 文档只保留聚合统计，不含会话 id。
 
 仓库地址：<https://github.com/The-garden-of-sinner/token-trace>（分支 `main`）。
+
+## 维护：路由声明与自检
+
+`trace_server.py` 里的 `ROUTE_SPEC` 是 **32 条** HTML 路由 / JSON 端点的单一事实源。
+每条声明带 `pattern`（HTML 正则）、`view`（处理函数）、`route`（文档路径）、
+`doc`（说明）与 `sample`（自检样例）；`HTML_ROUTES` 分发表和 `/api` 文档页的两张表
+都从它生成。新增端点只需加一行，不会再出现「页面能开但文档没写」或反过来。
+
+```bash
+python3 -B scripts/selftest.py                    # 45 项检查
+TRACE_TEST_PORT=8901 python3 -B scripts/selftest.py
+```
+
+自检脚本起临时服务（默认 8899）后依次核对：声明无重复且与分发逐条一致、
+全部 view 可调用、16 个 HTML 路由的状态码 / 单页 ≤ 80 KB / 零 `<script>`、
+16 个 API 的 `{ok:true}` 信封、`/api` 文档覆盖全部声明、5 个分页路由 `p=999`
+不出现空表、运行期零写盘与 `write_files=false`。结束自动 `POST /shutdown` 退出，
+有失败返回 1。分页统一走 `clamp_p()`，与 `pager()` 同步夹取页码。
+
+实测本机一次跑完 45 项全绿，最大单页 52.9 KB（搜索结果页）。
 
 ## License
 

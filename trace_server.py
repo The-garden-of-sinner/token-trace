@@ -769,6 +769,12 @@ def page(title, crumbs, body, sub="", extra_head=""):
             '</div></html>')
 
 
+def clamp_p(q, total, size):
+    """与 pager() 同步夹取页码：p 越界时不出现「页码显示最后一页但列表为空」。"""
+    pages = max(1, (total + size - 1) // size)
+    return max(0, min(qint(q, "p"), pages - 1))
+
+
 def pager(base, q, p, size, total, label="条"):
     """分页条。base 是路径，q 是已解析的 query dict（保留除 p 外的参数）"""
     pages = max(1, (total + size - 1) // size)
@@ -957,6 +963,7 @@ def v_session(q, sid):
 
     if view == "calls":
         total = len(d["calls"])
+        p = clamp_p(q, total, PAGE_CALLS)
         lo = p * PAGE_CALLS
         body += '<h2>全部 %s 次调用 <small>每页 %d 条，一次都不省</small></h2>' % (nfmt(total), PAGE_CALLS)
         for c in d["calls"][lo:lo + PAGE_CALLS]:
@@ -966,6 +973,7 @@ def v_session(q, sid):
         body += pager("/s/%s" % sid, pq, p, PAGE_CALLS, total, "次调用")
     else:
         total = len(d["turns"])
+        p = clamp_p(q, total, PAGE_TURNS)
         lo = p * PAGE_TURNS
         body += '<h2>全部 %s 轮 <small>每页 %d 轮</small></h2>' % (nfmt(total), PAGE_TURNS)
         for t in d["turns"][lo:lo + PAGE_TURNS]:
@@ -1045,6 +1053,7 @@ def v_call(q, sid, seq):
         chosen = list(range(o["n"]))
     else:
         chosen = [j for j in range(o["n"]) if call_state(d, i, j) == state]
+    p = clamp_p(q, len(chosen), PAGE_BLOCKS)
     lo = p * PAGE_BLOCKS
     page_idx = chosen[lo:lo + PAGE_BLOCKS]
     body += '<h2>上下文块 <small>共 %s 个，当前筛选 %s 个 · 每页 %d</small></h2>' % (
@@ -1256,6 +1265,7 @@ def v_find(q, sid=None):
         rows, warn, nsessions, ms = find_blocks(
             term, sid=sid, refresh=qstr(q, "refresh") == "1")
     total = len(rows)
+    p = clamp_p(q, total, FIND_MAX_BLOCKS)
     lo = p * FIND_MAX_BLOCKS
     shown = rows[lo:lo + FIND_MAX_BLOCKS]
     action = "/s/%s/find" % sid if sid else "/find"
@@ -1331,7 +1341,9 @@ def v_tools(q, sid=None):
              '取第一个实际程序。URL、搜索词、生图描述等不参与；'
              '纯控制流命令归入「(shell 控制流)」。点工具名可下钻到它的全部调用。</div>')
     if tool:
-        rows, total = tool_calls(sid, tool, p * PAGE_CALLS, PAGE_CALLS)
+        all_rows, total = tool_calls(sid, tool, 0, 10 ** 9)
+        p = clamp_p(q, total, PAGE_CALLS)
+        rows = all_rows[p * PAGE_CALLS:(p + 1) * PAGE_CALLS]
         body += '<h2>工具 %s 的调用 <small>共 %s 次 · 按积分降序</small></h2>' % (
             esc(tool), nfmt(total))
         for r in rows:
@@ -1352,6 +1364,7 @@ def v_tools(q, sid=None):
             for v, lab in (("tools", "按工具"), ("progs", "按程序"))) + '</div>'
         if view == "tools":
             rows = [x for x in st["tools"] if term in x["tool"].lower()]
+            p = clamp_p(q, len(rows), PAGE_CALLS)
             mx = max((x["calls"] for x in st["tools"]), default=1) or 1
             body += '<h2>工具调用 <small>共 %s 种</small></h2>' % nfmt(len(rows))
             for x in rows[p * PAGE_CALLS:(p + 1) * PAGE_CALLS]:
@@ -1366,6 +1379,7 @@ def v_tools(q, sid=None):
                           x["credit"], x["session_count"], esc(x["last"])))
         else:
             rows = [x for x in st["progs"] if term in x["prog"].lower()]
+            p = clamp_p(q, len(rows), PAGE_CALLS)
             mx = max((x["runs"] for x in st["progs"]), default=1) or 1
             body += '<h2>Shell 程序 <small>共 %s 种</small></h2>' % nfmt(len(rows))
             for x in rows[p * PAGE_CALLS:(p + 1) * PAGE_CALLS]:
@@ -1392,8 +1406,7 @@ def v_trend(q, sid):
         mode = "total"
     p = qint(q, "p")
     rows, mx, mxd = trend_rows(d, g)
-    pages = max(1, (len(rows) + PAGE_CALLS - 1) // PAGE_CALLS)
-    p = max(0, min(p, pages - 1))   # 与 pager() 的夹取保持一致，越界不出现空表
+    p = clamp_p(q, len(rows), PAGE_CALLS)
     shown = rows[p * PAGE_CALLS:(p + 1) * PAGE_CALLS]
     base = "/s/%s/trend" % sid
     crumbs = [("索引", "/"), (d["title"][:24], "/s/%s" % sid), ("上下文趋势", "")]
@@ -1508,32 +1521,16 @@ def v_stats(q):
 
 
 def v_api_doc(q):
-    rows = [
-        ("/api/health", "服务状态、会话数、缓存命中数"),
-        ("/api/sessions", "全部会话摘要（工作区、轮数、调用数、积分、token）"),
-        ("/api/stats", "跨会话全量聚合：构成、冷启动断点、最贵调用、最大块、单价"),
-        ("/api/s/&lt;sid&gt;", "单会话全量统计 + 每一轮的摘要"),
-        ("/api/s/&lt;sid&gt;/calls?offset=&amp;limit=&amp;turn=", "调用列表（分页；不含上下文正文）"),
-        ("/api/s/&lt;sid&gt;/calls/&lt;seq&gt;", "单次调用：usage、缓存边界、上下文块索引、输出段索引"),
-        ("/api/s/&lt;sid&gt;/calls/&lt;seq&gt;/context?offset=&amp;limit=&amp;state=", "上下文块清单（分页/按状态筛选，不含正文）"),
-        ("/api/s/&lt;sid&gt;/blocks/&lt;idx&gt;?offset=&amp;limit=&amp;full=1", "块全文（Range 语义；offset/limit 按字符）"),
-        ("/api/s/&lt;sid&gt;/blocks/&lt;idx&gt;/users?offset=&amp;limit=", "哪些调用带上了这个块"),
-        ("/api/s/&lt;sid&gt;/outputs/&lt;seq&gt;?seg=&amp;offset=&amp;limit=", "某次调用的输出全文（分段+分片）"),
-        ("/api/s/&lt;sid&gt;/turns/&lt;n&gt;", "某一轮的全部调用"),
-        ("/api/search?q=&amp;sid=&amp;scope=&amp;limit=", "全文搜索，返回命中片段与跳转链接"),
-        ("/api/find?q=&amp;sid=&amp;offset=&amp;limit=", "按块精确检索：命中块、块内命中数、命中分片与直跳链接"),
-        ("/api/s/&lt;sid&gt;/blocks/&lt;idx&gt;/find?q=&amp;offset=&amp;limit=", "单块内全部命中位置与所在分片（分页）"),
-        ("/api/tools?sid=&amp;view=tools%7Cprogs&amp;tool=&amp;offset=&amp;limit=", "工具 usage 聚合 / Shell 程序频次；带 tool 时下钻到该工具的全部调用"),
-        ("/api/s/&lt;sid&gt;/trend?g=call%7Cturn&amp;offset=&amp;limit=", "逐调用上下文演化：按类型组成、字数、命中率、积分与相邻 delta"),
-    ]
+    api_rows = [(r["route"], r["doc"]) for r in ROUTE_SPEC if r["kind"] == "api"]
     body = ('<div class="note">所有接口只读、返回 JSON，统一信封 '
             '<code>{"ok":true,"data":...,"meta":{...}}</code>；出错为 '
             '<code>{"ok":false,"error":"..."}</code> 加对应 HTTP 状态码。'
             '分页参数统一 <code>offset/limit</code>，<code>meta</code> 里给 <code>total</code> '
             '和下一页的 <code>next</code>。跨域默认关闭，只监听本机。</div>')
     body += '<h2>接口清单</h2>'
-    for path, desc in rows:
-        body += '<div class="apirow"><code>GET %s</code><span>%s</span></div>' % (path, esc(desc))
+    for path, desc in api_rows:
+        body += '<div class="apirow"><code>GET %s</code><span>%s</span></div>' % (
+            esc(path), esc(desc))
     body += ('<div class="apirow"><code>POST /shutdown</code>'
              '<span>停止服务（<code>start.sh stop</code> 用；校验 Host/Origin/Sec-Fetch-Site，'
              '配置令牌时还需鉴权）</span></div>')
@@ -1544,16 +1541,14 @@ def v_api_doc(q):
              'curl -s "http://127.0.0.1:8765/api/search?q=缓存冷启动"\n'
              'curl -s "http://127.0.0.1:8765/api/find?q=缓存冷启动&amp;limit=5"\n'
              'curl -s "http://127.0.0.1:8765/api/s/&lt;sid&gt;/blocks/42/find?q=缓存"</pre>')
-    body += ('<h2>HTML 路由</h2><div class="apirow"><code>GET /</code><span>索引</span></div>'
-             '<div class="apirow"><code>GET /s/&lt;sid&gt;?view=turns|calls&amp;p=</code><span>会话（按轮 / 按调用分页）</span></div>'
-             '<div class="apirow"><code>GET /s/&lt;sid&gt;/t/&lt;n&gt;</code><span>单轮</span></div>'
-             '<div class="apirow"><code>GET /s/&lt;sid&gt;/c/&lt;seq&gt;?state=&amp;p=</code><span>单次调用的完整块清单</span></div>'
-             '<div class="apirow"><code>GET /s/&lt;sid&gt;/b/&lt;idx&gt;?part=&amp;q=</code><span>块全文分片（<code>raw=1</code> 出纯文本；<code>q=</code> 高亮并列出命中片）</span></div>'
-             '<div class="apirow"><code>GET /s/&lt;sid&gt;/o/&lt;seq&gt;?seg=&amp;part=</code><span>输出全文分片</span></div>'
-             '<div class="apirow"><code>GET /search?q=</code><span>全文搜索</span></div>'
-             '<div class="apirow"><code>GET /find?q=&amp;p=</code><span>按块精确检索（跨会话 / 会话内 <code>/s/&lt;sid&gt;/find</code>）</span></div>'
-             '<div class="apirow"><code>GET /tools?tool=&amp;view=&amp;q=</code><span>工具与命令聚合（会话内 <code>/s/&lt;sid&gt;/tools</code>）</span></div>'
-             '<div class="apirow"><code>GET /s/&lt;sid&gt;/trend?g=&amp;mode=&amp;p=</code><span>逐调用上下文趋势（累计组成 / 净变化）</span></div>')
+    body += '<h2>HTML 路由</h2>'
+    for r in ROUTE_SPEC:
+        if r["kind"] == "html":
+            body += '<div class="apirow"><code>%s</code><span>%s</span></div>' % (
+                esc(r["route"]), esc(r["doc"]))
+    body += ('<div class="note">以上两张表、HTML 路由分发与 '
+             '<code>scripts/selftest.py</code> 共用同一份 <code>ROUTE_SPEC</code> 声明；'
+             '新增端点只需在声明里加一行。</div>')
     return page("后端 API", [("索引", "/"), ("API", "")], body,
                 sub="零 JavaScript 的前端，本身就建立在这套按需查询之上")
 
@@ -1798,24 +1793,66 @@ def api_route(path, q):
 
 # ---------------------------------------------------------------- 路由 / 服务
 
-HTML_ROUTES = [
-    (r"^/$", lambda q, m: v_index(q)),
-    (r"^/stats$", lambda q, m: v_stats(q)),
-    (r"^/api$", lambda q, m: v_api_doc(q)),
-    (r"^/search$", lambda q, m: v_search(q)),
-    (r"^/find$", lambda q, m: v_find(q)),
-    (r"^/tools$", lambda q, m: v_tools(q)),
-    (r"^/s/([0-9A-Za-z_-]+)/search$", lambda q, m: v_search(q, m.group(1))),
-    (r"^/s/([0-9A-Za-z_-]+)/find$", lambda q, m: v_find(q, m.group(1))),
-    (r"^/s/([0-9A-Za-z_-]+)/tools$", lambda q, m: v_tools(q, m.group(1))),
-    (r"^/s/([0-9A-Za-z_-]+)/trend$", lambda q, m: v_trend(q, m.group(1))),
-    (r"^/s/([0-9A-Za-z_-]+)/calls$", lambda q, m: v_session(dict(q, view=["calls"]), m.group(1))),
-    (r"^/s/([0-9A-Za-z_-]+)/t/(\d+)$", lambda q, m: v_turn(q, m.group(1), int(m.group(2)))),
-    (r"^/s/([0-9A-Za-z_-]+)/c/(\d+)$", lambda q, m: v_call(q, m.group(1), int(m.group(2)))),
-    (r"^/s/([0-9A-Za-z_-]+)/b/(\d+)$", lambda q, m: v_block(q, m.group(1), int(m.group(2)))),
-    (r"^/s/([0-9A-Za-z_-]+)/o/(\d+)$", lambda q, m: v_output(q, m.group(1), int(m.group(2)))),
-    (r"^/s/([0-9A-Za-z_-]+)$", lambda q, m: v_session(q, m.group(1))),
+def H(pattern, view, route, doc, sample):
+    """声明一个 HTML 路由：pattern/view 给分发，route/doc 给文档，sample 给自检。"""
+    return dict(kind="html", pattern=pattern, view=view, route=route,
+                doc=doc, sample=sample)
+
+
+def A(route, doc, sample):
+    """声明一个只读 JSON 端点。"""
+    return dict(kind="api", route=route, doc=doc, sample=sample)
+
+
+# 单一事实源：HTML 分发、/api 文档页、scripts/selftest.py 三者都读这里。
+# 新增端点只需在此加一行；sample 里的 {sid} 由自检脚本替换成真实会话 id。
+ROUTE_SPEC = [
+    H(r"^/$", lambda q, m: v_index(q), "GET /", "会话索引，按工作区分组", "/"),
+    H(r"^/stats$", lambda q, m: v_stats(q), "GET /stats", "跨会话全量聚合、最贵调用与最大块", "/stats"),
+    H(r"^/api$", lambda q, m: v_api_doc(q), "GET /api", "后端 API 契约说明", "/api"),
+    H(r"^/search$", lambda q, m: v_search(q), "GET /search?q=&scope=", "全文搜索（跨会话）", "/search?q=token"),
+    H(r"^/find$", lambda q, m: v_find(q), "GET /find?q=&p=", "按块精确检索（跨会话）", "/find?q=token"),
+    H(r"^/tools$", lambda q, m: v_tools(q), "GET /tools?tool=&view=&q=&p=", "工具与命令聚合（跨会话）", "/tools"),
+    H(r"^/s/([0-9A-Za-z_-]+)/search$", lambda q, m: v_search(q, m.group(1)),
+      "GET /s/<sid>/search?q=", "会话内全文搜索", "/s/{sid}/search?q=token"),
+    H(r"^/s/([0-9A-Za-z_-]+)/find$", lambda q, m: v_find(q, m.group(1)),
+      "GET /s/<sid>/find?q=&p=", "会话内按块精确检索", "/s/{sid}/find?q=token"),
+    H(r"^/s/([0-9A-Za-z_-]+)/tools$", lambda q, m: v_tools(q, m.group(1)),
+      "GET /s/<sid>/tools?tool=&view=", "会话内工具与命令聚合", "/s/{sid}/tools"),
+    H(r"^/s/([0-9A-Za-z_-]+)/trend$", lambda q, m: v_trend(q, m.group(1)),
+      "GET /s/<sid>/trend?g=&mode=&p=", "逐调用上下文趋势（累计组成 / 净变化）", "/s/{sid}/trend"),
+    H(r"^/s/([0-9A-Za-z_-]+)/calls$", lambda q, m: v_session(dict(q, view=["calls"]), m.group(1)),
+      "GET /s/<sid>/calls&p=", "会话按调用分页", "/s/{sid}/calls"),
+    H(r"^/s/([0-9A-Za-z_-]+)/t/(\d+)$", lambda q, m: v_turn(q, m.group(1), int(m.group(2))),
+      "GET /s/<sid>/t/<n>", "单轮的全部调用", "/s/{sid}/t/1"),
+    H(r"^/s/([0-9A-Za-z_-]+)/c/(\d+)$", lambda q, m: v_call(q, m.group(1), int(m.group(2))),
+      "GET /s/<sid>/c/<seq>?state=&p=", "单次调用的完整上下文块清单", "/s/{sid}/c/1"),
+    H(r"^/s/([0-9A-Za-z_-]+)/b/(\d+)$", lambda q, m: v_block(q, m.group(1), int(m.group(2))),
+      "GET /s/<sid>/b/<idx>?part=&q=", "块全文分片（raw=1 纯文本；q= 高亮并列出命中片）", "/s/{sid}/b/0"),
+    H(r"^/s/([0-9A-Za-z_-]+)/o/(\d+)$", lambda q, m: v_output(q, m.group(1), int(m.group(2))),
+      "GET /s/<sid>/o/<seq>?seg=&part=", "该次调用的输出全文分片", "/s/{sid}/o/1"),
+    H(r"^/s/([0-9A-Za-z_-]+)$", lambda q, m: v_session(q, m.group(1)),
+      "GET /s/<sid>?view=turns|calls&p=", "会话概览（按轮 / 按调用分页）", "/s/{sid}"),
+
+    A("/api/health", "状态、pid、rss_mb、会话数、缓存数、write_files", "/api/health"),
+    A("/api/sessions", "全部会话摘要", "/api/sessions"),
+    A("/api/stats", "跨会话全量聚合", "/api/stats"),
+    A("/api/s/<sid>", "单会话全量统计 + 每一轮摘要", "/api/s/{sid}"),
+    A("/api/s/<sid>/calls?offset=&limit=&turn=", "调用列表（分页；不含正文）", "/api/s/{sid}/calls?limit=3"),
+    A("/api/s/<sid>/calls/<seq>", "单次调用：usage、缓存边界、输出段索引", "/api/s/{sid}/calls/1"),
+    A("/api/s/<sid>/calls/<seq>/context?offset=&limit=&state=", "上下文块清单（分页 / 按状态筛选）", "/api/s/{sid}/calls/1/context?limit=3"),
+    A("/api/s/<sid>/blocks/<idx>?offset=&limit=&full=1", "块全文（Range 语义，full=1 一次取完）", "/api/s/{sid}/blocks/0?limit=100"),
+    A("/api/s/<sid>/blocks/<idx>/users?offset=&limit=", "哪些调用带上了这个块", "/api/s/{sid}/blocks/0/users?limit=3"),
+    A("/api/s/<sid>/outputs/<seq>?seg=&offset=&limit=", "输出全文（分段 + 分片）", "/api/s/{sid}/outputs/1?seg=0&limit=100"),
+    A("/api/s/<sid>/turns/<n>", "某一轮的全部调用", "/api/s/{sid}/turns/1"),
+    A("/api/search?q=&sid=&scope=&limit=", "全文搜索，返回片段与跳转链接（块结果带 part）", "/api/search?q=token&limit=3"),
+    A("/api/find?q=&sid=&offset=&limit=", "按块精确检索：命中块、命中数、命中分片", "/api/find?q=token&limit=3"),
+    A("/api/s/<sid>/blocks/<idx>/find?q=&offset=&limit=", "单块内全部命中位置与所在分片", "/api/s/{sid}/blocks/0/find?q=token&limit=3"),
+    A("/api/tools?sid=&view=&tool=&offset=&limit=", "工具聚合 / Shell 程序频次，带 tool 时下钻", "/api/tools?limit=3"),
+    A("/api/s/<sid>/trend?g=&offset=&limit=", "逐调用上下文演化与相邻 delta", "/api/s/{sid}/trend?limit=3"),
 ]
+
+HTML_ROUTES = [(r["pattern"], r["view"]) for r in ROUTE_SPEC if r["kind"] == "html"]
 
 
 class Handler(BaseHTTPRequestHandler):
