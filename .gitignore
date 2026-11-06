@@ -20,6 +20,10 @@ patch_cli.sh
 .Trash-*/
 .DS_Store
 
+# 发行构建产物与临时打包目录（由 scripts/ 重建，不入库）
+dist/
+.build/
+
 # Windows 运行时产物
 Thumbs.db
 Desktop.ini
