@@ -12,6 +12,7 @@ DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 ROOT="$(cd "$DIR/.." && pwd)"
 REPO="The-garden-of-sinner/token-trace"
 VERSION="${1:-$(cat "$DIR/VERSION")}"
+NOTES="${RELEASE_NOTES:-}"   # 可选：本次更新说明，插到 Release 正文「本次更新」一节
 DEB="$ROOT/dist/token-trace_${VERSION}_all.deb"
 BAT="$ROOT/dist/TokenTrace.bat"
 
@@ -33,9 +34,9 @@ TOKEN_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/github/token"
 [ -f "$TOKEN_FILE" ] || { echo "缺少 $TOKEN_FILE"; exit 1; }
 GH_TOKEN="$(cat "$TOKEN_FILE")"
 
-BODY="$(/usr/bin/python3 - "$VERSION" <<'PY'
+BODY="$(/usr/bin/python3 - "$VERSION" "$NOTES" <<'PY'
 import json, sys
-v = sys.argv[1]
+v, notes = sys.argv[1], sys.argv[2]
 text = """## 安装
 
 **Linux（Debian / Ubuntu / 麒麟等）**
@@ -63,6 +64,8 @@ sudo dpkg -i token-trace_{v}_all.deb
 - **Windows 版尚未在真实 Windows 机器上验证**：中文/空格用户名、`-WindowStyle` 隐藏效果、
   中文路径传参等待目标机实测。Linux deb 内的源码已在本机实跑验证。
 """.format(v=v)
+if notes:
+    text = text.replace("## 说明", "## 本次更新\n\n" + notes + "\n\n## 说明")
 print(json.dumps({"tag_name": "v" + v, "name": "v" + v, "body": text,
                   "draft": False, "prerelease": False}, ensure_ascii=False))
 PY

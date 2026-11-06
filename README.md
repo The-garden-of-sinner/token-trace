@@ -126,7 +126,7 @@ Release 里附两个开箱即用的包，**都不需要 clone 仓库**：
 ### Linux：deb 包
 
 ```bash
-sudo dpkg -i token-trace_1.0.0_all.deb
+sudo dpkg -i token-trace_1.0.1_all.deb
 token-trace                  # 起服务 + 开浏览器
 token-trace stop             # 停止
 token-trace status           # 查看状态
@@ -158,8 +158,8 @@ WorkBuddy 内置运行时），把一段纯 ASCII loader 释放到
 
 ```bash
 python3 scripts/build_win_bat.py     # -> dist/TokenTrace.bat
-./scripts/build_deb.sh 1.0.0         # -> dist/token-trace_1.0.0_all.deb
-./scripts/release.sh 1.0.0           # tag 已推到远端后，建 Release 并上传两者
+./scripts/build_deb.sh               # -> dist/token-trace_<VERSION>_all.deb
+./scripts/release.sh                 # tag 已推到远端后，建 Release 并上传两者
 ```
 
 版本号统一放在 `scripts/VERSION`；`dist/` 与 `.build/` 不入库。
