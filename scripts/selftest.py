@@ -103,9 +103,51 @@ def main():
         page = doc.decode("utf-8", "replace")
         missing = [r["route"] for r in T.ROUTE_SPEC
                    if html.escape(r["route"], quote=True) not in page]
-        check(not missing, "32 条路由/端点全部出现在 /api 文档页（缺失 %d）" % len(missing))
+        check(not missing, "%d 条路由/端点全部出现在 /api 文档页（缺失 %d）" %
+              (len(T.ROUTE_SPEC), len(missing)))
         if missing:
             print("     缺失:", missing[:4])
+
+        print("== 压缩感知统计（方向性 / 不变式）==")
+        compact_sessions = [s for s in sessions if T.STORE.get(s["id"])["compacts"]]
+        plain = [s for s in sessions if not T.STORE.get(s["id"])["compacts"]]
+        check(bool(compact_sessions), "存在发生压缩的会话（%d 个）" % len(compact_sessions))
+        if compact_sessions:
+            cd = T.STORE.get(compact_sessions[0]["id"])
+            rows = T.compact_rows(cd)
+            check(bool(rows) and all(r.get("consistent") for r in rows),
+                  "压缩点可见字数与真实 pin 同方向（%d/%d 一致）" %
+                  (sum(1 for r in rows if r.get("consistent")), len(rows)))
+            check(all(r["after"]["chars_new"] < r["after"]["chars_old"] for r in rows
+                      if r.get("after")),
+                  "压缩后可见字数低于修正前旧口径")
+            # 旧口径在压缩点必须反向（这是修复前的 bug）
+            check(all(r.get("chars_old_delta_pct", 0) > 0 for r in rows),
+                  "修正前旧口径确实在压缩点上涨（复现原缺陷）")
+            # 块不删、索引不变、全文仍可达
+            c0 = cd["compacts"][0]["at"]
+            check(c0 < len(cd["ctx"]) and all(b["n"] >= 0 for b in cd["ctx"]),
+                  "旧块未删除，块索引连续（%d 块）" % len(cd["ctx"]))
+            st, body = get("/s/%s/b/%d" % (compact_sessions[0]["id"], c0 - 1))
+            check(st == 200, "压缩前的旧块 #%d 全文仍可打开 %d" % (c0 - 1, st))
+            # 可见区间外块不计入任何状态
+            seq_after = rows[0]["after_seq"]
+            o = T.call_outline(cd, seq_after - 1)
+            check(o["lo"] > 0 and o["n"] < o["hi"],
+                  "压缩后调用 #%d 区间 [%d,%d) 生效" % (seq_after, o["lo"], o["hi"]))
+            check(T.call_state(cd, seq_after - 1, 0) is None,
+                  "退役块在该次调用返回 None（不计 hit/miss）")
+            # 真实 usage 未被改动
+            st, body = get("/api/s/%s/compact" % compact_sessions[0]["id"])
+            j = json.loads(body)
+            check(st == 200 and j["ok"] and j["data"]["consistent"] == len(rows),
+                  "/api/s/<sid>/compact 信封与一致数正确")
+            check(j["data"]["stats"]["pin"] == cd["stats"]["pin"],
+                  "真实累计输入 tok 未被统计修正影响")
+        if plain:
+            pd = T.STORE.get(plain[0]["id"])
+            check(all(c.get("vf", 0) == 0 for c in pd["calls"]),
+                  "未压缩会话 vf 全为 0（口径完全不变）")
 
         print("== 分页越界一致性 ==")
         paged = ["/s/{sid}?view=calls&p=999", "/s/{sid}/c/1?p=999",

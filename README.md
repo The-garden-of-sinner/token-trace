@@ -48,8 +48,9 @@
 - **块检索**：按块聚合列出全部命中，给出块内命中总数与所在分片，点片号直跳并高亮
 - **工具与命令聚合**：按工具看调用次数 / 积分 / 命中率，按 shell 程序看执行频次，可下钻到该工具的每一次调用
 - **上下文趋势**：逐调用堆叠柱看五类内容的累计组成与净变化，按调用 / 按轮切换，点柱直达调用详情
+- **压缩感知**：识别上下文压缩，只统计本次请求真正带上的块；压缩事件页把真实账单与修正前后口径并列，可人工核对
 - 跨会话统计：字数构成、最贵调用、最大块、冷启动断点、计费单价
-- 12 个 JSON 端点，统一 `{ok, data, meta}` 信封，供脚本调用
+- 17 个 JSON 端点，统一 `{ok, data, meta}` 信封，供脚本调用
 - Linux / Windows 各有一键启动与停止脚本，幂等、自动开浏览器
 
 ## 安装
@@ -181,6 +182,7 @@ python3 scripts/build_win_bat.py     # -> dist/TokenTrace.bat
 | `/find?q=&p=` | **按块精确检索**（跨会话）；`/s/<sid>/find?q=` 为会话内 |
 | `/tools?tool=&view=&q=&p=` | **工具与命令聚合**；`view=tools\|progs` 切换，`tool=` 下钻到该工具全部调用；会话内为 `/s/<sid>/tools` |
 | `/s/<sid>/trend?g=&mode=&p=` | **上下文趋势**；`g=call\|turn` 粒度，`mode=total\|delta` 累计组成 / 净变化 |
+| `/s/<sid>/compact` | **压缩事件校验**：真实账单与修正前 / 后统计逐条并列 |
 | `/s/<sid>?view=turns\|calls&p=` | 会话概览，按轮或按调用分页 |
 | `/s/<sid>/t/<n>` | 单轮的全部调用 |
 | `/s/<sid>/c/<seq>?state=&p=` | 单次调用的上下文块清单；`state=all\|hit\|miss\|part` |
@@ -212,7 +214,8 @@ python3 scripts/build_win_bat.py     # -> dist/TokenTrace.bat
 | `GET /api/find?q=&sid=&offset=&limit=` | 按块聚合检索：命中块、块内命中数、命中分片与直跳链接 |
 | `GET /api/s/<sid>/blocks/<idx>/find?q=&offset=&limit=` | 单块内全部命中位置与所在分片（分页） |
 | `GET /api/tools?sid=&view=&tool=&offset=&limit=` | 工具 usage 聚合 / Shell 程序频次；带 `tool` 时下钻到该工具的全部调用 |
-| `GET /api/s/<sid>/trend?g=&offset=&limit=` | 逐调用上下文演化：按类型组成、字数、命中率、积分与相邻 delta |
+| `GET /api/s/<sid>/trend?g=&offset=&limit=` | 逐调用上下文演化：按类型组成、字数、命中率、积分与相邻 delta；每行带 `compact` |
+| `GET /api/s/<sid>/compact` | 压缩事件：真实 `pin`/`hit`/`credit` 与修正前后可见字数对照、`consistent` 计数 |
 | `POST /shutdown` | 停止服务，供 `start.sh stop` 调用；校验 Host / Origin / Sec-Fetch-Site |
 
 ```bash
@@ -222,6 +225,7 @@ curl -s "http://127.0.0.1:8765/api/s/<sid>/blocks/42?offset=0&limit=1000"
 curl -s "http://127.0.0.1:8765/api/search?q=缓存冷启动"
 curl -s "http://127.0.0.1:8765/api/find?q=缓存冷启动&limit=5"
 curl -s "http://127.0.0.1:8765/api/s/<sid>/blocks/42/find?q=缓存"
+curl -s "http://127.0.0.1:8765/api/s/<sid>/compact"
 ```
 
 `/health`（纯文本 `ok`）、`HEAD`、404 / 500 都按 HTTP 语义处理；响应带
@@ -298,21 +302,93 @@ Top 为 `python3` 552、`ls` 251、`grep` 216。聚合结果缓存 60 秒，
 ## 上下文趋势
 
 `trend_rows()` 用「按类型字数前缀和」把每次调用的上下文构成压到 **O(1)**：
-预计算 `acc[k][i] = 前 i 块里类型 k 的字数`，第 seq 次调用带上 `ctxN` 块，
-取 `acc[k][ctxN]` 就是五类组成，`pref[ctxN]` 是可见总字数。
-否则每次调用都遍历 `ctx[0:ctxN]` 会退化成 O(C²)。
+预计算 `acc[k][i] = 前 i 块里类型 k 的字数`，第 seq 次调用的可见区间是 `[vf, ctxN)`，
+取 `acc[k][ctxN] − acc[k][vf]` 就是五类组成，`pref[ctxN] − pref[vf]` 是可见总字数。
+否则每次调用都遍历整个可见区间会退化成 O(C²)。
 
 `/s/<sid>/trend` 两个维度：`g=call|turn` 按 1328 次调用或按 103 轮
 （每轮取最后一次调用）；`mode=total` 按五类颜色堆叠累计组成，
 `mode=delta` 蓝色为增长、红色为回落，高度按 |Δ| 归一化。
 柱子是 `<a href>` 包住的纯 CSS 堆叠 `<i>`，悬停用原生 `title`，
 点进去直达该次调用的完整块清单 —— 零 JavaScript、每页 40 根、页面 27–36 KB。
-红点标记命中率骤降的冷启动调用；表格同步给出 Δ 字 / Δ 积分的精确数值。
+红点标记命中率骤降的冷启动调用，琥珀点（◆）标记上下文压缩 —— 那一柱会断崖下降。
+表格同步给出 Δ 字 / Δ 积分的精确数值。
 
 **实测（最大会话）**：1328 行计算耗时 **0.025 s**；
-「五类构成之和 == `pref[ctxN]`」与「Δ == 相邻行之差」逐行核对，各 **0** 处不符。
-最大可见字 2 556 521，最大单步增长 **583 100 字** —— 正对应那个
-579 969 字的大块进入上下文。分页越界会与 `pager()` 同步夹到最后一页，不会出空表。
+「五类构成之和 == 可见字数」与「Δ == 相邻行之差」逐行核对，各 **0** 处不符。
+可见峰值 946 336 字（归档原文 2 556 958 字），两次压缩分别造成
+**−561 648 字**与 **−364 327 字**的断崖 —— 这才是上下文演化的真实形状。
+（修正前的旧口径会一路涨到 240 万字并掩盖这两次下降，见下节。）
+分页越界会与 `pager()` 同步夹到最后一页，不会出空表。
+
+## 压缩感知：统计只算本次真正带上的块
+
+WorkBuddy 的自动压缩会**把历史整体替换**成一条 `<cb_summary>` 用户消息。
+jsonl 是 append-only，旧消息仍然留在文件里，但压缩后模型只看得到摘要 + 之后的对话。
+早期版本把 jsonl 逐行都算作后续调用的可见上下文，于是出现方向性错误：
+真实 `prompt_tokens` 降了 71%，工具统计的「可见字数」反而涨了 36%，
+而且那个「579 969 字的最大块」其实就是压缩摘要，不是工具结果。
+
+**修法**：`build()` 读 `providerData.isCompacted` 标记，给每次调用记一个
+`vf`（visible_from，可见区间起点）。所有计算把区间从 `[0, ctxN)` 换成 `[vf, ctxN)`：
+
+| 位置 | 修正后 |
+| --- | --- |
+| `call_outline` / `call_state` | 只列 `[vf, ctxN)` 的块；区间外返回 `None`，不计 hit/miss |
+| 缓存边界 | 按可见区间内的相对字数定位，再换回绝对块号 |
+| `block_users` | 下界 `bisect_right(ctxns, idx)`、上界 `bisect_right(vfs, idx)`，压缩后不再算「带过」 |
+| `trend_rows` | `pref[ctxN] − pref[vf]`、按类型 `acc[k][ctxN] − acc[k][vf]`，仍是 O(1) |
+| 冷启动断点 | 排除压缩点（命中率骤降是历史替换，不是缓存失效） |
+
+**块一个都没删**：索引、分片、URL、全文检索全部不变，压缩前的旧块照样能打开看。
+只是不再计入后续调用。前缀和 `pref` 是全局的，区间字数仍是一次减法，没有新增索引。
+静态生成器 `trim()` 会把 `vf` 与 `ctxN` 同步平移，离线页口径一致。
+
+**口径区分**（压缩过的会话两者会差很多）：
+
+| 指标 | 含义 |
+| --- | --- |
+| `chars` / 归档原文 | 全部块的总字数，含已退役但保留供检索的历史 |
+| `visible_peak` / 可见峰值 | 单次请求真正带上的最大字数 |
+| `visible_last` / 末次可见 | 最后一次调用带上的字数 |
+| `retired_chars` | 被压缩替换掉的旧块字数 |
+| `pin` / `hit` / `credit` | 直接取自 `rawUsage`，**从未被这个修正改动** |
+
+### 人工校验页 `/s/<sid>/compact`
+
+每个压缩事件把三行真实账单与两行统计并排列出，可逐条核对：
+
+| 指标 | 压缩前 | 压缩后 | 变化 |
+| --- | --- | --- | --- |
+| 真实输入 tok（接口原值） | 508 970 | 147 131 | −71% |
+| 真实缓存命中率 | 100.0% | 23.3% | −77 pp |
+| 真实积分 credit | 0.20 | 1.63 | +1.43 |
+| 修正前可见字数（旧口径） | 879 126 | 1 198 027 | **+36%（错）** |
+| 修正后可见字数 `[vf,ctxN)` | 879 126 | 317 497 | **−64%（方向一致）** |
+
+全库 7 个压缩点（3 个会话）**7/7 方向一致**：修正后可见字数与真实输入 token 同号变化。
+`scripts/selftest.py` 把这条方向性、旧块仍可打开、区间外返回 `None`、
+真实 `pin` 不受影响、未压缩会话 `vf` 全 0 都固化成断言。
+页面只比方向不比幅度 —— 可见字数是字符数、真实输入是 token，两者不可换算。
+
+连续两次压缩、中间没有调用时，前一份摘要立刻被覆盖，页面会标出来，
+免得看起来像算重了。压缩事件也能说明一部分原先被误判的「冷启动断点」。
+
+### 独立复核（不依赖本工具代码）
+
+`scripts/verify_compact.py` 完全不 import 本项目，直接从 jsonl 逐行重算
+「旧口径持续累加」与「压缩点重置可见量」两套字数，并打印 `rawUsage` 原值：
+
+```bash
+python3 -B scripts/verify_compact.py                # 全库
+python3 -B scripts/verify_compact.py 9367d786       # 只看某个会话
+```
+
+输出可与 `/s/<sid>/compact` 页面逐条对照。本机实测 7/7 个压缩点方向一致，
+例如最大会话第一次压缩：真实 `pin` 508 970 → 147 131（−71%），
+旧口径 881 344 → 1 199 199（**+36%，错**），新口径 881 344 → 317 855（**−64%**）。
+（独立脚本的字数与页面有千分之几的差异，因为它按 jsonl 原始消息文本计数，
+不复用 `build()` 的分块规则；方向和量级一致即可。）
 
 ## 实测数据
 
@@ -328,9 +404,9 @@ Top 为 `python3` 552、`ls` 251、`grep` 216。聚合结果缓存 60 秒，
 | --- | --- |
 | 调用详情页 | 1328 / 1328 全部 200 |
 | 块全文页 | 2575 / 2575 全部 200 |
-| 最大块 | 579 969 字 / 49 片，逐片拼回与 API 全文逐字一致 |
+| 最大块 | 579 969 字 / 49 片，逐片拼回与 API 全文逐字一致（这个块本身是压缩摘要，见「压缩感知」） |
 | `<script>` 标签 | 全部页面 0 个 |
-| JSON 端点 | 12 / 12 返回 `{ok:true, data, meta}` |
+| JSON 端点 | 17 / 17 返回 `{ok:true, data, meta}` |
 
 **单页体积**
 
@@ -430,6 +506,14 @@ RSS 仍是 84.0 MB —— Python 不把 arena 归还 OS。它限制的是缓存�
 10. **块检索结果按关键词缓存 60 秒**（最多 8 个词），期间新写入的会话不出现在旧结果里；
     点「强制重检」或加 `refresh=1`。单块命中位置封顶 500 处，列表页每块最多列 8 个片链接，
     单片最多高亮 200 处 —— 都是为守住单页体积，全文仍可通过 API 完整取回。
+11. **压缩起点依赖 `providerData.isCompacted` 标记**：只在本机 WorkBuddy 的
+    `<cb_summary>` / `<conversation_history_summary>` 消息上验证过。若客户端换了字段或
+    采用别的压缩形态，`vf` 会保持 0 而退回旧口径（不会报错，但统计会再次失真）；
+    此时 `/s/<sid>/compact` 会显示「未发生压缩」，可据此发现。
+12. **压缩事件页只比方向不比幅度**：可见字数是字符数、真实输入是 token，
+    系统提示与工具 schema 也不在可见块里，两者不能换算。
+    另外压缩后的第一次调用常有 `pin=0`（并列调用，无独立 usage），
+    校验表会自动取之后第一个带 usage 的调用，所以「压缩后调用号」可能不紧邻压缩点。
 
 ## 数据来源与口径
 
@@ -441,8 +525,15 @@ RSS 仍是 84.0 MB —— Python 不把 arena 归还 OS。它限制的是缓存�
 | `~/.workbuddy/workbuddy.db` | `sessions` 表提供 `cwd`、标题、模型名 |
 
 `rawUsage` 用到 `prompt_tokens`、`prompt_cache_hit_tokens`、`completion_tokens`、`credit`。
+`providerData.isCompacted` / `compactType` / `isSummary` 用于识别上下文压缩，
+决定每次调用的可见区间起点 `vf`（详见「压缩感知」）。
 并行工具调用里只有第一个 `function_call` 带 usage，其余标「并列调用 · 无独立 usage」。
 末尾半行（客户端正在写入时）会跳过而不是让整个会话报错。
+
+**可见字数 ≠ 输入 token**：可见字数是 `[vf, ctxN)` 区间内中文/代码等字符数，
+真实 `prompt_tokens` 还包含系统提示与工具 schema（不在 jsonl 里）。
+`miss == pin − hit` 在全库逐条成立，命中总量本身准确；
+统计修正动的只是「哪些块算进这次调用」，从不动 `rawUsage` 的任何数字。
 
 **两个「调用数」口径**：索引页 `/` 显示 `scan_all()` 数到的 `function_call` 条数
 （最大会话 1026），会话页与 `/stats` 用完整解析后的调用序列（同一会话 1328）——
@@ -545,7 +636,7 @@ RSS 仍是 84.0 MB —— Python 不把 arena 归还 OS。它限制的是缓存�
 | `gen_trace.py` | 解析原语 + 静态模式生成器；`build(path, full=True)` 供服务复用 |
 | `start.sh` / `install-desktop.sh` / `token-trace.desktop` | Linux 一键启动、启动器安装与模板 |
 | `windows/` | Windows 版 `start.cmd` / `start.ps1` / `install-shortcut.ps1` |
-| `scripts/` | 发行构建：`build_win_bat.py`（单文件 bat）、`build_deb.sh`、`release.sh`、`VERSION`；回归：`selftest.py` |
+| `scripts/` | 发行构建（`build_win_bat.py`、`build_deb.sh`、`release.sh`、`VERSION`）、回归自检（`selftest.py`）、独立压缩校验（`verify_compact.py`） |
 | `REVIEW_CHANGES.md` | 安全与跨平台改造的分阶段变更记录 |
 | `.gitignore` | 排除含会话原文的静态页与运行时产物 |
 | `trace/` | 静态模式产物（不入库），随时可由 `gen_trace.py` 重建 |
@@ -559,23 +650,25 @@ RSS 仍是 84.0 MB —— Python 不把 arena 归还 OS。它限制的是缓存�
 
 ## 维护：路由声明与自检
 
-`trace_server.py` 里的 `ROUTE_SPEC` 是 **32 条** HTML 路由 / JSON 端点的单一事实源。
+`trace_server.py` 里的 `ROUTE_SPEC` 是 **34 条**（17 HTML + 17 JSON）路由 / 端点的单一事实源。
 每条声明带 `pattern`（HTML 正则）、`view`（处理函数）、`route`（文档路径）、
 `doc`（说明）与 `sample`（自检样例）；`HTML_ROUTES` 分发表和 `/api` 文档页的两张表
 都从它生成。新增端点只需加一行，不会再出现「页面能开但文档没写」或反过来。
 
 ```bash
-python3 -B scripts/selftest.py                    # 45 项检查
+python3 -B scripts/selftest.py                    # 58 项检查
 TRACE_TEST_PORT=8901 python3 -B scripts/selftest.py
 ```
 
 自检脚本起临时服务（默认 8899）后依次核对：声明无重复且与分发逐条一致、
-全部 view 可调用、16 个 HTML 路由的状态码 / 单页 ≤ 80 KB / 零 `<script>`、
-16 个 API 的 `{ok:true}` 信封、`/api` 文档覆盖全部声明、5 个分页路由 `p=999`
-不出现空表、运行期零写盘与 `write_files=false`。结束自动 `POST /shutdown` 退出，
+全部 view 可调用、17 个 HTML 路由的状态码 / 单页 ≤ 80 KB / 零 `<script>`、
+17 个 API 的 `{ok:true}` 信封、`/api` 文档覆盖全部声明、
+**压缩感知专项**（方向一致、旧块仍可打开、区间外返回 `None`、
+真实 `pin` 不受影响、未压缩会话 `vf` 全 0）、5 个分页路由 `p=999` 不出现空表、
+运行期零写盘与 `write_files=false`。结束自动 `POST /shutdown` 退出，
 有失败返回 1。分页统一走 `clamp_p()`，与 `pager()` 同步夹取页码。
 
-实测本机一次跑完 45 项全绿，最大单页 52.9 KB（搜索结果页）。
+实测本机一次跑完 **58 项全绿**，最大单页 52.9 KB（搜索结果页）。
 
 ## License
 

@@ -144,21 +144,32 @@ class Store(object):
         for b in ctx:
             pref.append(pref[-1] + b["n"])
         ctxns = [c["ctxN"] for c in calls]
+        vfs = [c.get("vf", 0) for c in calls]   # 单调不减，供 block_users 求可见上界
 
         by_turn = {}
         for i, c in enumerate(calls):
             by_turn.setdefault(c.get("turn", 0), []).append(i)
 
-        # 缓存冷启动：上一次 >80% 命中、这一次 <50%
+        # 缓存冷启动：上一次 >80% 命中、这一次 <50%。
+        # 压缩点的命中率骤降是「历史被替换」，不是缓存失效，单独归到 compactions。
         cold = []
         prev = None
+        prev_vf = None
         for i, c in enumerate(calls):
             if not c["pin"]:
                 continue
             r = c["hit"] / c["pin"]
-            if prev is not None and prev > 0.8 and r < 0.5:
+            is_compact = prev_vf is not None and c["vf"] != prev_vf
+            if prev is not None and prev > 0.8 and r < 0.5 and not is_compact:
                 cold.append(i)
             prev = r
+            prev_vf = c["vf"]
+
+        # 可见区间 [vf, ctxN) 的字数；chars 仍是「归档原文总量」（全部块，全文可查），
+        # visible_peak/last 才是「某次请求真正带上的量」。
+        vis = [pref[c["ctxN"]] - pref[c.get("vf", 0)] for c in calls]
+        retired = pref[vfs[-1]] if vfs else 0
+        compacts = meta.get("_compactions", [])
 
         billed = [c for c in calls if c["pin"]]
         tin = sum(c["pin"] for c in billed)
@@ -170,8 +181,8 @@ class Store(object):
 
         return {
             "s": s, "ctx": ctx, "calls": calls, "meta": meta, "turns": turns,
-            "pref": pref, "ctxns": ctxns, "by_turn": by_turn, "cold": cold,
-            "billed": billed,
+            "pref": pref, "ctxns": ctxns, "vfs": vfs, "by_turn": by_turn,
+            "cold": cold, "compacts": compacts, "billed": billed,
             "title": meta.get("aiTitle") or s.get("title") or s["id"][:8],
             "stats": {
                 "turns": len(turns), "calls": len(calls), "blocks": len(ctx),
@@ -180,7 +191,10 @@ class Store(object):
                 "credit": tcredit, "rate": (thit / tin) if tin else 0,
                 "model": (billed[0]["model"] if billed else "?"),
                 "compose": {k: sz[k] for k in ORDER},
-                "cold": len(cold),
+                "cold": len(cold), "compactions": len(compacts),
+                "visible_peak": max(vis, default=0),
+                "visible_last": vis[-1] if vis else 0,
+                "retired_chars": retired,
                 "skipped_lines": meta.get("_skipped_lines", 0),
             },
         }
@@ -225,15 +239,21 @@ START_TS = time.time()
 
 
 def call_state(d, seq, i):
-    """第 seq 次调用里第 i 个块的状态 —— O(1)，不展开整个上下文"""
+    """第 seq 次调用里第 i 个块的状态 —— O(1)，不展开整个上下文。
+
+    压缩后可见区间是 [vf, ctxN)：区间外的块返回 None（不是 hit/miss）。
+    缓存边界按「可见区间内的相对字数」定位，再换回绝对下标。
+    """
     c = d["calls"][seq]
     n = min(c["ctxN"], len(d["ctx"]))
-    if i >= n:
+    lo = min(c.get("vf", 0), n)
+    if i < lo or i >= n:
         return None
     if not c["pin"]:
         return "none"
-    cut_chars = d["pref"][n] * c["hit"] / c["pin"]
-    st, acc = d["pref"][i], d["pref"][i + 1]
+    base = d["pref"][lo]
+    cut_chars = (d["pref"][n] - base) * c["hit"] / c["pin"]
+    st, acc = d["pref"][i] - base, d["pref"][i + 1] - base
     if acc <= cut_chars:
         return "hit"
     if st >= cut_chars:
@@ -242,27 +262,34 @@ def call_state(d, seq, i):
 
 
 def call_outline(d, seq):
-    """单次调用的上下文概要（不取正文）"""
+    """单次调用的上下文概要（不取正文）。n 是可见块数，lo/hi 是绝对块号区间。"""
     c = d["calls"][seq]
     n = min(c["ctxN"], len(d["ctx"]))
-    total = d["pref"][n]
+    lo = min(c.get("vf", 0), n)
+    total = d["pref"][n] - d["pref"][lo]
+    base = {"n": n - lo, "lo": lo, "hi": n, "compacted": bool(lo)}
     if not c["pin"]:
-        return {"n": n, "chars": total, "ratio": None, "cut": None,
-                "boundary": None, "hit_blocks": 0, "miss_blocks": 0}
+        return dict(base, chars=total, ratio=None, cut=None,
+                    boundary=None, hit_blocks=0, miss_blocks=0)
     ratio = c["hit"] / c["pin"]
     cut_chars = total * ratio
-    b = bisect.bisect_left(d["pref"], cut_chars, 0, n + 1)
-    boundary = max(0, min(n - 1, b - 1)) if n else None
-    # 精确计数（O(n) 的位运算级别，可接受；列表仍按页渲染）
-    hit_blocks = sum(1 for i in range(n) if call_state(d, seq, i) == "hit")
-    return {"n": n, "chars": total, "ratio": ratio, "cut": cut_chars,
-            "boundary": boundary, "hit_blocks": hit_blocks,
-            "miss_blocks": n - hit_blocks}
+    b = bisect.bisect_left(d["pref"], d["pref"][lo] + cut_chars, lo, n + 1)
+    boundary = max(lo, min(n - 1, b - 1)) if n > lo else None
+    hit_blocks = sum(1 for i in range(lo, n) if call_state(d, seq, i) == "hit")
+    return dict(base, chars=total, ratio=ratio, cut=cut_chars,
+                boundary=boundary, hit_blocks=hit_blocks,
+                miss_blocks=(n - lo) - hit_blocks)
 
 
 def block_users(d, idx):
-    """哪些调用带上了第 idx 块。ctxN 单调不减，二分即可"""
-    return range(bisect.bisect_right(d["ctxns"], idx), len(d["calls"]))
+    """哪些调用带上了第 idx 块。
+
+    ctxN 单调不减 → 下界用 bisect_right(ctxns, idx)；
+    vf 也单调不减，压缩后 vf > idx 的调用不再带这个块 → 上界用 bisect_right(vfs, idx)。
+    """
+    lo = bisect.bisect_right(d["ctxns"], idx)
+    hi = bisect.bisect_right(d.get("vfs", [0] * len(d["calls"])), idx)
+    return range(lo, max(lo, hi))
 
 
 def call_brief(c):
@@ -271,7 +298,8 @@ def call_brief(c):
     return {"seq": c["seq"], "ts": c["ts"], "model": c["model"], "tool": c["tool"],
             "pin": c["pin"], "hit": c["hit"], "miss": c["pin"] - c["hit"],
             "pout": c["pout"], "credit": c.get("credit") or 0, "turn": c.get("turn", 0),
-            "rate": r, "ctxN": c["ctxN"], "outputs": len(c["out"])}
+            "rate": r, "ctxN": c["ctxN"], "vf": c.get("vf", 0),
+            "outputs": len(c["out"])}
 
 
 def turn_brief(d, t):
@@ -291,6 +319,7 @@ def global_stats():
     ss = STORE.sessions()
     out = {"sessions": len(ss), "workspaces": len(set(s["ws"] for s in ss)),
            "calls": 0, "turns": 0, "blocks": 0, "chars": 0,
+           "visible_peak_sum": 0, "compactions": 0,
            "pin": 0, "hit": 0, "pout": 0, "credit": 0, "compose": Counter(),
            "cold": [], "top_calls": [], "top_blocks": []}
     for s in ss:
@@ -298,6 +327,8 @@ def global_stats():
         st = d["stats"]
         for k in ("calls", "turns", "blocks", "chars", "pin", "hit", "pout", "credit"):
             out[k] += st[k]
+        out["visible_peak_sum"] += st["visible_peak"]
+        out["compactions"] += st["compactions"]
         out["compose"].update(st["compose"])
         for i in d["cold"]:
             c = d["calls"][i]
@@ -535,17 +566,22 @@ def trend_rows(d, granularity="call"):
         if b["k"] in acc:
             acc[b["k"]][i + 1] += b["n"]
     cold = set(d["cold"])
+    compact_seqs = set()
+    for i, c in enumerate(calls):
+        if i and c.get("vf", 0) != calls[i - 1].get("vf", 0):
+            compact_seqs.add(c["seq"])
     sid = d["s"]["id"]
     rows = []
     for i, c in enumerate(calls):
-        n = c["ctxN"]
+        n, lo = c["ctxN"], min(c.get("vf", 0), c["ctxN"])
         rows.append({
-            "seq": c["seq"], "turn": c["turn"], "blocks": n,
-            "chars": pref[n], "pin": c["pin"], "hit": c["hit"],
+            "seq": c["seq"], "turn": c["turn"], "blocks": n - lo,
+            "chars": pref[n] - pref[lo], "pin": c["pin"], "hit": c["hit"],
             "rate": c["hit"] / c["pin"] if c["pin"] else 0,
             "credit": c.get("credit") or 0, "ts": c.get("ts") or 0,
-            "comp": {k: acc[k][n] for k in ORDER},
+            "comp": {k: acc[k][n] - acc[k][lo] for k in ORDER},
             "cold": c["seq"] in cold,
+            "compact": c["seq"] in compact_seqs,
             "href": "/s/%s/c/%d" % (sid, i + 1),
         })
     if granularity == "turn":
@@ -566,6 +602,61 @@ def trend_rows(d, granularity="call"):
     mx = max((r["chars"] for r in rows), default=1) or 1
     mxd = max((abs(r["delta"]["chars"]) for r in rows), default=1) or 1
     return rows, mx, mxd
+
+
+def compact_rows(d):
+    """压缩事件校验表：真实账单 vs 修正前/修正后的可见字数，逐条并列。
+
+    只读取 rawUsage 的真实值 + pref 前缀和，不做任何估算；方向一致性由调用方判断。
+    """
+    calls, pref, ctx = d["calls"], d["pref"], d["ctx"]
+    sid = d["s"]["id"]
+    out = []
+    for k, cp in enumerate(d.get("compacts", []), 1):
+        at = cp["at"]
+        # 压缩后第一条调用：第一个 vf >= at 的位置；真实 usage 取之后首个 pin>0 的
+        first_i = next((i for i, c in enumerate(calls) if c.get("vf", 0) >= at), None)
+        before_i = cp["before_seq"] - 1
+        prev_billed = next((i for i in range(min(before_i, len(calls) - 1), -1, -1)
+                            if calls[i]["pin"]), None)
+        next_billed = next((i for i in range(first_i or 0, len(calls))
+                            if calls[i]["pin"]), None)
+        b = calls[prev_billed] if prev_billed is not None else None
+        a = calls[next_billed] if next_billed is not None else None
+        def vis(c, fixed):
+            n, lo = c["ctxN"], (c.get("vf", 0) if fixed else 0)
+            return pref[n] - pref[lo]
+        rec = {
+            "n": k, "at_block": at, "summary_chars": cp["chars"],
+            "kind": cp["kind"], "is_summary": cp["is_summary"], "ts": cp["ts"],
+            "before_seq": (b["seq"] if b else None), "after_seq": (a["seq"] if a else None),
+            "before": ({"pin": b["pin"], "hit": b["hit"],
+                        "rate": b["hit"] / b["pin"] if b["pin"] else 0,
+                        "credit": b.get("credit") or 0,
+                        "chars_old": vis(b, False), "chars_new": vis(b, True)} if b else None),
+            "after": ({"pin": a["pin"], "hit": a["hit"],
+                       "rate": a["hit"] / a["pin"] if a["pin"] else 0,
+                       "credit": a.get("credit") or 0,
+                       "chars_old": vis(a, False), "chars_new": vis(a, True)} if a else None),
+            "block_href": "/s/%s/b/%d" % (sid, at),
+        }
+        if b and a and b["pin"] and a["pin"]:
+            rec["pin_delta_pct"] = 100 * (a["pin"] - b["pin"]) / b["pin"]
+            rec["chars_old_delta_pct"] = (100 * (rec["after"]["chars_old"] -
+                                                 rec["before"]["chars_old"]) /
+                                          max(rec["before"]["chars_old"], 1))
+            rec["chars_new_delta_pct"] = (100 * (rec["after"]["chars_new"] -
+                                                 rec["before"]["chars_new"]) /
+                                          max(rec["before"]["chars_new"], 1))
+            # 方向一致：修正后的可见字数与真实 pin 同号变化
+            rec["consistent"] = (rec["pin_delta_pct"] * rec["chars_new_delta_pct"] > 0)
+        out.append(rec)
+    # 连续两次压缩、中间没有调用时，前一次的摘要立刻被后一次覆盖。
+    # 数据忠实保留，但页面要标出来，避免看起来像算重了。
+    for i, r in enumerate(out):
+        r["superseded"] = (i + 1 < len(out) and
+                           out[i + 1]["before_seq"] == r["before_seq"])
+    return out
 
 
 def tool_stats(sid=None):
@@ -936,11 +1027,19 @@ def v_session(q, sid):
     view = qstr(q, "view", "turns")
     crumbs = [("索引", "/"), (d["title"][:30], "")]
     body = kpi([("对话轮次", nfmt(st["turns"])), ("模型调用", nfmt(st["calls"])),
-                ("上下文块", nfmt(st["blocks"])), ("可见字数", nfmt(st["chars"])),
+                ("上下文块", nfmt(st["blocks"])), ("归档原文", nfmt(st["chars"]) + " 字"),
+                ("可见峰值", nfmt(st["visible_peak"]) + " 字"),
+                ("压缩次数", nfmt(st["compactions"])),
                 ("累计输入 tok", nfmt(st["pin"])), ("缓存命中", "%.1f%%" % (st["rate"] * 100)),
                 ("未命中（计费）", nfmt(st["miss"])), ("输出 tok", nfmt(st["pout"])),
                 ("累计积分", "%.2f" % st["credit"]), ("冷启动断点", nfmt(st["cold"]))])
-    body += '<h3>进入上下文的文本构成 <span class="fine">按字符数，全文口径</span></h3>' + compose_bar(st["compose"])
+    if st["compactions"]:
+        body += ('<div class="warn">本会话发生过 <b>%d 次上下文压缩</b>：'
+                 '历史被摘要替换，%s 字旧块已退役（仍可查全文，但不再计入后续调用）。'
+                 '<b>归档原文</b>是全部块总字数，<b>可见峰值</b>才是单次请求真正带上的最大值。'
+                 '<a href="/s/%s/compact">打开压缩事件校验页核对</a></div>' %
+                 (st["compactions"], nfmt(st["retired_chars"]), esc(sid)))
+    body += '<h3>进入上下文的文本构成 <span class="fine">按字符数，归档全文口径</span></h3>' + compose_bar(st["compose"])
     if st.get("skipped_lines"):
         body += ('<div class="warn">源文件有 %d 行无法解析（多半是 WorkBuddy 写入中途被读到），'
                  '已跳过；本页统计与上下文不含这些行。刷新页面可重试。</div>' % st["skipped_lines"])
@@ -953,8 +1052,9 @@ def v_session(q, sid):
              '<button type="submit">搜索</button></form>' % esc(sid))
     body += ('<div class="tabs"><a class="btn" href="/s/%s/find">按块检索（列出命中块 + 跳到命中分片）</a>'
              '<a class="btn" href="/s/%s/tools">工具与命令</a>'
-             '<a class="btn" href="/s/%s/trend">上下文趋势</a></div>' %
-             (esc(sid), esc(sid), esc(sid)))
+             '<a class="btn" href="/s/%s/trend">上下文趋势</a>'
+             '<a class="btn" href="/s/%s/compact">压缩事件校验</a></div>' %
+             (esc(sid), esc(sid), esc(sid), esc(sid)))
     body += ('<div class="tabs"><a class="btn %s" href="/s/%s?view=turns">按轮浏览</a>' %
              ("on" if view == "turns" else "", esc(sid)) +
              '<a class="btn %s" href="/s/%s?view=calls">按调用浏览</a>' %
@@ -1036,6 +1136,12 @@ def v_call(q, sid, seq):
                 ("输出 tok", nfmt(c["pout"])), ("积分", "%.2f" % (c.get("credit") or 0)),
                 ("可见上下文", "%s 块 / %s 字" % (nfmt(o["n"]), nfmt(o["chars"]))),
                 ("缓存边界", "#%s" % (o["boundary"] + 1) if o["boundary"] is not None else "—")])
+    if o["compacted"]:
+        body += ('<div class="warn">这次调用之前发生过<b>上下文压缩</b>：'
+                 '前 %s 个块已被摘要替换，不再计入本次可见上下文，'
+                 '但仍可点开查全文（历史原文没有删除）。'
+                 '<a href="/s/%s/compact">看本会话的压缩事件</a></div>' %
+                 (nfmt(o["lo"]), esc(sid)))
     body += ('<div class="note">工具 <b>%s</b> · 模型 %s · %s<br>'
              '下面列出这次请求<b>实际带上的全部 %s 个块</b>：蓝色=命中缓存的前缀，琥珀=本次未命中，'
              '紫色块是跨边界的那一块。<b>点任意一行看该块不截断的全文</b>。</div>' %
@@ -1050,9 +1156,9 @@ def v_call(q, sid, seq):
     body += '<div class="tabs">' + "".join(filt) + '</div>'
 
     if state == "all":
-        chosen = list(range(o["n"]))
+        chosen = list(range(o["lo"], o["hi"]))
     else:
-        chosen = [j for j in range(o["n"]) if call_state(d, i, j) == state]
+        chosen = [j for j in range(o["lo"], o["hi"]) if call_state(d, i, j) == state]
     p = clamp_p(q, len(chosen), PAGE_BLOCKS)
     lo = p * PAGE_BLOCKS
     page_idx = chosen[lo:lo + PAGE_BLOCKS]
@@ -1429,7 +1535,8 @@ def v_trend(q, sid):
              '不含系统提示与工具 schema）。累计模式按 %d 类内容堆叠；'
              '净变化模式蓝色为增长、红色为回落，高度按 |Δ| 归一化。'
              '悬停看数值，点柱或表格行直达该次调用的完整块清单。'
-             '红点标记的是命中率骤降的冷启动调用。</div>' %
+             '红点标记命中率骤降的冷启动调用，琥珀点（◆）标记上下文压缩：'
+             '那一柱可见字数会断崖下降，是历史被摘要替换，不是缓存失效。</div>' %
              ("模型调用" if g == "call" else "轮（取该轮最后一次调用）", len(ORDER)))
     body += '<div class="legend">' + "".join(
         '<span><b style="background:%s"></b>%s</span>' % (PALETTE[k], esc(TYPES[k]))
@@ -1451,6 +1558,9 @@ def v_trend(q, sid):
                 r["seq"], "+" if dv >= 0 else "-", nfmt(abs(dv)))
         if r["cold"]:
             segs += '<i style="height:3px;background:#E24B4A"></i>'
+        if r.get("compact"):
+            segs += '<i style="height:3px;background:#BA7517"></i>'
+            tip += " · 此处发生上下文压缩"
         body += '<a href="%s" title="%s">%s</a>' % (esc(r["href"]), esc(tip), segs)
     body += '</div>'
     body += ('<div class="trow hd"><span>#调用</span><span>轮</span><span>块数</span>'
@@ -1465,7 +1575,8 @@ def v_trend(q, sid):
                  '<span class="num" style="color:%s">%s%s</span>'
                  '<span class="num">%.0f%%</span><span class="num">%.2f</span>'
                  '<span class="num">%s%.2f</span></a>' %
-                 (esc(r["href"]), r["seq"], " ●" if r["cold"] else "", r["turn"],
+                 (esc(r["href"]), r["seq"],
+                  " ◆" if r.get("compact") else (" ●" if r["cold"] else ""), r["turn"],
                   nfmt(r["blocks"]), nfmt(r["chars"]),
                   "#378ADD" if dv >= 0 else "#A32D2D",
                   "+" if dv >= 0 else "-", nfmt(abs(dv)),
@@ -1475,21 +1586,108 @@ def v_trend(q, sid):
     return page("上下文趋势", crumbs, body, sub="逐调用演化 · 累计组成 / 净变化 · 零脚本")
 
 
+def v_compact(q, sid):
+    """压缩事件校验页：把真实账单与修正前/后统计并列，供人工核对。"""
+    d = STORE.get(sid)
+    st = d["stats"]
+    rows = compact_rows(d)
+    crumbs = [("索引", "/"), (d["title"][:30], "/s/%s" % esc(sid)), ("压缩事件", "")]
+    body = kpi([("压缩次数", nfmt(len(rows))),
+                ("归档原文", nfmt(st["chars"]) + " 字"),
+                ("可见峰值", nfmt(st["visible_peak"]) + " 字"),
+                ("末次可见", nfmt(st["visible_last"]) + " 字"),
+                ("已退役历史", nfmt(st["retired_chars"]) + " 字"),
+                ("真实累计输入", nfmt(st["pin"]) + " tok"),
+                ("真实累计积分", "%.2f" % st["credit"])])
+    body += ('<div class="note"><b>怎么核对</b>：WorkBuddy 压缩会把历史替换成一条摘要，'
+             '真实 <code>rawUsage.prompt_tokens</code> 应骤降。'
+             '<b>修正前</b>我们把压缩前的旧块继续累加，可见字数反而上涨；'
+             '<b>修正后</b>按 <code>[vf, ctxN)</code> 只算摘要之后的内容，'
+             '应与真实输入<b>同方向下降</b>。'
+             '「真实账单」三列是接口原值，未经任何估算；'
+             '点「调用」可看该次请求实际带上的块清单。</div>')
+    if not rows:
+        body += '<p class="none">这个会话没有发生过上下文压缩，所有可见区间都是 [0, ctxN)。</p>'
+        return page("压缩事件", crumbs, body, sub="%s · 未发生压缩" % d["title"][:30])
+    bad = [r["n"] for r in rows if r.get("consistent") is False]
+    body += ('<div class="%s"><b>方向自检：%d / %d 个压缩点一致</b>%s。'
+             '一致 = 修正后可见字数与真实输入 token 同号变化（单位不同，只比方向，不比幅度）。</div>' %
+             ("note" if not bad else "warn", len(rows) - len(bad), len(rows),
+              "" if not bad else "；不一致的第 %s 个事件需人工复核" % ",".join(map(str, bad))))
+
+    for r in rows:
+        t = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r["ts"])) if r["ts"] else "时间未知"
+        body += ('<h2>压缩 #%d <small>%s · %s · 摘要块 #%d / %s 字</small></h2>' %
+                 (r["n"], esc(t), esc(r["kind"]), r["at_block"], nfmt(r["summary_chars"])))
+        if r.get("superseded"):
+            body += ('<div class="warn">紧随其后又有一次压缩，这份摘要立刻被覆盖，'
+                     '中间没有发生任何模型调用，因此下面两处的对照数字相同 —— '
+                     '是真实的连续压缩，不是重复计算。</div>')
+        body += ('<div class="tabs"><a class="btn" href="%s">看摘要块全文</a>' %
+                 esc(r["block_href"]) +
+                 (('<a class="btn" href="/s/%s/c/%d">压缩前调用 #%d</a>' %
+                   (esc(sid), r["before_seq"], r["before_seq"])) if r["before_seq"] else "") +
+                 (('<a class="btn" href="/s/%s/c/%d">压缩后调用 #%d</a>' %
+                   (esc(sid), r["after_seq"], r["after_seq"])) if r["after_seq"] else "") +
+                 '<a class="btn" href="/s/%s/trend">看趋势断崖</a></div>' % esc(sid))
+        body += ('<div class="trow hd" style="grid-template-columns:150px 1fr 1fr 1fr">'
+                 '<span>指标</span><span>压缩前</span><span>压缩后</span><span>变化</span></div>')
+        def line(label, bv, av, pct, good):
+            return ('<div class="trow" style="grid-template-columns:150px 1fr 1fr 1fr">'
+                    '<span>%s</span><span class="num">%s</span><span class="num">%s</span>'
+                    '<span class="num" style="color:%s">%s</span></div>' %
+                    (label, bv, av, "#378ADD" if good else "#A32D2D", pct))
+        if r["before"] and r["after"]:
+            b, a = r["before"], r["after"]
+            body += line("真实输入 tok（接口原值）", nfmt(b["pin"]), nfmt(a["pin"]),
+                         "%+.0f%%" % r["pin_delta_pct"], True)
+            body += line("真实缓存命中率", "%.1f%%" % (b["rate"] * 100),
+                         "%.1f%%" % (a["rate"] * 100),
+                         "%+.0f pp" % ((a["rate"] - b["rate"]) * 100), True)
+            body += line("真实积分 credit", "%.2f" % b["credit"], "%.2f" % a["credit"],
+                         "%+.2f" % (a["credit"] - b["credit"]), True)
+            body += line("修正前 可见字数（旧口径）", nfmt(b["chars_old"]), nfmt(a["chars_old"]),
+                         "%+.0f%%" % r["chars_old_delta_pct"], False)
+            body += line("修正后 可见字数 [vf,ctxN)", nfmt(b["chars_new"]), nfmt(a["chars_new"]),
+                         "%+.0f%%" % r["chars_new_delta_pct"], True)
+        else:
+            body += '<p class="none">压缩点附近没有带 usage 的调用，无法比对。</p>'
+    body += ('<h2>说明与边界</h2><div class="note">'
+             '压缩是 WorkBuddy 客户端行为，本工具只读 jsonl，'
+             '通过 <code>providerData.isCompacted</code> 标记识别，不猜文本。'
+             '旧块<b>没有删除</b>，仍可全文检索与查看，只是不再计入后续调用。'
+             '可见字数是字符数、真实输入是 token，两者不可换算，'
+             '本页只校验变化方向。缓存边界（命中/未命中切分）仍是估算：'
+             '接口只给命中总数，不给切分位置。</div>')
+    return page("压缩事件", crumbs, body,
+                sub="%s · %d 次压缩 · 真实账单与统计口径对照" % (d["title"][:30], len(rows)))
+
+
 def v_stats(q):
     t0 = time.time()
     with CALC_LOCK:
         st = global_stats()
+        compact_sid = next((s["id"] for s in STORE.sessions()
+                            if STORE.get(s["id"])["compacts"]), "")
     ms = int((time.time() - t0) * 1000)
     body = kpi([("会话", nfmt(st["sessions"])), ("工作区", nfmt(st["workspaces"])),
                 ("模型调用", nfmt(st["calls"])), ("对话轮次", nfmt(st["turns"])),
-                ("上下文块", nfmt(st["blocks"])), ("可见原文", nfmt(st["chars"]) + " 字"),
+                ("上下文块", nfmt(st["blocks"])), ("归档原文", nfmt(st["chars"]) + " 字"),
+                ("可见峰值合计", nfmt(st["visible_peak_sum"]) + " 字"),
+                ("压缩次数", nfmt(st["compactions"])),
                 ("累计输入 tok", nfmt(st["pin"])), ("缓存命中率", "%.2f%%" % (st["rate"] * 100)),
                 ("未命中 tok", nfmt(st["miss"])), ("输出 tok", nfmt(st["pout"])),
                 ("累计积分", "%.2f" % st["credit"]),
                 ("积分/万未命中", "%.3f" % st["unit_miss"])])
-    body += '<h3>全库上下文构成</h3>' + compose_bar(st["compose"])
+    body += '<h3>全库上下文构成 <span class="fine">归档全文口径</span></h3>' + compose_bar(st["compose"])
     body += ('<div class="note">上面每个数字都是<b>全量</b>算出来的（%d ms，遍历 %d 个会话全文），'
-             '不是抽样、不是截断后的静态页统计。</div>' % (ms, st["sessions"]))
+             '不是抽样、不是截断后的静态页统计。<b>归档原文</b>是全部块的总字数，'
+             '包含已被压缩替换、但保留下来供全文检索的历史；'
+             '<b>可见峰值合计</b>是各会话单次请求真实带上量的峰值之和。'
+             '发生压缩的会话，后者会明显小于前者%s。</div>' %
+             (ms, st["sessions"],
+              ('，<a href="/s/%s/compact">可在压缩事件页逐条核对</a>' % esc(compact_sid))
+              if compact_sid else ''))
     body += '<h2>最贵的 20 次调用 <small>按 credit</small></h2>'
     for x in st["top_calls"]:
         body += ('<a class="row bad" href="/s/%s/c/%d" style="grid-template-columns:64px 1fr 104px 84px 84px">'
@@ -1539,8 +1737,16 @@ def v_api_doc(q):
              'curl -s "http://127.0.0.1:8765/api/s/&lt;sid&gt;/calls?limit=5"\n'
              'curl -s "http://127.0.0.1:8765/api/s/&lt;sid&gt;/blocks/42?offset=0&amp;limit=1000"\n'
              'curl -s "http://127.0.0.1:8765/api/search?q=缓存冷启动"\n'
-             'curl -s "http://127.0.0.1:8765/api/find?q=缓存冷启动&amp;limit=5"\n'
-             'curl -s "http://127.0.0.1:8765/api/s/&lt;sid&gt;/blocks/42/find?q=缓存"</pre>')
+             'curl -s "http://127.0.0.1:8765/api/s/&lt;sid&gt;/blocks/42/find?q=缓存"\n'
+             'curl -s "http://127.0.0.1:8765/api/s/&lt;sid&gt;/compact"</pre>')
+    body += ('<h2>压缩感知的统计口径</h2><div class="note">'
+             '每次调用的可见上下文是 <code>[vf, ctxN)</code>：<code>vf</code> 来自 '
+             '<code>providerData.isCompacted</code> 标记，压缩前的旧块退役。'
+             '块本身<b>不删除</b>，索引 / 分片 / URL 全部不变，仍可全文检索。'
+             '「归档原文」= 全部块总字数，「可见峰值 / 末次可见」= 单次请求实际带上的量；'
+             '<code>/api/s/&lt;sid&gt;/calls/&lt;seq&gt;</code> 返回 '
+             '<code>vf</code> 与 <code>context.visible_from/visible_to</code>。'
+             '真实 <code>pin/hit/credit</code> 始终取自 <code>rawUsage</code>，未做任何估算。</div>')
     body += '<h2>HTML 路由</h2>'
     for r in ROUTE_SPEC:
         if r["kind"] == "html":
@@ -1665,6 +1871,16 @@ def api_route(path, q):
                              "max_delta": mxd, "cold": d["cold"]})
         return json_bytes(resp)
 
+    if rest == "/compact":
+        rows = compact_rows(d)
+        return json_bytes(env(
+            {"events": rows, "stats": {k: d["stats"][k] for k in
+             ("chars", "visible_peak", "visible_last", "retired_chars",
+              "compactions", "pin", "hit", "credit")},
+             "consistent": sum(1 for r in rows if r.get("consistent"))},
+            total=len(rows),
+            note="可见字数是字符数、pin 是 token，只比方向不比幅度；旧块未删除，仅不计入后续调用"))
+
     if rest == "":
         return json_bytes(env({
             "session": {k: v for k, v in d["s"].items() if k != "path"},
@@ -1690,8 +1906,8 @@ def api_route(path, q):
             off = qint(q, "offset")
             lim = min(API_MAX_LIMIT, qint(q, "limit", 50, 1))
             state = qstr(q, "state", "all")
-            idxs = list(range(o["n"])) if state == "all" else [
-                j for j in range(o["n"]) if call_state(d, seq - 1, j) == state]
+            idxs = list(range(o["lo"], o["hi"])) if state == "all" else [
+                j for j in range(o["lo"], o["hi"]) if call_state(d, seq - 1, j) == state]
             rows = []
             for j in idxs[off:off + lim]:
                 b = d["ctx"][j]
@@ -1703,6 +1919,8 @@ def api_route(path, q):
         return json_bytes(env({
             "call": call_brief(c), "model": c["model"], "tool": c["tool"],
             "context": {"blocks": o["n"], "chars": o["chars"], "cache_ratio": o["ratio"],
+                        "visible_from": o["lo"], "visible_to": o["hi"],
+                        "compacted": o["compacted"],
                         "cut_chars": o["cut"], "boundary_block": o["boundary"],
                         "hit_blocks": o["hit_blocks"], "miss_blocks": o["miss_blocks"],
                         "list_url": "/api/s/%s/calls/%d/context" % (sid, seq)},
@@ -1821,6 +2039,8 @@ ROUTE_SPEC = [
       "GET /s/<sid>/tools?tool=&view=", "会话内工具与命令聚合", "/s/{sid}/tools"),
     H(r"^/s/([0-9A-Za-z_-]+)/trend$", lambda q, m: v_trend(q, m.group(1)),
       "GET /s/<sid>/trend?g=&mode=&p=", "逐调用上下文趋势（累计组成 / 净变化）", "/s/{sid}/trend"),
+    H(r"^/s/([0-9A-Za-z_-]+)/compact$", lambda q, m: v_compact(q, m.group(1)),
+      "GET /s/<sid>/compact", "压缩事件：真实账单与修正前后统计对照", "/s/{sid}/compact"),
     H(r"^/s/([0-9A-Za-z_-]+)/calls$", lambda q, m: v_session(dict(q, view=["calls"]), m.group(1)),
       "GET /s/<sid>/calls&p=", "会话按调用分页", "/s/{sid}/calls"),
     H(r"^/s/([0-9A-Za-z_-]+)/t/(\d+)$", lambda q, m: v_turn(q, m.group(1), int(m.group(2))),
@@ -1850,6 +2070,7 @@ ROUTE_SPEC = [
     A("/api/s/<sid>/blocks/<idx>/find?q=&offset=&limit=", "单块内全部命中位置与所在分片", "/api/s/{sid}/blocks/0/find?q=token&limit=3"),
     A("/api/tools?sid=&view=&tool=&offset=&limit=", "工具聚合 / Shell 程序频次，带 tool 时下钻", "/api/tools?limit=3"),
     A("/api/s/<sid>/trend?g=&offset=&limit=", "逐调用上下文演化与相邻 delta", "/api/s/{sid}/trend?limit=3"),
+    A("/api/s/<sid>/compact", "压缩事件：真实 pin/hit/credit 与修正前后可见字数对照", "/api/s/{sid}/compact"),
 ]
 
 HTML_ROUTES = [(r["pattern"], r["view"]) for r in ROUTE_SPEC if r["kind"] == "html"]

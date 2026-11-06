@@ -28,10 +28,14 @@ def trim(ctx, calls, turns, limit=MAX_CALLS):
         return ctx, calls, turns, 0
     drop = len(calls) - limit
     keep = [dict(c) for c in calls[drop:]]   # 浅拷贝，避免改到调用方持有的记录
-    start = keep[0]["ctxN"]
+    # 有压缩时，窗口内最早的可见起点可能早于窗口第一次调用的 ctxN（摘要块在前面），
+    # 要从那里裁才能留住完整的可见区间；无压缩则沿用原来的 ctxN 起点。
+    positive_vf = [c.get("vf", 0) for c in keep if c.get("vf", 0) > 0]
+    start = min(keep[0]["ctxN"], min(positive_vf)) if positive_vf else keep[0]["ctxN"]
     ctx2 = ctx[start:]
     for c in keep:
         c["ctxN"] -= start
+        c["vf"] = max(0, c.get("vf", 0) - start)
     keep_turns = {c["turn"] for c in keep}
     turns2 = [t for t in turns if t["i"] in keep_turns]
     return ctx2, keep, turns2, drop
@@ -157,6 +161,11 @@ def build(path, full=False):
     full=False（默认）：块正文与输出截到 MAX_TEXT，供纯静态单页使用，体积可控。
     full=True：保留全文，供后端服务按需分片读取，内容零丢失。
     两种模式下 n 都是原文的真实字数，统计口径一致。
+
+    压缩感知：WorkBuddy 的自动压缩会把历史替换成一条 <cb_summary> 的 user 消息。
+    jsonl 里旧消息仍然保留（append-only），但压缩后模型只看得到摘要 + 之后的对话。
+    因此不删任何块（块索引 / 分片 / URL 全部不变），只给每次调用记 vf（visible_from，
+    可见区间起点块号）与 compact（该调用是否紧随压缩）。所有统计用 [vf, ctxN)。
     """
     skipped = {"skipped": 0}
     rows = list(iter_rows(path, skipped))
@@ -164,6 +173,8 @@ def build(path, full=False):
     call_cmd = {}  # callId -> 该次调用的命令摘要，供结果块回显
     turns = []     # 一轮 = 一条用户消息触发的一串调用
     cur = None
+    vf = 0         # 当前可见区间起点（最近一次压缩的摘要块号）
+    compactions = []
 
     def keep(s):
         return s if full else clip(s)
@@ -201,6 +212,7 @@ def build(path, full=False):
                 "pout": val((ru, "completion_tokens"), (u, "output_tokens")),
                 "hit": val((ru, "prompt_cache_hit_tokens"), (u, "cache_read_input_tokens")),
                 "ctxN": len(ctx),
+                "vf": vf,
                 "out": out_buf[:],
                 "credit": val((ru, "credit")),
                 "turn": cur["i"] if cur else 0,
@@ -224,12 +236,26 @@ def build(path, full=False):
             push("tool_result", f"工具结果 · {d.get('name') or ''}".strip(), text_of(d), cmd)
         elif t == "message" and d.get("role") == "user":
             plain, inj = seg_user(text_of(d))
+            prov = d.get("providerData") or {}
+            if prov.get("isCompacted"):
+                # 压缩：历史被这条 <cb_summary> 摘要整体替换。旧块仍保留在 ctx 里
+                # （全文可查、索引/分片/URL 全部不变），但之后的调用只看得到
+                # 摘要块及后续内容。vf 指向摘要块自身，它不是「你的提问」。
+                vf = len(ctx)
+                compactions.append({
+                    "at": vf,
+                    "chars": len(plain) + sum(len(x) for x in inj),
+                    "kind": prov.get("compactType") or "?",
+                    "is_summary": bool(prov.get("isSummary")),
+                    "ts": d.get("timestamp") or 0,
+                    "before_seq": len(calls),   # 压缩前最后一次调用序号
+                })
             cur = {"i": len(turns) + 1,
                    "q": re.sub(r"</?user_query>", "", plain or "（只有系统注入）").replace("\n", " ").strip()[:120],
                    "n": 0, "inj": sum(len(x) for x in inj)}
             turns.append(cur)
             if plain:
-                push("user", "你的输入", plain)
+                push("user", "压缩摘要" if prov.get("isCompacted") else "你的输入", plain)
             for x in inj:
                 push("injected", "系统注入", x)
         elif t == "message" and d.get("role") == "assistant":
@@ -244,6 +270,7 @@ def build(path, full=False):
                 "pout": val((ru, "completion_tokens"), (u, "output_tokens")),
                 "hit": val((ru, "prompt_cache_hit_tokens"), (u, "cache_read_input_tokens")),
                 "ctxN": len(ctx),
+                "vf": vf,
                 "out": out_buf + [{"kind": "assistant", "label": "回答", "text": keep(txt)}],
                 "credit": val((ru, "credit")),
                 "turn": cur["i"] if cur else 0,
@@ -256,6 +283,8 @@ def build(path, full=False):
     meta = dict(next((d for d in rows if d.get("type") == "session-meta"), {}))
     if skipped["skipped"]:
         meta["_skipped_lines"] = skipped["skipped"]
+    if compactions:
+        meta["_compactions"] = compactions
     return ctx, calls, meta, turns
 
 
@@ -304,8 +333,13 @@ def dict_html(ctx):
 
 
 def body_html(ctx, c):
-    """重建这次调用实际带上的完整上下文，并标出缓存边界"""
-    blocks = ctx[:c["ctxN"]]
+    """重建这次调用实际带上的完整上下文，并标出缓存边界。
+
+    压缩后历史被替换，可见区间是 [vf, ctxN)；旧块仍留在 ctx 里供字典全文检索，
+    但不再算进这次请求。块字典的编号用绝对下标，切片后要补回偏移。
+    """
+    lo = c.get("vf", 0)
+    blocks = ctx[lo:c["ctxN"]]
     if not blocks:
         return '<p class="none">这次调用之前没有可见上下文（首轮的系统提示不在 jsonl 里，只体现在 token 计数中）。</p>'
     total = sum(b["n"] for b in blocks)
@@ -322,9 +356,13 @@ def body_html(ctx, c):
                      f'<br><span class="fine">token 含系统提示与工具定义，字数只是可见部分，两者不可直接换算</span></p>')
         cut = total * ratio
 
+    if lo:
+        parts.append('<p class="fine">发生过上下文压缩：%d 个旧块已被摘要替换，'
+                     '不再计入本次可见上下文（仍可在页尾字典查全文）。</p>' % lo)
     acc, split_done, hit_n, hit_sz, miss_n = 0, False, 0, 0, 0
     hit_rows, miss_rows = [], []
-    for idx, b in enumerate(blocks):
+    for off, b in enumerate(blocks):
+        idx = lo + off
         start = acc
         acc += b["n"]
         if cut is None:
