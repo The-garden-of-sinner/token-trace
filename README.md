@@ -47,6 +47,7 @@
 - 全库全文搜索，命中片段带跳转链接；按命中 / 未命中 / 跨边界筛选
 - **块检索**：按块聚合列出全部命中，给出块内命中总数与所在分片，点片号直跳并高亮
 - **工具与命令聚合**：按工具看调用次数 / 积分 / 命中率，按 shell 程序看执行频次，可下钻到该工具的每一次调用
+- **上下文趋势**：逐调用堆叠柱看五类内容的累计组成与净变化，按调用 / 按轮切换，点柱直达调用详情
 - 跨会话统计：字数构成、最贵调用、最大块、冷启动断点、计费单价
 - 12 个 JSON 端点，统一 `{ok, data, meta}` 信封，供脚本调用
 - Linux / Windows 各有一键启动与停止脚本，幂等、自动开浏览器
@@ -179,6 +180,7 @@ python3 scripts/build_win_bat.py     # -> dist/TokenTrace.bat
 | `/search?q=&scope=` | 全文搜索；`scope=blocks\|outputs\|turns\|all` |
 | `/find?q=&p=` | **按块精确检索**（跨会话）；`/s/<sid>/find?q=` 为会话内 |
 | `/tools?tool=&view=&q=&p=` | **工具与命令聚合**；`view=tools\|progs` 切换，`tool=` 下钻到该工具全部调用；会话内为 `/s/<sid>/tools` |
+| `/s/<sid>/trend?g=&mode=&p=` | **上下文趋势**；`g=call\|turn` 粒度，`mode=total\|delta` 累计组成 / 净变化 |
 | `/s/<sid>?view=turns\|calls&p=` | 会话概览，按轮或按调用分页 |
 | `/s/<sid>/t/<n>` | 单轮的全部调用 |
 | `/s/<sid>/c/<seq>?state=&p=` | 单次调用的上下文块清单；`state=all\|hit\|miss\|part` |
@@ -210,6 +212,7 @@ python3 scripts/build_win_bat.py     # -> dist/TokenTrace.bat
 | `GET /api/find?q=&sid=&offset=&limit=` | 按块聚合检索：命中块、块内命中数、命中分片与直跳链接 |
 | `GET /api/s/<sid>/blocks/<idx>/find?q=&offset=&limit=` | 单块内全部命中位置与所在分片（分页） |
 | `GET /api/tools?sid=&view=&tool=&offset=&limit=` | 工具 usage 聚合 / Shell 程序频次；带 `tool` 时下钻到该工具的全部调用 |
+| `GET /api/s/<sid>/trend?g=&offset=&limit=` | 逐调用上下文演化：按类型组成、字数、命中率、积分与相邻 delta |
 | `POST /shutdown` | 停止服务，供 `start.sh stop` 调用；校验 Host / Origin / Sec-Fetch-Site |
 
 ```bash
@@ -291,6 +294,25 @@ Windows 的 `start.ps1` 对应参数是 `-Port` / `-NoBrowser` / `-Token`（别�
 Top 为 `python3` 552、`ls` 251、`grep` 216。聚合结果缓存 60 秒，
 首次 3.6 s（含冷解析）、之后 0.01 s；页面 8–22 KB、零 `<script>`。
 程序名是 best-effort 归类，纯控制流命令会归入「(shell 控制流)」，不是精确的执行追踪。
+
+## 上下文趋势
+
+`trend_rows()` 用「按类型字数前缀和」把每次调用的上下文构成压到 **O(1)**：
+预计算 `acc[k][i] = 前 i 块里类型 k 的字数`，第 seq 次调用带上 `ctxN` 块，
+取 `acc[k][ctxN]` 就是五类组成，`pref[ctxN]` 是可见总字数。
+否则每次调用都遍历 `ctx[0:ctxN]` 会退化成 O(C²)。
+
+`/s/<sid>/trend` 两个维度：`g=call|turn` 按 1328 次调用或按 103 轮
+（每轮取最后一次调用）；`mode=total` 按五类颜色堆叠累计组成，
+`mode=delta` 蓝色为增长、红色为回落，高度按 |Δ| 归一化。
+柱子是 `<a href>` 包住的纯 CSS 堆叠 `<i>`，悬停用原生 `title`，
+点进去直达该次调用的完整块清单 —— 零 JavaScript、每页 40 根、页面 27–36 KB。
+红点标记命中率骤降的冷启动调用；表格同步给出 Δ 字 / Δ 积分的精确数值。
+
+**实测（最大会话）**：1328 行计算耗时 **0.025 s**；
+「五类构成之和 == `pref[ctxN]`」与「Δ == 相邻行之差」逐行核对，各 **0** 处不符。
+最大可见字 2 556 521，最大单步增长 **583 100 字** —— 正对应那个
+579 969 字的大块进入上下文。分页越界会与 `pager()` 同步夹到最后一页，不会出空表。
 
 ## 实测数据
 

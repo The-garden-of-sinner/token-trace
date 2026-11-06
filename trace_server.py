@@ -521,6 +521,53 @@ def prog_of(cmd):
     return "(shell 控制流)"
 
 
+def trend_rows(d, granularity="call"):
+    """逐调用的可见上下文演化，返回 (rows, max_chars, max_delta)。
+
+    用「按类型字数前缀和」把每次调用的构成压到 O(1)：否则每次调用都遍历
+    ctx[0:ctxN] 会退化成 O(C^2)。不新增索引、不落盘。
+    """
+    ctx, pref, calls = d["ctx"], d["pref"], d["calls"]
+    acc = {k: [0] * (len(ctx) + 1) for k in ORDER}
+    for i, b in enumerate(ctx):
+        for k in acc:
+            acc[k][i + 1] = acc[k][i]
+        if b["k"] in acc:
+            acc[b["k"]][i + 1] += b["n"]
+    cold = set(d["cold"])
+    sid = d["s"]["id"]
+    rows = []
+    for i, c in enumerate(calls):
+        n = c["ctxN"]
+        rows.append({
+            "seq": c["seq"], "turn": c["turn"], "blocks": n,
+            "chars": pref[n], "pin": c["pin"], "hit": c["hit"],
+            "rate": c["hit"] / c["pin"] if c["pin"] else 0,
+            "credit": c.get("credit") or 0, "ts": c.get("ts") or 0,
+            "comp": {k: acc[k][n] for k in ORDER},
+            "cold": c["seq"] in cold,
+            "href": "/s/%s/c/%d" % (sid, i + 1),
+        })
+    if granularity == "turn":
+        by = {}
+        for r in rows:
+            by[r["turn"]] = r
+        rows = list(by.values())
+    prev = None
+    for r in rows:
+        if prev is None:
+            r["delta"] = {"blocks": 0, "chars": 0, "rate": 0.0, "credit": 0.0}
+        else:
+            r["delta"] = {"blocks": r["blocks"] - prev["blocks"],
+                          "chars": r["chars"] - prev["chars"],
+                          "rate": r["rate"] - prev["rate"],
+                          "credit": round(r["credit"] - prev["credit"], 3)}
+        prev = r
+    mx = max((r["chars"] for r in rows), default=1) or 1
+    mxd = max((abs(r["delta"]["chars"]) for r in rows), default=1) or 1
+    return rows, mx, mxd
+
+
 def tool_stats(sid=None):
     """按工具名聚合 token / 积分，按 shell 程序名聚合执行次数。"""
     targets = [STORE.by_id(sid)] if sid else STORE.sessions()
@@ -654,6 +701,15 @@ button:hover,.btn:hover{border-color:#378ADD;color:#185FA5;background:#E6F1FB22}
 .bar{height:9px;background:#F1EFE8;border-radius:3px;overflow:hidden;display:flex;min-width:60px}
 .bar i{display:block;height:100%}
 .bar .h{background:#378ADD}.bar .m{background:#EF9F27}
+.trend{display:flex;align-items:flex-end;gap:2px;height:160px;border-bottom:1px solid #E3E1D9;margin:14px 0 6px}
+.trend a{flex:1;min-width:3px;height:100%;display:flex;flex-direction:column-reverse;justify-content:flex-start;text-decoration:none}
+.trend a i{display:block;width:100%;min-height:0}
+.trend a:hover{outline:1px solid #378ADD;outline-offset:1px}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:#5F5E5A;margin-bottom:12px}
+.legend b{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+.trow{display:grid;grid-template-columns:56px 44px 56px 82px 76px 64px 68px 68px;gap:7px;padding:5px 9px;border-bottom:1px solid #EDEBE3;font-size:11.5px}
+.trow.hd{color:#5F5E5A;font-weight:500;background:#F7F6F2}
+.trow .num{text-align:right;font-variant-numeric:tabular-nums}
 .chip{display:inline-block;font-size:10.5px;padding:0 7px;border-radius:9px;line-height:17px;white-space:nowrap}
 .chip.hit{background:#E6F1FB;color:#185FA5}.chip.miss{background:#FAEEDA;color:#BA7517}
 .chip.part{background:#EEEDFE;color:#534AB7}.chip.none{background:#F1EFE8;color:#888780}
@@ -890,7 +946,9 @@ def v_session(q, sid):
              '<input type="text" name="q" placeholder="只在这个会话里搜（含 58 万字的长块）">'
              '<button type="submit">搜索</button></form>' % esc(sid))
     body += ('<div class="tabs"><a class="btn" href="/s/%s/find">按块检索（列出命中块 + 跳到命中分片）</a>'
-             '<a class="btn" href="/s/%s/tools">工具与命令</a></div>' % (esc(sid), esc(sid)))
+             '<a class="btn" href="/s/%s/tools">工具与命令</a>'
+             '<a class="btn" href="/s/%s/trend">上下文趋势</a></div>' %
+             (esc(sid), esc(sid), esc(sid)))
     body += ('<div class="tabs"><a class="btn %s" href="/s/%s?view=turns">按轮浏览</a>' %
              ("on" if view == "turns" else "", esc(sid)) +
              '<a class="btn %s" href="/s/%s?view=calls">按调用浏览</a>' %
@@ -1323,6 +1381,87 @@ def v_tools(q, sid=None):
                 sub="工具 usage 聚合 · Shell 程序 best-effort 提取")
 
 
+def v_trend(q, sid):
+    """逐调用上下文演化：纯 CSS 堆叠柱 + 数值表，零 JavaScript。"""
+    d = STORE.get(sid)
+    g = qstr(q, "g", "call")
+    if g not in ("call", "turn"):
+        g = "call"
+    mode = qstr(q, "mode", "total")
+    if mode not in ("total", "delta"):
+        mode = "total"
+    p = qint(q, "p")
+    rows, mx, mxd = trend_rows(d, g)
+    pages = max(1, (len(rows) + PAGE_CALLS - 1) // PAGE_CALLS)
+    p = max(0, min(p, pages - 1))   # 与 pager() 的夹取保持一致，越界不出现空表
+    shown = rows[p * PAGE_CALLS:(p + 1) * PAGE_CALLS]
+    base = "/s/%s/trend" % sid
+    crumbs = [("索引", "/"), (d["title"][:24], "/s/%s" % sid), ("上下文趋势", "")]
+
+    def switch(key, val, lab):
+        cur = {"g": g, "mode": mode}
+        cur[key] = val
+        return '<a class="btn %s" href="%s">%s</a>' % (
+            "on" if (g if key == "g" else mode) == val else "",
+            esc(base + "?" + urlencode(cur)), lab)
+
+    body = ('<div class="tabs">%s%s<span class="fine" style="align-self:center;margin-left:8px">模式</span>%s%s</div>' %
+            (switch("g", "call", "按调用"), switch("g", "turn", "按轮"),
+             switch("mode", "total", "累计组成"), switch("mode", "delta", "净变化")))
+    body += kpi([("采样点", nfmt(len(rows))),
+                 ("最大可见字", nfmt(mx)),
+                 ("最大单步变化", nfmt(mxd)),
+                 ("冷启动断点", nfmt(len(d["cold"])))])
+    body += ('<div class="note">每根柱是一次%s的<b>可见上下文</b>（字数为估算，'
+             '不含系统提示与工具 schema）。累计模式按 %d 类内容堆叠；'
+             '净变化模式蓝色为增长、红色为回落，高度按 |Δ| 归一化。'
+             '悬停看数值，点柱或表格行直达该次调用的完整块清单。'
+             '红点标记的是命中率骤降的冷启动调用。</div>' %
+             ("模型调用" if g == "call" else "轮（取该轮最后一次调用）", len(ORDER)))
+    body += '<div class="legend">' + "".join(
+        '<span><b style="background:%s"></b>%s</span>' % (PALETTE[k], esc(TYPES[k]))
+        for k in ORDER) + '</div>'
+    body += '<div class="trend">'
+    for r in shown:
+        if mode == "total":
+            segs = "".join('<i style="height:%.3f%%;background:%s"></i>' %
+                           (r["comp"][k] / mx * 100, PALETTE[k])
+                           for k in ORDER if r["comp"][k])
+            tip = "#%d · %s 字 · 命中 %.0f%%" % (
+                r["seq"], nfmt(r["chars"]), r["rate"] * 100)
+        else:
+            dv = r["delta"]["chars"]
+            h = abs(dv) / mxd * 100 if dv else 0
+            segs = '<i style="height:%.3f%%;background:%s"></i>' % (
+                max(h, 0.6), "#378ADD" if dv >= 0 else "#E24B4A")
+            tip = "#%d · Δ %s%s 字" % (
+                r["seq"], "+" if dv >= 0 else "-", nfmt(abs(dv)))
+        if r["cold"]:
+            segs += '<i style="height:3px;background:#E24B4A"></i>'
+        body += '<a href="%s" title="%s">%s</a>' % (esc(r["href"]), esc(tip), segs)
+    body += '</div>'
+    body += ('<div class="trow hd"><span>#调用</span><span>轮</span><span>块数</span>'
+             '<span class="num">可见字</span><span class="num">Δ 字</span>'
+             '<span class="num">命中</span><span class="num">积分</span>'
+             '<span class="num">Δ 积分</span></div>')
+    for r in shown:
+        dv, dc = r["delta"]["chars"], r["delta"]["credit"]
+        body += ('<a class="trow" href="%s" style="text-decoration:none;color:inherit">'
+                 '<span>#%d%s</span><span>%d</span><span>%s</span>'
+                 '<span class="num">%s</span>'
+                 '<span class="num" style="color:%s">%s%s</span>'
+                 '<span class="num">%.0f%%</span><span class="num">%.2f</span>'
+                 '<span class="num">%s%.2f</span></a>' %
+                 (esc(r["href"]), r["seq"], " ●" if r["cold"] else "", r["turn"],
+                  nfmt(r["blocks"]), nfmt(r["chars"]),
+                  "#378ADD" if dv >= 0 else "#A32D2D",
+                  "+" if dv >= 0 else "-", nfmt(abs(dv)),
+                  r["rate"] * 100, r["credit"], "+" if dc >= 0 else "", dc))
+    body += pager(base, q, p, PAGE_CALLS, len(rows),
+                  "次调用" if g == "call" else "轮")
+    return page("上下文趋势", crumbs, body, sub="逐调用演化 · 累计组成 / 净变化 · 零脚本")
+
+
 def v_stats(q):
     t0 = time.time()
     with CALC_LOCK:
@@ -1385,6 +1524,7 @@ def v_api_doc(q):
         ("/api/find?q=&amp;sid=&amp;offset=&amp;limit=", "按块精确检索：命中块、块内命中数、命中分片与直跳链接"),
         ("/api/s/&lt;sid&gt;/blocks/&lt;idx&gt;/find?q=&amp;offset=&amp;limit=", "单块内全部命中位置与所在分片（分页）"),
         ("/api/tools?sid=&amp;view=tools%7Cprogs&amp;tool=&amp;offset=&amp;limit=", "工具 usage 聚合 / Shell 程序频次；带 tool 时下钻到该工具的全部调用"),
+        ("/api/s/&lt;sid&gt;/trend?g=call%7Cturn&amp;offset=&amp;limit=", "逐调用上下文演化：按类型组成、字数、命中率、积分与相邻 delta"),
     ]
     body = ('<div class="note">所有接口只读、返回 JSON，统一信封 '
             '<code>{"ok":true,"data":...,"meta":{...}}</code>；出错为 '
@@ -1412,7 +1552,8 @@ def v_api_doc(q):
              '<div class="apirow"><code>GET /s/&lt;sid&gt;/o/&lt;seq&gt;?seg=&amp;part=</code><span>输出全文分片</span></div>'
              '<div class="apirow"><code>GET /search?q=</code><span>全文搜索</span></div>'
              '<div class="apirow"><code>GET /find?q=&amp;p=</code><span>按块精确检索（跨会话 / 会话内 <code>/s/&lt;sid&gt;/find</code>）</span></div>'
-             '<div class="apirow"><code>GET /tools?tool=&amp;view=&amp;q=</code><span>工具与命令聚合（会话内 <code>/s/&lt;sid&gt;/tools</code>）</span></div>')
+             '<div class="apirow"><code>GET /tools?tool=&amp;view=&amp;q=</code><span>工具与命令聚合（会话内 <code>/s/&lt;sid&gt;/tools</code>）</span></div>'
+             '<div class="apirow"><code>GET /s/&lt;sid&gt;/trend?g=&amp;mode=&amp;p=</code><span>逐调用上下文趋势（累计组成 / 净变化）</span></div>')
     return page("后端 API", [("索引", "/"), ("API", "")], body,
                 sub="零 JavaScript 的前端，本身就建立在这套按需查询之上")
 
@@ -1515,6 +1656,19 @@ def api_route(path, q):
         d = STORE.get(sid)
     except KeyError:
         return json_bytes({"ok": False, "error": "unknown session: " + sid}, 404)
+
+    if rest == "/trend":
+        g = qstr(q, "g", "call")
+        if g not in ("call", "turn"):
+            g = "call"
+        rows, mx, mxd = trend_rows(d, g)
+        off = qint(q, "offset")
+        lim = min(API_MAX_LIMIT, qint(q, "limit", PAGE_CALLS, 1))
+        resp = paged(rows[off:off + lim], len(rows), off, lim,
+                     "/api/s/%s/trend" % sid, q)
+        resp["meta"].update({"granularity": g, "max_chars": mx,
+                             "max_delta": mxd, "cold": d["cold"]})
+        return json_bytes(resp)
 
     if rest == "":
         return json_bytes(env({
@@ -1654,6 +1808,7 @@ HTML_ROUTES = [
     (r"^/s/([0-9A-Za-z_-]+)/search$", lambda q, m: v_search(q, m.group(1))),
     (r"^/s/([0-9A-Za-z_-]+)/find$", lambda q, m: v_find(q, m.group(1))),
     (r"^/s/([0-9A-Za-z_-]+)/tools$", lambda q, m: v_tools(q, m.group(1))),
+    (r"^/s/([0-9A-Za-z_-]+)/trend$", lambda q, m: v_trend(q, m.group(1))),
     (r"^/s/([0-9A-Za-z_-]+)/calls$", lambda q, m: v_session(dict(q, view=["calls"]), m.group(1))),
     (r"^/s/([0-9A-Za-z_-]+)/t/(\d+)$", lambda q, m: v_turn(q, m.group(1), int(m.group(2)))),
     (r"^/s/([0-9A-Za-z_-]+)/c/(\d+)$", lambda q, m: v_call(q, m.group(1), int(m.group(2)))),
