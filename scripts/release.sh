@@ -2,7 +2,7 @@
 # 创建 GitHub Release 并上传两个产物：.deb 与自包含的单文件 Windows .bat
 #
 #   ./scripts/release.sh            使用 scripts/VERSION
-#   ./scripts/release.sh 1.0.1      指定版本号
+#   ./scripts/release.sh <版本>      指定版本号（默认读 VERSION）
 #
 # 前置：远端已存在同版本 tag（本脚本不隐式改 git 历史），dist/ 里有 deb。
 # 每次发版都用当前源码重建 bat，避免附件落后于代码。

@@ -142,8 +142,24 @@ def main():
             j = json.loads(body)
             check(st == 200 and j["ok"] and j["data"]["consistent"] == len(rows),
                   "/api/s/<sid>/compact 信封与一致数正确")
-            check(j["data"]["stats"]["pin"] == cd["stats"]["pin"],
-                  "真实累计输入 tok 未被统计修正影响")
+            # 同进程独立累加 rawUsage 原值：既真正验证「账单没被压缩修正改动」，
+            # 也避免服务子进程与主进程在会话文件仍被写入时解析出不同快照而偶发误报。
+            raw_pin = 0
+            with open(cd["s"]["path"], encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    try:
+                        rec = json.loads(line)
+                    except Exception:
+                        continue
+                    tp = rec.get("type")
+                    if tp != "function_call" and not (
+                            tp == "message" and rec.get("role") == "assistant"):
+                        continue
+                    prov = rec.get("providerData") or {}
+                    ru, u = prov.get("rawUsage") or {}, prov.get("usage") or {}
+                    raw_pin += ru.get("prompt_tokens") or u.get("inputTokens") or 0
+            check(raw_pin == cd["stats"]["pin"],
+                  "真实累计输入 tok 等于 rawUsage 原值累加（未被统计修正影响）")
         if plain:
             pd = T.STORE.get(plain[0]["id"])
             check(all(c.get("vf", 0) == 0 for c in pd["calls"]),

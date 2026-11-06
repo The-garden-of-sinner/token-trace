@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 构建 .deb 安装包（在仓库任意位置执行均可）
 #   ./scripts/build_deb.sh            使用 scripts/VERSION
-#   ./scripts/build_deb.sh 1.0.1      指定版本号
+#   ./scripts/build_deb.sh <版本>      指定版本号（默认读 VERSION）
 set -eu
 
 DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
