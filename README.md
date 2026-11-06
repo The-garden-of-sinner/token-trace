@@ -1,12 +1,59 @@
 # Token 轨迹
 
-**把 WorkBuddy 的会话记录还原成逐次调用的 token 轨迹。**  
-每一次调用花了多少积分、带上了哪些上下文、缓存命中到哪里，都能逐条回溯到原文；
-页面零 JavaScript、运行期零写盘，只依赖 Python 3.8+ 标准库。
+> **为 Linux 与国产操作系统而做的 WorkBuddy 会话 token 轨迹工具。**
+> 在**银河麒麟 V10 SP1（兆芯平台）**实测通过；面向 Debian / Ubuntu / 银河麒麟 /
+> 统信 UOS / Deepin / 中标麒麟等 `dpkg` 系发行版提供 `deb` 包与桌面图标，
+> **不要求 apt 安装任何第三方包** —— 信创环境里软件源锁死、无网络、权限受限，
+> 只要系统自带 Python 3.8+ 就能跑起来。Windows 另有自包含单文件启动器兜底。
 
-![Python](https://img.shields.io/badge/python-3.8%2B-blue) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey) ![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen) ![JavaScript](https://img.shields.io/badge/JavaScript-0-orange) ![License](https://img.shields.io/badge/license-MIT-green)
+把 WorkBuddy 的会话记录还原成逐次调用的 token 轨迹：每一次调用花了多少积分、
+带上了哪些上下文、缓存命中到哪里，都能逐条回溯到原文。页面零 JavaScript、
+运行期零写盘，只依赖 Python 标准库。
 
-## 亮点
+**Linux 优先体现在细节里**：`deb` 装完即可从应用菜单打开；`start.sh` 一键启停且不依赖
+`pkill` 找 PID；`install-desktop.sh` 按当前目录生成 `.desktop`，不写死用户名或路径；
+探活与关停走 Python 标准库，不强依赖 `curl` / `xdg-open`。
+
+![Python](https://img.shields.io/badge/python-3.8%2B-blue) ![Linux](https://img.shields.io/badge/Linux-Kylin%20%7C%20UOS%20%7C%20Deepin%20%7C%20Debian-blue) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey) ![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen) ![JavaScript](https://img.shields.io/badge/JavaScript-0-orange) ![License](https://img.shields.io/badge/license-MIT-green)
+
+## 目录
+
+- [1 概览](#1-概览)
+  - [亮点](#亮点)
+  - [两种模式](#两种模式)
+  - [功能总览](#功能总览)
+- [2 安装与发行](#2-安装与发行)
+  - [前置条件](#前置条件)
+  - [Linux：一键启动](#linux一键启动)
+  - [Windows：一键启动](#windows一键启动)
+  - [命令行](#命令行)
+  - [不需要的操作](#不需要的操作)
+  - [发行产物](#发行产物)
+  - [版本记录](#版本记录)
+- [3 使用指南](#3-使用指南)
+  - [页面导航](#页面导航)
+  - [JSON API](#json-api)
+  - [配置](#配置)
+- [4 功能详解](#4-功能详解)
+  - [块检索：怎么定位到具体块](#块检索怎么定位到具体块)
+  - [工具与命令聚合](#工具与命令聚合)
+  - [上下文趋势](#上下文趋势)
+  - [压缩感知：只算本次真正带上的块](#压缩感知只算本次真正带上的块)
+- [5 架构与实现](#5-架构与实现)
+  - [架构总览与四层职责](#架构总览与四层职责)
+  - [仓库内容](#仓库内容)
+  - [维护：路由声明与自检](#维护路由声明与自检)
+- [6 实测与口径](#6-实测与口径)
+  - [实测数据](#实测数据)
+  - [数据来源与口径](#数据来源与口径)
+  - [这个工具能回答什么](#这个工具能回答什么)
+- [7 已知限制](#7-已知限制)
+
+---
+
+## 1 概览
+
+### 亮点
 
 - **看得全** —— 1328 次调用、2575 个上下文块全部可单独打开；最大的一块 579 969 字
   分 49 片取回，拼接后与 API 全文逐字一致。旧静态页只保留最近 150 次调用。
@@ -17,7 +64,8 @@
 - **不添乱** —— 源数据只读，运行期 0 字节写盘（连 `__pycache__` 都关掉）；
   两轮 600 请求后 RSS 稳定在 88.7 MB，第二轮完全不涨。
 
-## 两种模式
+
+### 两种模式
 
 | 维度 | 完整模式（推荐） | 静态模式（离线兜底） |
 | --- | --- | --- |
@@ -38,7 +86,8 @@
 选型建议：本机排查一律用完整模式；只有要把结果发给别人、或目标机器不能跑 Python 时，
 才用静态模式生成一份 HTML。两者共用同一套解析原语，不会算出两套数字。
 
-## 功能
+
+### 功能总览
 
 - 按工作区分组的会话索引，可按时间 / 积分 / 调用数排序
 - 逐轮、逐调用回溯：usage、积分、缓存命中边界、带上了哪些上下文块
@@ -53,7 +102,8 @@
 - 17 个 JSON 端点，统一 `{ok, data, meta}` 信封，供脚本调用
 - Linux / Windows 各有一键启动与停止脚本，幂等、自动开浏览器
 
-## 安装
+
+## 2 安装与发行
 
 ### 前置条件
 
@@ -117,17 +167,8 @@ python3 gen_trace.py --all                    # 静态模式保留全部调用�
 - **不需要 root / 管理员权限** —— 只读用户目录，启动器也装在用户目录
 - **不会改动 WorkBuddy 的任何文件** —— 服务运行期零写盘
 
-## 版本记录
 
-| 版本 | 主要内容 |
-| --- | --- |
-| **v1.1.0** | 工具与命令聚合、逐调用上下文趋势与 Delta、声明式路由表 `ROUTE_SPEC` + 58 项固化自检、**压缩感知统计修复**（可见区间 `[vf, ctxN)`、压缩事件校验页、独立复核脚本）；文档补齐三部分单价与峰谷倍率口径 |
-| v1.0.1 | 块检索：按块聚合命中、给出命中分片并直跳高亮 |
-| v1.0.0 | 完整模式（零 JS 服务端按需渲染）、17 个 JSON 端点、双平台一键启动、deb 与自包含单文件 Windows bat |
-
-版本号统一写在 `scripts/VERSION`，发版流程见「从源码重建」。
-
-## 发行产物
+### 发行产物
 
 Release 里附两个开箱即用的包，**都不需要 clone 仓库**：
 
@@ -136,7 +177,7 @@ Release 里附两个开箱即用的包，**都不需要 clone 仓库**：
 | `token-trace_<版本>_all.deb` | Debian / Ubuntu / 麒麟等 | `sudo dpkg -i ...`，应用菜单或终端 `token-trace` |
 | `TokenTrace.bat` | Windows | 双击，单文件自包含 |
 
-### Linux：deb 包
+#### Linux：deb 包
 
 ```bash
 sudo dpkg -i token-trace_<版本>_all.deb
@@ -151,7 +192,7 @@ TRACE_PORT=9000 token-trace  # 换端口
 探活与关停都走 Python 标准库，不依赖 `curl`；没有 `xdg-open` 时只打印 URL，不会失败。
 只读 `~/.workbuddy`，不写系统数据目录。
 
-### Windows：单文件 bat
+#### Windows：单文件 bat
 
 `TokenTrace.bat` 是**自包含**的：`trace_server.py` 与 `gen_trace.py` 经 zlib + base64
 压缩后内嵌在文件尾部。双击时脚本自动寻找 Python 3.8+（`py -3` → PATH → 常见安装目录 →
@@ -167,7 +208,7 @@ WorkBuddy 内置运行时），把一段纯 ASCII loader 释放到
   `TRACE_PYTHON=C:\path\to\python.exe` 指定解释器；
 - **尚未在真实 Windows 机器上验证**，见「已知限制」。
 
-### 从源码重建
+#### 从源码重建
 
 ```bash
 python3 scripts/build_win_bat.py     # -> dist/TokenTrace.bat
@@ -177,7 +218,19 @@ python3 scripts/build_win_bat.py     # -> dist/TokenTrace.bat
 
 版本号统一放在 `scripts/VERSION`；`dist/` 与 `.build/` 不入库。
 
-## 使用
+
+### 版本记录
+
+| 版本 | 主要内容 |
+| --- | --- |
+| **v1.1.0** | 工具与命令聚合、逐调用上下文趋势与 Delta、声明式路由表 `ROUTE_SPEC` + 58 项固化自检、**压缩感知统计修复**（可见区间 `[vf, ctxN)`、压缩事件校验页、独立复核脚本）；文档补齐三部分单价与峰谷倍率口径 |
+| v1.0.1 | 块检索：按块聚合命中、给出命中分片并直跳高亮 |
+| v1.0.0 | 完整模式（零 JS 服务端按需渲染）、17 个 JSON 端点、双平台一键启动、deb 与自包含单文件 Windows bat |
+
+版本号统一写在 `scripts/VERSION`，发版流程见「从源码重建」。
+
+
+## 3 使用指南
 
 ### 页面导航
 
@@ -268,7 +321,10 @@ Windows 的 `start.ps1` 对应参数是 `-Port` / `-NoBrowser` / `-Token`（别�
 | `FIND_CACHE_MAX` / `FIND_CACHE_TTL` | 8 / 60 s | 检索结果缓存条数与有效期 |
 | `HL_MAX` | 200 | 单片最多高亮多少处（守住单页体积） |
 
-## 块检索：怎么定位到具体块
+
+## 4 功能详解
+
+### 块检索：怎么定位到具体块
 
 全文搜索回答「哪些地方出现了这个词」，块检索回答「**哪些块含有它、块内有多少处、分别落在哪一片**」。
 
@@ -294,7 +350,8 @@ Windows 的 `start.ps1` 对应参数是 `-Port` / `-NoBrowser` / `-Token`（别�
 结果按 `(关键词, 会话)` 缓存在进程内，8 个词 / 60 秒 TTL（与会话索引同步失效）；
 翻页、回看、点进块页都不重扫 940 万字。源文件新增会话后点「强制重检」或加 `refresh=1`。
 
-## 工具与命令聚合
+
+### 工具与命令聚合
 
 `tool_stats()` 从 `calls` 里按工具名累加次数、积分、输入/输出 token 与命中率；
 程序名只从 `tool_result` 块中 **Bash / Shell 类**工具的命令摘要 `c` 里提取 ——
@@ -309,7 +366,8 @@ Top 为 `python3` 552、`ls` 251、`grep` 216。聚合结果缓存 60 秒，
 首次 3.6 s（含冷解析）、之后 0.01 s；页面 8–22 KB、零 `<script>`。
 程序名是 best-effort 归类，纯控制流命令会归入「(shell 控制流)」，不是精确的执行追踪。
 
-## 上下文趋势
+
+### 上下文趋势
 
 `trend_rows()` 用「按类型字数前缀和」把每次调用的上下文构成压到 **O(1)**：
 预计算 `acc[k][i] = 前 i 块里类型 k 的字数`，第 seq 次调用的可见区间是 `[vf, ctxN)`，
@@ -331,7 +389,8 @@ Top 为 `python3` 552、`ls` 251、`grep` 216。聚合结果缓存 60 秒，
 （修正前的旧口径会一路涨到 240 万字并掩盖这两次下降，见下节。）
 分页越界会与 `pager()` 同步夹到最后一页，不会出空表。
 
-## 压缩感知：统计只算本次真正带上的块
+
+### 压缩感知：只算本次真正带上的块
 
 WorkBuddy 的自动压缩会**把历史整体替换**成一条 `<cb_summary>` 用户消息。
 jsonl 是 append-only，旧消息仍然留在文件里，但压缩后模型只看得到摘要 + 之后的对话。
@@ -364,7 +423,7 @@ jsonl 是 append-only，旧消息仍然留在文件里，但压缩后模型只�
 | `retired_chars` | 被压缩替换掉的旧块字数 |
 | `pin` / `hit` / `credit` | 直接取自 `rawUsage`，**从未被这个修正改动** |
 
-### 人工校验页 `/s/<sid>/compact`
+#### 人工校验页 `/s/<sid>/compact`
 
 每个压缩事件把三行真实账单与两行统计并排列出，可逐条核对：
 
@@ -384,7 +443,7 @@ jsonl 是 append-only，旧消息仍然留在文件里，但压缩后模型只�
 连续两次压缩、中间没有调用时，前一份摘要立刻被覆盖，页面会标出来，
 免得看起来像算重了。压缩事件也能说明一部分原先被误判的「冷启动断点」。
 
-### 独立复核（不依赖本工具代码）
+#### 独立复核（不依赖本工具代码）
 
 `scripts/verify_compact.py` 完全不 import 本项目，直接从 jsonl 逐行重算
 「旧口径持续累加」与「压缩点重置可见量」两套字数，并打印 `rawUsage` 原值：
@@ -400,9 +459,114 @@ python3 -B scripts/verify_compact.py 9367d786       # 只看某个会话
 （独立脚本的字数与页面有千分之几的差异，因为它按 jsonl 原始消息文本计数，
 不复用 `build()` 的分块规则；方向和量级一致即可。）
 
-## 实测数据
 
-### 完整性与页面体积
+## 5 架构与实现
+
+### 架构总览与四层职责
+
+![Token 轨迹 · 架构图](docs/architecture.svg)
+
+> 图源是 `docs/architecture.mmd`（Mermaid），README 引用 `docs/architecture.svg`，
+> 不依赖阅读器是否支持 Mermaid；浅色 / 深色主题都可读。
+
+| 层 | 职责 | 刻意不做 |
+| --- | --- | --- |
+| 数据源 | `projects/**/*.jsonl` + `workbuddy.db`，全程只读 | 不写回、不复制一份数据 |
+| 数据层 | `build(path, full=True)` 重建块序列，`Store` LRU 常驻 + 前缀和派生索引 | 不建倒排索引、不落盘 |
+| 计算层 | `call_state` / `call_outline` / `block_users` / `search` / `trend_rows` 等，O(1) 或二分 | 不把整段上下文展开到页面 |
+| 渲染 / API 层 | 每请求只产出一屏 HTML 或一条 `{ok,data,meta}` JSON | 不一次性注入大 JSON、不截断全文 |
+
+四层都在 `trace_server.py` 一个文件里；`gen_trace.py` 只提供解析原语（`build`、
+`scan_all`、`brief`、`cmd_html`、`seg_user`），两个模式共用同一套口径。
+
+**数据层：一次解析，全文常驻。** `Store.sessions()` 常驻会话索引（60 秒或
+`/?refresh=1` 失效），从 `workbuddy.db` 补 `cwd` / 标题 / 模型，从 jsonl 补统计。
+`Store.get(sid)` 第一次访问某会话时调 `build(path, full=True)`，最大会话解析 0.69 s；
+`_derive()` 一次算好 `pref[]` 累积字数前缀和、`ctxns[]` 每次调用前的块数、
+`by_turn` 归属、冷启动断点与全量 KPI。**不建倒排索引、不落盘、不改源文件。**
+
+**计算层：重活全在后端。**
+
+| 函数 | 做的事 | 复杂度 |
+| --- | --- | --- |
+| `call_state(d, seq, i)` | 第 seq 次调用里第 i 块是命中 / 未命中 / 跨边界 | **O(1)**，用前缀和比边界，不展开上下文 |
+| `call_outline(d, seq)` | 本次带上几块 / 多少字 / 命中比例 / 边界落在第几块 | 边界用 `bisect` 定位 |
+| `block_users(d, idx)` | 哪些调用带上了这个块 | `bisect_right(ctxns, idx)` |
+| `global_stats()` | 跨会话聚合、最贵调用、最大块、冷启动断点、单价 | 内存遍历一次 |
+| `search()` | 940 万字原文里找关键词，返回片段与跳转链接 | `re.compile(escape(q), I)` 直接扫原文，不复制小写副本 |
+
+**前端：为什么最终渲染得很少。** 浏览器只做三件事：显示 HTML、点链接、原生
+`<details>` 折叠。没有虚拟滚动库、没有一次性注入的大 JSON、没有前端模板。
+关键是**正文不进列表页** —— 调用详情页只列块的「序号 / 状态 / 类型 / 标题 /
+字数 / 命令摘要」，点进去才由 `/b/<idx>` 单独返回一片正文。同一个 58 万字的大块
+无论被 800 次调用带上，列表页都只出现一行引用，全文放在自己那一页分 49 片。
+
+**跨平台要点。** 两个核心 Python 文件只依赖标准库：
+
+- 数据目录由 `data_dir()` 统一解析，优先级 `WORKBUDDY_HOME` > `~/.workbuddy` >
+  （仅 Windows）`APPDATA` / `LOCALAPPDATA`；
+- sqlite 只读连接用 `Path.as_uri()` 生成 `file:///C:/...?mode=ro`，
+  避开 Windows 路径里的反斜杠与盘符；
+- `/api/health` 的 `rss_mb` 在 Windows 上走 `ctypes` 调 `GetProcessMemoryInfo`，Linux 仍读 `/proc`；
+- 会话扫描用 `Path.rglob("*.jsonl")`，不依赖路径分隔符，也能覆盖多层目录；
+- 启动器用 `python.exe -WindowStyle Hidden`，不用 `pythonw.exe`
+  （后者 `sys.stdout` 为 `None`，会让 `print()` 崩）；
+- `PYTHONUTF8=1` 避免 Windows 控制台中文乱码，两个 `.ps1` 以 UTF-8 BOM 保存，
+  供 PowerShell 5.1 正确读取。
+
+
+### 仓库内容
+
+| 文件 | 作用 |
+| --- | --- |
+| `trace_server.py` | 完整模式：数据层 + 计算层 + HTML 渲染 + JSON API + HTTP 服务；运行期零写盘 |
+| `gen_trace.py` | 解析原语 + 静态模式生成器；`build(path, full=True)` 供服务复用 |
+| `start.sh` / `install-desktop.sh` / `token-trace.desktop` | Linux 一键启动、启动器安装与模板 |
+| `windows/` | Windows 版 `start.cmd` / `start.ps1` / `install-shortcut.ps1` |
+| `scripts/` | 发行构建（`build_win_bat.py`、`build_deb.sh`、`release.sh`、`VERSION`）、回归自检（`selftest.py`）、独立压缩校验（`verify_compact.py`） |
+| `REVIEW_CHANGES.md` | 安全与跨平台改造的分阶段变更记录 |
+| `.gitignore` | 排除含会话原文的静态页与运行时产物 |
+| `trace/` | 静态模式产物（不入库），随时可由 `gen_trace.py` 重建 |
+
+**刻意不入库**：`trace/*.html`（约 45 MB，内嵌会话原文、工作区绝对路径与工具输出全文，
+隐私密度最高）、`__pycache__/`、`*.pyc` / `*.log` / `*.bak*`、临时单页输出，
+以及 `patch_cli.sh`（本机系统补丁，与工具无关）。代码里的本机绝对路径都已去掉，
+文档只保留聚合统计，不含会话 id。
+
+仓库地址：<https://github.com/The-garden-of-sinner/token-trace>（分支 `main`）。
+
+
+### 维护：路由声明与自检
+
+`trace_server.py` 里的 `ROUTE_SPEC` 是 **34 条**（17 HTML + 17 JSON）路由 / 端点的单一事实源。
+每条声明带 `pattern`（HTML 正则）、`view`（处理函数）、`route`（文档路径）、
+`doc`（说明）与 `sample`（自检样例）；`HTML_ROUTES` 分发表和 `/api` 文档页的两张表
+都从它生成。新增端点只需加一行，不会再出现「页面能开但文档没写」或反过来。
+
+```bash
+python3 -B scripts/selftest.py                    # 58 项检查
+TRACE_TEST_PORT=8901 python3 -B scripts/selftest.py
+```
+
+自检脚本起临时服务（默认 8899）后依次核对：声明无重复且与分发逐条一致、
+全部 view 可调用、17 个 HTML 路由的状态码 / 单页 ≤ 80 KB / 零 `<script>`、
+17 个 API 的 `{ok:true}` 信封、`/api` 文档覆盖全部声明、
+**压缩感知专项**（方向一致、旧块仍可打开、区间外返回 `None`、
+真实 `pin` 不受影响、未压缩会话 `vf` 全 0）、5 个分页路由 `p=999` 不出现空表、
+运行期零写盘与 `write_files=false`。结束自动 `POST /shutdown` 退出，
+有失败返回 1。分页统一走 `clamp_p()`，与 `pager()` 同步夹取页码。
+
+实测本机一次跑完 **58 项全绿**，最大单页 52.9 KB（搜索结果页）。
+其中「真实累计输入 tok」一项改为在主进程独立累加 `rawUsage` 原值后与 `build()` 结果比对：
+早期版本拿服务子进程与主进程的两次解析互比，遇到会话文件正在写入时会偶发误报，
+现在既不受数据漂移影响，也真正验证了「压缩修正没有改动真实账单」。
+
+
+## 6 实测与口径
+
+### 实测数据
+
+#### 完整性与页面体积
 
 > 测量环境：本机 WorkBuddy 数据（2026-11-05 前后，29 个会话）；取调用数最多的一个
 > （完整解析 1328 次调用 / 2575 块 / 256 万字；口径见「数据来源与口径」）。
@@ -453,7 +617,7 @@ python3 -B scripts/verify_compact.py 9367d786       # 只看某个会话
 | `PREVIEW=600` / `INLINE_BLOCKS=3`，其余只给标题 | 块清单全列，正文点开即完整 |
 | 无搜索、无筛选 | 全库全文搜索 + 状态筛选 + 排序 |
 
-### 磁盘与内存
+#### 磁盘与内存
 
 **运行期零写盘。** 服务里没有 `open(...,'w')`、没有日志落盘、没有缓存文件、没有数据库写入；
 读源数据只有只读 `open()` 与 `sqlite3 mode=ro`，页面直接经 socket 返回。启动时在
@@ -495,42 +659,8 @@ RSS 仍是 84.0 MB —— Python 不把 arena 归还 OS。它限制的是缓存�
 
 `GET /api/health` 随时会自报 `pid` / `rss_mb` / `uptime_s` / `cached_sessions` / `write_files`。
 
-## 已知限制
 
-1. **完整模式需要本地起服务**，不能像静态页那样 `file://` 双击打开。
-2. **静态模式仍会截断**（150 次调用 / 3000 字），它是离线兜底，不是完整视图。
-3. **缓存命中边界是估算**：接口只给命中 token 总数，不给切分位置。按「可见字数 ×
-   命中比例」在块边界上切，块级基本准确，跨界那一块内部有误差；两个模式口径一致。
-4. **搜索是流式扫描而非倒排索引**：冷缓存首次全库搜索约 2.4 s，加 `--warm` 后不到 0.5 s。
-5. **默认只监听 `127.0.0.1` 且无鉴权**。绑定非本机地址时强制要求 `--token`；
-   `POST /shutdown` 校验 Host / Origin / Sec-Fetch-Site，避免跨站关停。
-   它是唯一的写操作端点（只让进程退出，不动磁盘）。
-6. **`start.sh stop` 的 `pkill` 兜底**在 PID namespace 隔离的环境（如 WorkBuddy 的
-   exec 沙箱）里看不到桌面进程，但优先走的 HTTP `/shutdown` 不受影响。
-7. **积分来自本地记录**，云端补扣或赠送的部分不在里面。
-8. **Windows 版尚未在真实 Windows 机器上验证**（改动在 Linux 沙箱内完成）。
-   `windows/` 三件套与自包含 `TokenTrace.bat` 都只做了静态检查，以及在本机
-   用 Linux Python 完整模拟过 bat 的内存加载与端到端请求；真机仍需确认四点：
-   `projects\` 的实际层级深度、中文或空格用户名下 WAL 模式 `workbuddy.db` 的只读打开、
-   控制台隐藏效果、含中文路径时的传参。
-9. `~/.workbuddy/projects/*.jsonl` 会随新对话增长，但那是 WorkBuddy 写的，本工具只读。
-10. **块检索结果按关键词缓存 60 秒**（最多 8 个词），期间新写入的会话不出现在旧结果里；
-    点「强制重检」或加 `refresh=1`。单块命中位置封顶 500 处，列表页每块最多列 8 个片链接，
-    单片最多高亮 200 处 —— 都是为守住单页体积，全文仍可通过 API 完整取回。
-11. **压缩起点依赖 `providerData.isCompacted` 标记**：只在本机 WorkBuddy 的
-    `<cb_summary>` / `<conversation_history_summary>` 消息上验证过。若客户端换了字段或
-    采用别的压缩形态，`vf` 会保持 0 而退回旧口径（不会报错，但统计会再次失真）；
-    此时 `/s/<sid>/compact` 会显示「未发生压缩」，可据此发现。
-12. **压缩事件页只比方向不比幅度**：可见字数是字符数、真实输入是 token，
-    系统提示与工具 schema 也不在可见块里，两者不能换算。
-    另外压缩后的第一次调用常有 `pin=0`（并列调用，无独立 usage），
-    校验表会自动取之后第一个带 usage 的调用，所以「压缩后调用号」可能不紧邻压缩点。
-13. **页面不显示模型类型，也不按模型分组**：会话里混用多个模型时统计是合计值，
-    数据来源本身有模型字段（见「数据来源与口径」）。
-14. **积分单价分 1× / 2× / 4× 三档**，且时段与策略会变；跨日比较单位成本前须先
-    归一到同一档，`/stats` 的粗算单价不能当真实单价用（见「数据来源与口径」）。
-
-## 数据来源与口径
+### 数据来源与口径
 
 全部来自本地文件，只读，不联网：
 
@@ -583,7 +713,8 @@ RSS 仍是 84.0 MB —— Python 不把 arena 归还 OS。它限制的是缓存�
 **可见上下文 ≠ 完整请求。** jsonl 里只有消息和工具结果，不含系统提示与工具 schema，
 所以「本次带上 N 字」和「接口报 M token」不能换算，两者都列出来仅供参考。
 
-## 这个工具能回答什么
+
+### 这个工具能回答什么
 
 以下是在本机样本上跑出来的结论，页面 `/stats` 会实时重算，不用再手写脚本：
 
@@ -599,114 +730,43 @@ RSS 仍是 84.0 MB —— Python 不把 arena 归还 OS。它限制的是缓存�
    4× 档翻倍，见上文单价表）。实测 33.7 万上下文 → 9.47 分，
    第二次调用就恢复到 0.43 分。
 
-## 实现说明
 
-```
-~/.workbuddy/projects/**/*.jsonl   workbuddy.db
-              │ 只读
-              ▼
-┌─────────────────────────────────────────────────────────┐
-│ 数据层  gen_trace.build(path, full=True) + Store          │
-│  · 重建 ctx 全局块序列，每个 call 存 ctxN 快照            │
-│  · full=True 保留原文（静态模式仍用默认的截断版）         │
-│  · 前缀和 pref[]、ctxns[]、by_turn、cold 断点             │
-│  · LRU 缓存已解析会话，默认 32（全量常驻实测 83 MB）      │
-├─────────────────────────────────────────────────────────┤
-│ 计算层  call_state / call_outline / block_users / search │
-│  · O(1) 判块状态，二分求反向索引，正则流式全文检索        │
-├──────────────────────┬──────────────────────────────────┤
-│ HTML 渲染层           │ JSON API 层                      │
-│  page() 统一外壳      │  /api/* 统一 {ok,data,meta} 信封 │
-│  每页只渲染一屏       │  分页用 offset/limit，Range 语义 │
-│  零 <script>          │  供脚本 / 外部工具调用           │
-└──────────────────────┴──────────────────────────────────┘
-              │ 一次请求 = 一屏
-              ▼
-        浏览器（不需要 JS，不需要构建）
-```
+## 7 已知限制
 
-四层都在 `trace_server.py` 一个文件里；`gen_trace.py` 只提供解析原语（`build`、
-`scan_all`、`brief`、`cmd_html`、`seg_user`），两个模式共用同一套口径。
+1. **完整模式需要本地起服务**，不能像静态页那样 `file://` 双击打开。
+2. **静态模式仍会截断**（150 次调用 / 3000 字），它是离线兜底，不是完整视图。
+3. **缓存命中边界是估算**：接口只给命中 token 总数，不给切分位置。按「可见字数 ×
+   命中比例」在块边界上切，块级基本准确，跨界那一块内部有误差；两个模式口径一致。
+4. **搜索是流式扫描而非倒排索引**：冷缓存首次全库搜索约 2.4 s，加 `--warm` 后不到 0.5 s。
+5. **默认只监听 `127.0.0.1` 且无鉴权**。绑定非本机地址时强制要求 `--token`；
+   `POST /shutdown` 校验 Host / Origin / Sec-Fetch-Site，避免跨站关停。
+   它是唯一的写操作端点（只让进程退出，不动磁盘）。
+6. **`start.sh stop` 的 `pkill` 兜底**在 PID namespace 隔离的环境（如 WorkBuddy 的
+   exec 沙箱）里看不到桌面进程，但优先走的 HTTP `/shutdown` 不受影响。
+7. **积分来自本地记录**，云端补扣或赠送的部分不在里面。
+8. **Windows 版尚未在真实 Windows 机器上验证**（改动在 Linux 沙箱内完成）。
+   `windows/` 三件套与自包含 `TokenTrace.bat` 都只做了静态检查，以及在本机
+   用 Linux Python 完整模拟过 bat 的内存加载与端到端请求；真机仍需确认四点：
+   `projects\` 的实际层级深度、中文或空格用户名下 WAL 模式 `workbuddy.db` 的只读打开、
+   控制台隐藏效果、含中文路径时的传参。
+9. `~/.workbuddy/projects/*.jsonl` 会随新对话增长，但那是 WorkBuddy 写的，本工具只读。
+10. **块检索结果按关键词缓存 60 秒**（最多 8 个词），期间新写入的会话不出现在旧结果里；
+    点「强制重检」或加 `refresh=1`。单块命中位置封顶 500 处，列表页每块最多列 8 个片链接，
+    单片最多高亮 200 处 —— 都是为守住单页体积，全文仍可通过 API 完整取回。
+11. **压缩起点依赖 `providerData.isCompacted` 标记**：只在本机 WorkBuddy 的
+    `<cb_summary>` / `<conversation_history_summary>` 消息上验证过。若客户端换了字段或
+    采用别的压缩形态，`vf` 会保持 0 而退回旧口径（不会报错，但统计会再次失真）；
+    此时 `/s/<sid>/compact` 会显示「未发生压缩」，可据此发现。
+12. **压缩事件页只比方向不比幅度**：可见字数是字符数、真实输入是 token，
+    系统提示与工具 schema 也不在可见块里，两者不能换算。
+    另外压缩后的第一次调用常有 `pin=0`（并列调用，无独立 usage），
+    校验表会自动取之后第一个带 usage 的调用，所以「压缩后调用号」可能不紧邻压缩点。
+13. **页面不显示模型类型，也不按模型分组**：会话里混用多个模型时统计是合计值，
+    数据来源本身有模型字段（见「数据来源与口径」）。
+14. **积分单价分 1× / 2× / 4× 三档**，且时段与策略会变；跨日比较单位成本前须先
+    归一到同一档，`/stats` 的粗算单价不能当真实单价用（见「数据来源与口径」）。
 
-**数据层：一次解析，全文常驻。** `Store.sessions()` 常驻会话索引（60 秒或
-`/?refresh=1` 失效），从 `workbuddy.db` 补 `cwd` / 标题 / 模型，从 jsonl 补统计。
-`Store.get(sid)` 第一次访问某会话时调 `build(path, full=True)`，最大会话解析 0.69 s；
-`_derive()` 一次算好 `pref[]` 累积字数前缀和、`ctxns[]` 每次调用前的块数、
-`by_turn` 归属、冷启动断点与全量 KPI。**不建倒排索引、不落盘、不改源文件。**
-
-**计算层：重活全在后端。**
-
-| 函数 | 做的事 | 复杂度 |
-| --- | --- | --- |
-| `call_state(d, seq, i)` | 第 seq 次调用里第 i 块是命中 / 未命中 / 跨边界 | **O(1)**，用前缀和比边界，不展开上下文 |
-| `call_outline(d, seq)` | 本次带上几块 / 多少字 / 命中比例 / 边界落在第几块 | 边界用 `bisect` 定位 |
-| `block_users(d, idx)` | 哪些调用带上了这个块 | `bisect_right(ctxns, idx)` |
-| `global_stats()` | 跨会话聚合、最贵调用、最大块、冷启动断点、单价 | 内存遍历一次 |
-| `search()` | 940 万字原文里找关键词，返回片段与跳转链接 | `re.compile(escape(q), I)` 直接扫原文，不复制小写副本 |
-
-**前端：为什么最终渲染得很少。** 浏览器只做三件事：显示 HTML、点链接、原生
-`<details>` 折叠。没有虚拟滚动库、没有一次性注入的大 JSON、没有前端模板。
-关键是**正文不进列表页** —— 调用详情页只列块的「序号 / 状态 / 类型 / 标题 /
-字数 / 命令摘要」，点进去才由 `/b/<idx>` 单独返回一片正文。同一个 58 万字的大块
-无论被 800 次调用带上，列表页都只出现一行引用，全文放在自己那一页分 49 片。
-
-**跨平台要点。** 两个核心 Python 文件只依赖标准库：
-
-- 数据目录由 `data_dir()` 统一解析，优先级 `WORKBUDDY_HOME` > `~/.workbuddy` >
-  （仅 Windows）`APPDATA` / `LOCALAPPDATA`；
-- sqlite 只读连接用 `Path.as_uri()` 生成 `file:///C:/...?mode=ro`，
-  避开 Windows 路径里的反斜杠与盘符；
-- `/api/health` 的 `rss_mb` 在 Windows 上走 `ctypes` 调 `GetProcessMemoryInfo`，Linux 仍读 `/proc`；
-- 会话扫描用 `Path.rglob("*.jsonl")`，不依赖路径分隔符，也能覆盖多层目录；
-- 启动器用 `python.exe -WindowStyle Hidden`，不用 `pythonw.exe`
-  （后者 `sys.stdout` 为 `None`，会让 `print()` 崩）；
-- `PYTHONUTF8=1` 避免 Windows 控制台中文乱码，两个 `.ps1` 以 UTF-8 BOM 保存，
-  供 PowerShell 5.1 正确读取。
-
-## 仓库内容
-
-| 文件 | 作用 |
-| --- | --- |
-| `trace_server.py` | 完整模式：数据层 + 计算层 + HTML 渲染 + JSON API + HTTP 服务；运行期零写盘 |
-| `gen_trace.py` | 解析原语 + 静态模式生成器；`build(path, full=True)` 供服务复用 |
-| `start.sh` / `install-desktop.sh` / `token-trace.desktop` | Linux 一键启动、启动器安装与模板 |
-| `windows/` | Windows 版 `start.cmd` / `start.ps1` / `install-shortcut.ps1` |
-| `scripts/` | 发行构建（`build_win_bat.py`、`build_deb.sh`、`release.sh`、`VERSION`）、回归自检（`selftest.py`）、独立压缩校验（`verify_compact.py`） |
-| `REVIEW_CHANGES.md` | 安全与跨平台改造的分阶段变更记录 |
-| `.gitignore` | 排除含会话原文的静态页与运行时产物 |
-| `trace/` | 静态模式产物（不入库），随时可由 `gen_trace.py` 重建 |
-
-**刻意不入库**：`trace/*.html`（约 45 MB，内嵌会话原文、工作区绝对路径与工具输出全文，
-隐私密度最高）、`__pycache__/`、`*.pyc` / `*.log` / `*.bak*`、临时单页输出，
-以及 `patch_cli.sh`（本机系统补丁，与工具无关）。代码里的本机绝对路径都已去掉，
-文档只保留聚合统计，不含会话 id。
-
-仓库地址：<https://github.com/The-garden-of-sinner/token-trace>（分支 `main`）。
-
-## 维护：路由声明与自检
-
-`trace_server.py` 里的 `ROUTE_SPEC` 是 **34 条**（17 HTML + 17 JSON）路由 / 端点的单一事实源。
-每条声明带 `pattern`（HTML 正则）、`view`（处理函数）、`route`（文档路径）、
-`doc`（说明）与 `sample`（自检样例）；`HTML_ROUTES` 分发表和 `/api` 文档页的两张表
-都从它生成。新增端点只需加一行，不会再出现「页面能开但文档没写」或反过来。
-
-```bash
-python3 -B scripts/selftest.py                    # 58 项检查
-TRACE_TEST_PORT=8901 python3 -B scripts/selftest.py
-```
-
-自检脚本起临时服务（默认 8899）后依次核对：声明无重复且与分发逐条一致、
-全部 view 可调用、17 个 HTML 路由的状态码 / 单页 ≤ 80 KB / 零 `<script>`、
-17 个 API 的 `{ok:true}` 信封、`/api` 文档覆盖全部声明、
-**压缩感知专项**（方向一致、旧块仍可打开、区间外返回 `None`、
-真实 `pin` 不受影响、未压缩会话 `vf` 全 0）、5 个分页路由 `p=999` 不出现空表、
-运行期零写盘与 `write_files=false`。结束自动 `POST /shutdown` 退出，
-有失败返回 1。分页统一走 `clamp_p()`，与 `pager()` 同步夹取页码。
-
-实测本机一次跑完 **58 项全绿**，最大单页 52.9 KB（搜索结果页）。
-其中「真实累计输入 tok」一项改为在主进程独立累加 `rawUsage` 原值后与 `build()` 结果比对：
-早期版本拿服务子进程与主进程的两次解析互比，遇到会话文件正在写入时会偶发误报，
-现在既不受数据漂移影响，也真正验证了「压缩修正没有改动真实账单」。
+---
 
 ## License
 

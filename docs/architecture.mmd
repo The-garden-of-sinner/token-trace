@@ -1,0 +1,42 @@
+%% Token 轨迹 · 架构图源文件
+%% 改结构时先改本文件，再导出 docs/architecture.svg（README 引用的是 SVG）。
+%% Mermaid 在线渲染：https://mermaid.live/
+flowchart TB
+    A["会话记录<br/>projects/**/*.jsonl<br/><small>消息 / 工具调用 / rawUsage</small>"]
+    B["workbuddy.db · sessions<br/><small>cwd / 标题 / 模型名</small>"]
+    A -->|只读| C
+    B -->|只读| C
+
+    subgraph L1["① 数据层 · gen_trace.build(full=True) + Store(LRU 32)"]
+        C["全文常驻 · 每块一个 URL<br/>pref[] / ctxns[] / vfs[]<br/>acc[k] 按类型前缀和 · 压缩感知 [vf, ctxN)"]
+    end
+
+    C -->|一次解析，派生索引一次算好| D
+
+    subgraph L2["② 计算层 · 重活全在后端"]
+        D["call_state O(1) · call_outline · block_users<br/>find_blocks · search · trend_rows<br/>tool_stats · compact_rows · clamp_p"]
+    end
+
+    D -->|一屏 HTML| E
+    D -->|一条 JSON| F
+
+    subgraph L3["③ 输出层"]
+        E["HTML 渲染层<br/>page() 统一外壳 · 10–53 KB/页<br/>零 script · a href + details"]
+        F["JSON API 层<br/>17 个端点 · {ok, data, meta}<br/>offset/limit 分页 · Range 语义"]
+    end
+
+    E --> G["浏览器（零 JS / 零构建）· 脚本 curl"]
+    F --> G
+
+    classDef src fill:#ddf4ff,stroke:#0969da,color:#1f2328;
+    classDef data fill:#f3f0ff,stroke:#8250df,color:#1f2328;
+    classDef calc fill:#fff8e6,stroke:#bf8700,color:#1f2328;
+    classDef html fill:#eafaf1,stroke:#1a7f37,color:#1f2328;
+    classDef api fill:#fff1f0,stroke:#cf222e,color:#1f2328;
+    classDef term fill:#f6f8fa,stroke:#57606a,color:#1f2328;
+    class A,B src;
+    class C data;
+    class D calc;
+    class E html;
+    class F api;
+    class G term;

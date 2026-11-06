@@ -26,6 +26,9 @@ mkdir -p "$STAGE/DEBIAN" \
 # ---- 程序文件（只放运行必需的，不含 trace/ 页面与开发期产物）
 install -m 644 "$ROOT/trace_server.py" "$ROOT/gen_trace.py" "$STAGE/usr/share/$PKG/"
 install -m 644 "$ROOT/README.md" "$ROOT/LICENSE" "$STAGE/usr/share/$PKG/"
+# README 用相对路径引用架构图，docs/ 必须一起打包，否则离线阅读会裂图
+mkdir -p "$STAGE/usr/share/$PKG/docs"
+install -m 644 "$ROOT/docs/architecture.svg" "$ROOT/docs/architecture.mmd" "$STAGE/usr/share/$PKG/docs/"
 
 # ---- 系统级启动器：幂等、自动开浏览器、支持 stop / status
 cat > "$STAGE/usr/bin/$PKG" <<'LAUNCHER'
