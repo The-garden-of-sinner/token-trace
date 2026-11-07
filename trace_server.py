@@ -51,8 +51,12 @@ MAX_CHARS = 10_000_000  # 块/输出全文的字符 offset 上限，与 limit �
 TYPES = {"user": "你的输入", "injected": "系统注入", "tool_result": "工具结果",
          "tool_call": "工具调用参数", "assistant": "助手回答"}
 ORDER = ["tool_result", "injected", "user", "tool_call", "assistant"]
-PALETTE = {"tool_result": "#888780", "injected": "#EF9F27", "user": "#378ADD",
-           "tool_call": "#B4B2A9", "assistant": "#1D9E75"}
+# 分类色引用 CSS 令牌：同一组颜色同时用于行内 style、SVG 与图例，
+# 切换深浅色时无需重算任何一行 HTML。短名 --p0..--p4 按 ORDER 顺序对应
+# tool_result / injected / user / tool_call / assistant，与趋势渐变共用。
+PALETTE = {"tool_result": "var(--p0)", "injected": "var(--p1)",
+           "user": "var(--p2)", "tool_call": "var(--p3)",
+           "assistant": "var(--p4)"}
 SID_RE = re.compile(r"^[0-9A-Za-z_-]+$")
 TOKEN = ""          # --token / TRACE_TOKEN；非空时所有请求都要鉴权
 LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
@@ -763,94 +767,187 @@ def tool_calls(sid, tool, offset=0, limit=40):
 
 # ---------------------------------------------------------------- HTML 外观
 
+# 设计令牌：分类色、语义色与主题。行内 style / SVG 一律引用变量，
+# 深浅色只在 CSS 末尾的 media 里切换一次；估算值统一带 ≈ 前缀。
 CSS = """
+:root{
+--bg:#fff;--fg:#2C2C2A;--panel:#F7F6F2;--panel2:#FAFAF7;--track:#F1EFE8;
+--line:#E3E1D9;--line2:#EDEBE3;--border:#D3D1C7;--muted:#5F5E5A;--faint:#888780;--dim:#B4B2A9;
+--accent:#378ADD;--accent-d:#185FA5;--accent-bg:#E6F1FB;--accent-fg:#0C447C;
+--neg:#A32D2D;--neg2:#E24B4A;--neg-bg:#FCEBEB;--credit:#854F0B;
+--warn:#EF9F27;--warn-bg:#FAEEDA;--warn-fg:#BA7517;--ok-bg:#E1F5EE;--ok-fg:#0F6E56;
+--part-bg:#EEEDFE;--part-fg:#534AB7;--mark:#FFE9A8;
+--p0:#1FA39A;--p1:#EF9F27;--p2:#3B82D6;
+--p3:#8A63D2;--p4:#D26A9B;
+--shadow:0 1px 2px #0000000a,0 2px 8px #00000008
+}
 *{box-sizing:border-box}
-body{margin:0;padding:0 0 50px;font:14px/1.65 system-ui,-apple-system,"Noto Sans CJK SC",sans-serif;color:#2C2C2A;background:#fff}
+body{margin:0;padding:0 0 50px;font:14px/1.65 system-ui,-apple-system,"Noto Sans CJK SC",sans-serif;color:var(--fg);background:var(--bg)}
 .wrap{max-width:1120px;margin:0 auto;padding:0 26px}
-header{background:#F7F6F2;border-bottom:1px solid #E3E1D9;padding:16px 0 13px;margin-bottom:20px}
-.crumb{font-size:11.5px;color:#888780;margin-bottom:5px}
-.crumb a{color:#378ADD;text-decoration:none}
+header{background:var(--panel);border-bottom:1px solid var(--line);padding:16px 0 13px;margin-bottom:20px}
+.crumb{font-size:11.5px;color:var(--faint);margin-bottom:5px}
+.crumb a{color:var(--accent);text-decoration:none}
 .crumb a:hover{text-decoration:underline}
-.crumb .sep{color:#B4B2A9;margin:0 6px}
+.crumb .sep{color:var(--dim);margin:0 6px}
 h1{font-size:19px;font-weight:500;margin:0 0 3px}
-.sub{color:#5F5E5A;font-size:12px}
-.badge{display:inline-block;font-size:10.5px;color:#0F6E56;background:#E1F5EE;border-radius:9px;padding:0 8px;line-height:17px;margin-left:8px;vertical-align:2px}
-h2{font-size:13px;font-weight:500;margin:24px 0 9px;padding-bottom:6px;border-bottom:1px solid #E3E1D9;color:#444441}
-h2 small{font-weight:400;color:#B4B2A9;font-size:11.5px;margin-left:8px}
-h3{font-size:12.5px;font-weight:500;margin:18px 0 7px;color:#444441}
+.sub{color:var(--muted);font-size:12px}
+.badge{display:inline-block;font-size:10.5px;color:var(--ok-fg);background:var(--ok-bg);border-radius:9px;padding:0 8px;line-height:17px;margin-left:8px;vertical-align:2px}
+h2{font-size:13px;font-weight:500;margin:24px 0 9px;padding-bottom:6px;border-bottom:1px solid var(--line);color:var(--fg)}
+h2 small{font-weight:400;color:var(--dim);font-size:11.5px;margin-left:8px}
+h3{font-size:12.5px;font-weight:500;margin:18px 0 7px;color:var(--fg)}
 .kpi{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
-.kpi div{background:#F1EFE8;border-radius:9px;padding:9px 13px;min-width:112px}
+.kpi div{background:var(--track);border-radius:9px;padding:9px 13px;min-width:112px;box-shadow:var(--shadow)}
 .kpi b{display:block;font-size:18px;font-weight:500;line-height:1.35;font-variant-numeric:tabular-nums}
-.kpi span{font-size:11px;color:#5F5E5A}
-.compose{display:flex;height:19px;border-radius:5px;overflow:hidden;background:#F1EFE8;margin-bottom:6px}
+.kpi span{font-size:11px;color:var(--muted)}
+.compose{display:flex;height:19px;border-radius:5px;overflow:hidden;background:var(--track);margin-bottom:6px}
 .compose i{display:block;height:100%}
-.legend{font-size:11.5px;color:#5F5E5A;margin-bottom:14px;display:flex;gap:13px;flex-wrap:wrap}
+.legend{font-size:11px;color:var(--muted);margin-bottom:12px;display:flex;gap:12px;flex-wrap:wrap}
 .legend span{display:inline-flex;align-items:center;gap:5px}
 .legend i{display:inline-block;width:9px;height:9px;border-radius:2px}
-.note{background:#E6F1FB;border-left:2px solid #378ADD;padding:9px 13px;border-radius:0 7px 7px 0;font-size:12px;color:#0C447C;margin-bottom:16px}
-.warn{background:#FAEEDA;border-left:2px solid #EF9F27;padding:9px 13px;border-radius:0 7px 7px 0;font-size:12px;color:#854F0B;margin-bottom:16px}
-.fine{color:#888780;font-size:11px}
-form.searchbox{display:flex;gap:7px;margin-bottom:16px;flex-wrap:wrap}
-form.searchbox input[type=text]{flex:1;min-width:220px;padding:7px 11px;border:1px solid #D3D1C7;border-radius:7px;font:13px inherit;background:#fff}
-form.searchbox select{padding:7px 9px;border:1px solid #D3D1C7;border-radius:7px;background:#fff;font:12px inherit}
-button,.btn{display:inline-block;padding:6px 13px;border:1px solid #D3D1C7;border-radius:7px;background:#fff;color:#2C2C2A;font:12px inherit;text-decoration:none;cursor:pointer}
-button:hover,.btn:hover{border-color:#378ADD;color:#185FA5;background:#E6F1FB22}
-.btn.on{background:#2C2C2A;color:#fff;border-color:#2C2C2A}
-.tabs{display:flex;gap:6px;margin:14px 0;flex-wrap:wrap}
-.row{display:grid;align-items:center;gap:9px;padding:7px 11px;border:1px solid #E3E1D9;border-radius:7px;margin-bottom:4px;background:#fff;font-size:12px}
-.row:hover{border-color:#B9CFE4;background:#F8FBFE}
-.row .grow{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.row a{color:#185FA5;text-decoration:none}
-.row a:hover{text-decoration:underline}
-.row .num{font-size:11.5px;color:#5F5E5A;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
-.row .num.credit{color:#854F0B;font-weight:500}
-.row.bad{border-left:3px solid #E24B4A}
-.row.warn2{border-left:3px solid #EF9F27}
-.idx{color:#888780;font-size:11.5px;min-width:38px;font-variant-numeric:tabular-nums}
-.bar{height:9px;background:#F1EFE8;border-radius:3px;overflow:hidden;display:flex;min-width:60px}
-.bar i{display:block;height:100%}
-.bar .h{background:#378ADD}.bar .m{background:#EF9F27}
-.trend{display:flex;align-items:flex-end;gap:2px;height:160px;border-bottom:1px solid #E3E1D9;margin:14px 0 6px}
-.trend a{flex:1;min-width:3px;height:100%;display:flex;flex-direction:column-reverse;justify-content:flex-start;text-decoration:none}
-.trend a i{display:block;width:100%;min-height:0}
-.trend a:hover{outline:1px solid #378ADD;outline-offset:1px}
-.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:#5F5E5A;margin-bottom:12px}
 .legend b{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px}
-.trow{display:grid;grid-template-columns:56px 44px 56px 82px 76px 64px 68px 68px;gap:7px;padding:5px 9px;border-bottom:1px solid #EDEBE3;font-size:11.5px}
-.trow.hd{color:#5F5E5A;font-weight:500;background:#F7F6F2}
+.note{background:var(--accent-bg);border-left:2px solid var(--accent);padding:9px 13px;border-radius:0 7px 7px 0;font-size:12px;color:var(--accent-fg);margin-bottom:16px}
+.warn{background:var(--warn-bg);border-left:2px solid var(--warn);padding:9px 13px;border-radius:0 7px 7px 0;font-size:12px;color:var(--credit);margin-bottom:16px}
+.fine{color:var(--faint);font-size:11px}
+form.searchbox{display:flex;gap:7px;margin-bottom:16px;flex-wrap:wrap}
+form.searchbox input[type=text]{flex:1;min-width:220px;padding:7px 11px;border:1px solid var(--border);border-radius:7px;font:13px inherit;background:var(--bg);color:var(--fg)}
+form.searchbox select{padding:7px 9px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--fg);font:12px inherit}
+button,.btn{display:inline-block;padding:6px 13px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--fg);font:12px inherit;text-decoration:none;cursor:pointer}
+button:hover,.btn:hover{border-color:var(--accent);color:var(--accent-d);background:var(--accent-bg)}
+.btn.on{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.tabs{display:flex;gap:6px;margin:14px 0;flex-wrap:wrap}
+.row{display:grid;align-items:center;gap:9px;padding:7px 11px;border:1px solid var(--line);border-radius:7px;margin-bottom:4px;background:var(--bg);font-size:12px}
+.row:hover{border-color:var(--accent);background:var(--panel)}
+.row .grow{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row a,.row a:visited{color:var(--accent-d);text-decoration:none}
+.row a:hover{text-decoration:underline}
+.row .num{font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.row .num.credit{color:var(--credit);font-weight:500}
+.row.bad{border-left:3px solid var(--neg2)}
+.row.warn2{border-left:3px solid var(--warn)}
+.idx{color:var(--faint);font-size:11.5px;min-width:38px;font-variant-numeric:tabular-nums}
+.bar{height:9px;background:var(--track);border-radius:3px;overflow:hidden;display:flex;min-width:60px}
+.bar i{display:block;height:100%}
+.bar .h{background:var(--accent)}.bar .m{background:var(--warn)}
+a:focus-visible,button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.trow{display:grid;grid-template-columns:56px 44px 56px 82px 76px 64px 68px 68px;gap:7px;padding:5px 9px;border-bottom:1px solid var(--line2);font-size:11.5px}
+.trow.hd{color:var(--muted);font-weight:500;background:var(--panel)}
 .trow .num{text-align:right;font-variant-numeric:tabular-nums}
 .chip{display:inline-block;font-size:10.5px;padding:0 7px;border-radius:9px;line-height:17px;white-space:nowrap}
-.chip.hit{background:#E6F1FB;color:#185FA5}.chip.miss{background:#FAEEDA;color:#BA7517}
-.chip.part{background:#EEEDFE;color:#534AB7}.chip.none{background:#F1EFE8;color:#888780}
-.chip.cold{background:#FCEBEB;color:#A32D2D}
-.chip.t{background:#F1EFE8;color:#5F5E5A}
-.cmd{display:block;font:11px/1.5 ui-monospace,"Noto Sans Mono CJK SC",monospace;color:#185FA5;word-break:break-all;margin-top:3px}
-.pager{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:16px 0 6px;font-size:12px;color:#5F5E5A}
+.chip.hit{background:var(--accent-bg);color:var(--accent-d)}.chip.miss{background:var(--warn-bg);color:var(--warn-fg)}
+.chip.part{background:var(--part-bg);color:var(--part-fg)}.chip.none{background:var(--track);color:var(--faint)}
+.chip.cold{background:var(--neg-bg);color:var(--neg)}
+.chip.t{background:var(--track);color:var(--muted)}
+.cmd{display:block;font:11px/1.5 ui-monospace,"Noto Sans Mono CJK SC",monospace;color:var(--accent-d);word-break:break-all;margin-top:3px}
+.pager{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:16px 0 6px;font-size:12px;color:var(--muted)}
 .pager .info{margin:0 8px;font-variant-numeric:tabular-nums}
 .pager .btn{min-width:64px;text-align:center}
 .pager .btn.off{opacity:.35;pointer-events:none}
-pre.text{margin:12px 0;padding:13px 15px;background:#F7F6F2;border:1px solid #E9E7DF;border-radius:8px;
+pre.text{margin:12px 0;padding:13px 15px;background:var(--panel);border:1px solid var(--line);border-radius:8px;
   font:12px/1.7 ui-monospace,"Noto Sans Mono CJK SC",monospace;white-space:pre-wrap;word-break:break-word;overflow:auto;max-height:70vh}
-mark{background:#FFE9A8;color:#2C2C2A;padding:0 1px;border-radius:2px}
-.snip{font:11.5px/1.6 ui-monospace,"Noto Sans Mono CJK SC",monospace;color:#5F5E5A;
-  background:#F7F6F2;border-radius:5px;padding:6px 9px;margin-top:4px;word-break:break-word}
-.split{display:flex;align-items:center;gap:8px;font-size:11px;color:#BA7517;margin:10px 0}
-.split:before,.split:after{content:"";flex:1;height:1px;background:#EF9F27;opacity:.5}
+mark{background:var(--mark);color:var(--fg);padding:0 1px;border-radius:2px}
+.snip{font:11.5px/1.6 ui-monospace,"Noto Sans Mono CJK SC",monospace;color:var(--muted);
+  background:var(--panel);border-radius:5px;padding:6px 9px;margin-top:4px;word-break:break-word}
+.split{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--warn-fg);margin:10px 0}
+.split:before,.split:after{content:"";flex:1;height:1px;background:var(--warn);opacity:.5}
 table{width:100%;border-collapse:collapse;font-size:12px}
-th,td{text-align:left;padding:6px 9px;border-bottom:1px solid #EFEDE5;font-variant-numeric:tabular-nums}
-th{color:#5F5E5A;font-weight:500;font-size:11.5px;background:#F7F6F2}
+th,td{text-align:left;padding:6px 9px;border-bottom:1px solid var(--line2);font-variant-numeric:tabular-nums}
+th{color:var(--muted);font-weight:500;font-size:11.5px;background:var(--panel)}
 td.r,th.r{text-align:right}
-footer{margin-top:26px;padding-top:10px;border-top:1px solid #EFEDE5;font-size:11px;color:#B4B2A9;display:flex;gap:14px;flex-wrap:wrap}
-footer a{color:#888780;text-decoration:none}
-footer a:hover{color:#378ADD}
-details.grp{margin-bottom:9px;border:1px solid #E3E1D9;border-radius:9px;overflow:hidden}
-details.grp>summary{padding:9px 13px;cursor:pointer;list-style:none;background:#FAFAF7;font-size:12.5px}
+footer{margin-top:26px;padding-top:10px;border-top:1px solid var(--line2);font-size:11px;color:var(--dim);display:flex;gap:14px;flex-wrap:wrap}
+footer a{color:var(--faint);text-decoration:none}
+footer a:hover{color:var(--accent)}
+details.grp{margin-bottom:9px;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+details.grp>summary{padding:9px 13px;cursor:pointer;list-style:none;background:var(--panel2);font-size:12.5px}
 details.grp>summary::-webkit-details-marker{display:none}
-details.grp>summary small{color:#B4B2A9;font-weight:400;margin-left:8px}
+details.grp>summary small{color:var(--dim);font-weight:400;margin-left:8px}
 details.grp .in{padding:8px 11px 3px}
-code{font:11.5px ui-monospace,monospace;background:#F1EFE8;padding:1px 4px;border-radius:3px}
-.apirow{display:grid;grid-template-columns:minmax(260px,1fr) 2fr;gap:10px;padding:7px 10px;border-bottom:1px solid #EFEDE5;font-size:12px}
-.apirow code{background:none;padding:0;color:#185FA5}
+code{font:11.5px ui-monospace,monospace;background:var(--track);padding:1px 4px;border-radius:3px}
+.apirow{display:grid;grid-template-columns:minmax(260px,1fr) 2fr;gap:10px;padding:7px 10px;border-bottom:1px solid var(--line2);font-size:12px}
+.apirow code{background:none;padding:0;color:var(--accent-d)}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+@media(prefers-color-scheme:dark){:root{
+--bg:#15171A;--fg:#E4E6E8;--panel:#1C1F23;--panel2:#202429;--track:#262A30;
+--line:#33383F;--line2:#2B3036;--border:#3A4048;--muted:#A7ACB3;--faint:#838B93;--dim:#666E77;
+--accent:#6BA9EE;--accent-d:#9CC7F7;--accent-bg:#1B2C3E;--accent-fg:#A8D0F7;
+--neg:#E87777;--neg2:#E26363;--neg-bg:#3A1F1F;--credit:#D9A441;
+--warn:#D9A441;--warn-bg:#332A18;--warn-fg:#E3BC72;--ok-bg:#173029;--ok-fg:#7FCFB2;
+--part-bg:#272440;--part-fg:#AEA6F0;--mark:#6B5417;
+--p0:#4FCFC2;--p1:#E0AE4B;--p2:#6BA9EE;
+--p3:#B292F0;--p4:#E88FB8;
+--shadow:0 1px 2px #00000040,0 2px 8px #00000030
+}mark{color:#F5E6B8}}
+"""
+
+# 图表样式按页面需要注入：列表 / 检索 / 全文页只带基础 CSS，
+# 不会为环形图、热力图或块地图的样式买单。判定只是一次子串扫描，微秒级。
+CSS_VIZ = """
+.viz{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:12px 14px;margin:0 0 16px;box-shadow:var(--shadow)}
+.viz-hd{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin:0 0 10px}
+.viz-hd b{font-size:12.5px;font-weight:600}.viz-hd small{font-size:10.5px;color:var(--faint)}
+.viz-hd .fine{margin-left:auto}
+.empty{padding:16px;text-align:center;color:var(--faint);font-size:11.5px;background:var(--track);border-radius:6px}
+[data-tip]{position:relative}
+[data-tip]:hover::after,[data-tip]:focus-visible::after{content:attr(data-tip);position:absolute;left:50%;bottom:calc(100% + 6px);
+ transform:translateX(-50%);z-index:5;background:var(--fg);color:var(--bg);font-size:10.5px;line-height:1.45;
+ padding:5px 8px;border-radius:5px;white-space:pre-line;max-width:250px;min-width:90px;box-shadow:var(--shadow);pointer-events:none}
+.donut-row{display:flex;align-items:center;gap:22px;flex-wrap:wrap}
+.donut-wrap{position:relative;width:112px;height:112px;flex:none}
+.donut{width:112px;height:112px;display:block}
+.donut circle{fill:none;stroke-width:5.2}
+.donut .trk{stroke:var(--track)}
+.donut-wrap .ctr{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:none}
+.donut-wrap .ctr b{font-size:16px;font-weight:600;line-height:1.2;font-variant-numeric:tabular-nums}
+.donut-wrap .ctr span{font-size:10px;color:var(--faint)}
+.slice{flex:1;min-width:200px}
+.slice .sl{display:flex;align-items:center;gap:7px;padding:3px 0;font-size:11.5px;border-bottom:1px solid var(--line2)}
+.slice .sl i{width:9px;height:9px;border-radius:2px;flex:none}
+.slice .sl .g{flex:1;color:var(--muted)}
+.slice .sl b{font-weight:500;font-variant-numeric:tabular-nums}
+.slice .sl em{font-style:normal;color:var(--faint);font-size:10.5px;min-width:46px;text-align:right;font-variant-numeric:tabular-nums}
+.reserve{display:flex;height:14px;border-radius:4px;overflow:hidden;background:var(--track);margin:7px 0 4px}
+.reserve .used{background:var(--accent)}
+.reserve .retired{background:repeating-linear-gradient(45deg,var(--dim) 0 4px,var(--track) 4px 8px)}
+.spark{width:100%;height:38px;display:block}
+.spark polyline{fill:none;stroke:var(--accent);stroke-width:1.6;vector-effect:non-scaling-stroke}
+.spark polygon{fill:var(--accent);opacity:.11}
+"""
+
+CSS_HM = """
+.hm{display:grid;grid-auto-flow:column;grid-template-rows:repeat(7,12px);grid-auto-columns:12px;gap:3px;overflow-x:auto;padding:2px 0}
+.hm i{border-radius:2px;background:var(--track)}
+.hm i.h1{background:var(--accent);opacity:.3}.hm i.h2{background:var(--accent);opacity:.5}
+.hm i.h3{background:var(--accent);opacity:.72}.hm i.h4{background:var(--accent);opacity:.95}
+.hm-lg{display:flex;gap:4px;align-items:center;font-size:10px;color:var(--faint);margin-top:8px}
+.hm-lg i{width:10px;height:10px;border-radius:2px;background:var(--track)}
+.hm-lg i.l1{background:var(--accent);opacity:.3}.hm-lg i.l2{background:var(--accent);opacity:.5}
+.hm-lg i.l3{background:var(--accent);opacity:.72}.hm-lg i.l4{background:var(--accent);opacity:.95}
+"""
+
+CSS_MAP = """
+.map{width:100%;height:auto;display:block;border-radius:6px;background:var(--track)}
+.map rect{rx:3;stroke:var(--bg);stroke-width:1.5}
+.map a:hover rect,.map a:focus-visible rect{stroke:var(--fg);stroke-width:2}
+.map text{fill:var(--fg);font:10px system-ui,sans-serif;pointer-events:none}
+.map text.sub{opacity:.72;font-size:9px}
+.map-cap{display:flex;gap:12px;flex-wrap:wrap;font-size:10.5px;color:var(--faint);margin-top:8px}
+"""
+
+CSS_TREND = """
+.chart{position:relative;padding-left:46px;margin:14px 0 6px}
+.chart-y{position:absolute;left:0;top:0;bottom:0;width:42px;display:flex;flex-direction:column;justify-content:space-between;
+ font-size:10px;color:var(--faint);text-align:right;font-variant-numeric:tabular-nums;padding-bottom:2px}
+.trend{position:relative;display:flex;align-items:flex-end;gap:2px;height:172px;border-bottom:1px solid var(--line);
+ background:repeating-linear-gradient(to top,transparent 0,transparent 24.6%,var(--line2) 24.6%,var(--line2) 25%)}
+.trend a{flex:1;min-width:3px;height:100%;display:flex;flex-direction:column-reverse;justify-content:flex-start;
+ text-decoration:none;position:relative;transform-origin:bottom;animation:tt-rise .3s cubic-bezier(.4,0,.2,1) backwards}
+.trend a i{display:block;width:100%;min-height:0;border-radius:2px 2px 0 0;background:var(--track);
+ background:linear-gradient(to top,var(--p0) 0,var(--p0) var(--s0),var(--p1) var(--s0),var(--p1) var(--s1),var(--p2) var(--s1),var(--p2) var(--s2),var(--p3) var(--s2),var(--p3) var(--s3),var(--p4) var(--s3),var(--p4) var(--s4))}
+.trend a:hover,.trend a:focus-visible{outline:1px solid var(--accent);outline-offset:1px}
+.trend a .mk{position:absolute;top:-3px;left:50%;transform:translateX(-50%);font-size:9px;line-height:1;color:var(--neg2)}
+.trend a .mk.c{color:var(--warn-fg)}
+.trend .ovl{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.trend .ovl polyline{fill:none;stroke:var(--fg);stroke-width:1.2;opacity:.42;vector-effect:non-scaling-stroke}
+@keyframes tt-rise{from{transform:scaleY(.02);opacity:.35}to{transform:scaleY(1);opacity:1}}
 """
 
 
@@ -865,9 +962,19 @@ def crumb(items):
 
 
 def page(title, crumbs, body, sub="", extra_head=""):
+    # 只注入本屏真正用到的图表样式；纯列表页保持原来的 CSS 体积量级。
+    css = CSS
+    if 'class="viz"' in body:
+        css += CSS_VIZ
+    if 'class="hm"' in body:
+        css += CSS_HM
+    if 'class="map"' in body:
+        css += CSS_MAP
+    if 'class="chart"' in body:
+        css += CSS_TREND
     head = ('<!DOCTYPE html><html lang="zh-CN"><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
-            '<title>%s · Token 轨迹</title><style>%s</style>' % (esc(title), CSS))
+            '<title>%s · Token 轨迹</title><style>%s</style>' % (esc(title), css))
     return (head + '<header><div class="wrap">' + crumb(crumbs) +
             '<h1>%s<span class="badge">完整模式 · 零截断</span></h1>' % esc(title) +
             ('<div class="sub">%s</div>' % esc(sub) if sub else '') +
@@ -920,14 +1027,225 @@ def kpi(items):
         '<div><b>%s</b><span>%s</span></div>' % (esc(v), esc(k)) for k, v in items) + '</div>'
 
 
+# ---------------------------------------------------------------- 可视化原语
+#
+# 全部是「数字 -> CSS/SVG 属性字符串」的纯函数：不引入 <script>、不引入图片、
+# 不新增索引、不缓存大对象。数据一律来自已解析会话或已缓存的会话索引，
+# 因此只在被请求的那一屏产生开销，且复杂度对块数 / 调用数是线性的。
+# 字数是原文统计、token 来自 API usage，二者不同口径，页面统一用 ≈ 标注估算项。
+
+def kh(n):
+    """紧凑数字：图表内的轴标签与块标签，避免长数字撑破小矩形。"""
+    n = int(n or 0)
+    if n >= 1000000:
+        return "%.1fM" % (n / 1000000.0)
+    if n >= 10000:
+        return "%.1fw" % (n / 10000.0)
+    if n >= 1000:
+        return "%.1fk" % (n / 1000.0)
+    return str(n)
+
+
 def compose_bar(comp):
+    """上下文构成：SVG 环 + 明细行。环用 stroke-dasharray 纯数学画，五段共 5 个 circle。"""
     total = sum(comp.values()) or 1
-    bar = "".join('<i style="width:%.2f%%;background:%s"></i>' % (comp[k] / total * 100, PALETTE[k])
-                  for k in ORDER if comp.get(k))
-    legend = "".join('<span><i style="background:%s"></i>%s %s 字 (%.1f%%)</span>' %
-                     (PALETTE[k], TYPES[k], nfmt(comp[k]), comp[k] / total * 100)
-                     for k in ORDER if comp.get(k))
-    return '<div class="compose">%s</div><div class="legend">%s</div>' % (bar, legend)
+    parts = [(k, comp[k]) for k in ORDER if comp.get(k)]
+    if not parts:
+        return '<div class="empty">这个范围内没有可统计的上下文块</div>'
+    arcs, rows, acc = [], [], 0.0
+    for k, v in parts:
+        length = v / total * 100.0
+        gap = min(0.6, length * 0.2)
+        seg = max(0.0, length - gap)
+        # rotate 写进属性而非 CSS：每段独立定位，避免 CSS transform 覆盖 SVG transform
+        arcs.append('<circle cx="21" cy="21" r="15.9155" style="stroke:%s" '
+                    'stroke-dasharray="%.3f %.3f" transform="rotate(%.2f 21 21)"/>' %
+                    (PALETTE[k], seg, 100 - seg, -90 + acc * 3.6))
+        rows.append('<div class="sl"><i style="background:%s"></i>'
+                    '<span class="g">%s</span><b>≈ %s 字</b><em>%.1f%%</em></div>' %
+                    (PALETTE[k], esc(TYPES[k]), nfmt(v), v / total * 100))
+        acc += length
+    svg = ('<svg class="donut" viewBox="0 0 42 42" role="img" '
+           'aria-label="上下文文本构成环形图"><circle class="trk" cx="21" cy="21" r="15.9155"/>' +
+           "".join(arcs) + '</svg>')
+    return ('<div class="viz"><div class="viz-hd"><b>进入上下文的文本构成</b>'
+            '<small>按字符数 · 归档全文口径 · ≈ 为原文统计，非官方 tokenizer</small></div>'
+            '<div class="donut-row"><div class="donut-wrap">%s'
+            '<div class="ctr"><b>%s</b><span>字 · 5 类</span></div></div>'
+            '<div class="slice">%s</div></div></div>' %
+            (svg, kh(total), "".join(rows)))
+
+
+def reserve_bar(st):
+    """归档原文里「仍可能被带上」与「压缩后已退役」的比例，斜纹表示已退役。"""
+    total = st["chars"] or 1
+    retired = min(st.get("retired_chars", 0), total)
+    live = total - retired
+    return ('<div class="reserve"><i class="used" style="width:%.2f%%"></i>'
+            '<i class="retired" style="width:%.2f%%"></i></div>'
+            '<div class="legend"><span><i style="background:var(--accent)"></i>归档活跃 ≈ %s 字</span>'
+            '<span><i style="background:var(--dim)"></i>已退役 ≈ %s 字</span>'
+            '<span>可见峰值 ≈ %s 字</span></div>' %
+            (live / total * 100, retired / total * 100,
+             kh(live), kh(retired), kh(st.get("visible_peak", 0))))
+
+
+def visible_series(d, buckets=48):
+    """可见上下文字数序列：直接读 _derive 的前缀和与单调序列，O(C/step)，不建新索引。"""
+    calls, pref = d["calls"], d["pref"]
+    n = len(calls)
+    if not n:
+        return []
+    step = max(1, n // buckets)
+    out = []
+    for i in range(0, n, step):
+        c = calls[i]
+        lo = min(c.get("vf", 0), c["ctxN"])
+        out.append(pref[c["ctxN"]] - pref[lo])
+    if (n - 1) % step:
+        c = calls[-1]
+        out.append(pref[c["ctxN"]] - pref[min(c.get("vf", 0), c["ctxN"])])
+    return out
+
+
+def sparkline_svg(series):
+    """整段会话的可见上下文走势：一个 polygon + 一个 polyline，无 DOM 列表。"""
+    if len(series) < 2:
+        return '<div class="empty">调用数不足，暂无走势</div>'
+    mx = max(series) or 1
+    pts = " ".join("%.2f,%.2f" % (i * 100.0 / (len(series) - 1), 36 - v / mx * 33)
+                   for i, v in enumerate(series))
+    return ('<svg class="spark" viewBox="0 0 100 38" preserveAspectRatio="none" '
+            'role="img" aria-label="可见上下文字数走势">'
+            '<polygon points="0,38 %s 100,38"/><polyline points="%s"/></svg>' % (pts, pts))
+
+
+def activity_heatmap(ss, weeks=10):
+    """活动日历：只消费已缓存的会话索引（mtime / calls），零额外全库遍历。
+    列 = 周，行 = 周日..周六；5 级色阶，无数据的格子只输出一个空 <i>。"""
+    agg = Counter()
+    for s in ss:
+        day = fmt_ts(s["mtime"] * 1000 if s["mtime"] < 1e11 else s["mtime"], "%Y-%m-%d", "")
+        if day:
+            agg[day] += s["calls"]
+    now = time.localtime()
+    today0 = time.mktime((now.tm_year, now.tm_mon, now.tm_mday, 0, 0, 0, 0, 0, -1))
+    end = today0 + (6 - now.tm_wday) * 86400
+    start = end - (weeks * 7 - 1) * 86400
+    mx = max(agg.values(), default=0) or 1
+    cells = []
+    for i in range(weeks * 7):
+        day = time.strftime("%Y-%m-%d", time.localtime(start + i * 86400))
+        v = agg.get(day, 0)
+        if not v:
+            cells.append("<i></i>")
+            continue
+        lv = 1 if v / mx <= .25 else (2 if v / mx <= .5 else (3 if v / mx <= .75 else 4))
+        cells.append('<i class="h%d" data-tip="%s · %s 次调用"></i>' %
+                     (lv, esc(day), nfmt(v)))
+    return ('<div class="viz"><div class="viz-hd"><b>会话活动日历</b>'
+            '<small>最近 %d 周 · 按会话索引的调用数分色 · 悬停看当日</small></div>'
+            '<div class="hm">%s</div><div class="hm-lg">少 <i></i><i class="l1"></i>'
+            '<i class="l2"></i><i class="l3"></i><i class="l4"></i> 多'
+            '<span style="margin-left:auto">%d 天有活动</span></div></div>' %
+            (weeks, "".join(cells), len(agg)))
+
+
+def _tile(items, x, y, w, h, out, depth=0):
+    """交替方向二分铺砖：按权重把矩形切成两块，长边优先，得到接近方形的分块。
+    比 squarify 更短、更可预测，且不依赖浮点最优化。"""
+    if not items:
+        return
+    if len(items) == 1 or depth > 12 or w < 1 or h < 1:
+        for v, payload in items:
+            out.append((payload, x, y, w, h))
+        return
+    total = sum(v for v, _ in items) or 1
+    acc, k = 0.0, 0
+    for k, (v, _) in enumerate(items):
+        acc += v
+        if acc >= total / 2.0:
+            break
+    cut = k + 1
+    ratio = acc / total
+    if w >= h:
+        w1 = w * ratio
+        _tile(items[:cut], x, y, w1, h, out, depth + 1)
+        _tile(items[cut:], x + w1, y, w - w1, h, out, depth + 1)
+    else:
+        h1 = h * ratio
+        _tile(items[:cut], x, y, w, h1, out, depth + 1)
+        _tile(items[cut:], x, y + h1, w, h - h1, out, depth + 1)
+
+
+def block_treemap(d, sid, limit=24, kind=None):
+    """上下文块地图：面积 ∝ 字数，颜色 = 块类型，同色深浅 = 块内相对大小。
+    只铺最大的 limit 块并把面积归一到这 N 块，其余不画、只在说明里给出覆盖率
+    （否则「其他」会占掉大半画布、把有效信息压成一条边）；点块直跳已有全文路由。
+    kind 非空时只铺一类，等价于零脚本的类别钻取。"""
+    ctx = d["ctx"]
+    if not ctx:
+        return '<div class="empty">这个会话没有上下文块</div>'
+    ranked = sorted(((b["n"], i, b) for i, b in enumerate(ctx)
+                     if kind is None or b["k"] == kind), reverse=True)
+    if not ranked:
+        return '<div class="empty">这个类型下没有上下文块</div>'
+    picked = ranked[:limit]
+    items = [(max(n, 1), (n, i, b)) for n, i, b in picked]
+    laid = []
+    _tile(items, 0, 0, 800, 300, laid)
+    covered = sum(n for n, _, _ in picked)
+    total_arch = d["stats"]["chars"] or 1
+    body = []
+    for (n, idx, b), x, y, w, h in laid:
+        k = b["k"]
+        # 同类深浅二次编码：越大的块越实，避免小格抢视觉重心
+        alpha = .46 + .44 * (min(n / (picked[0][0] or 1), 1.0) ** .5)
+        label = TYPES.get(k, k)
+        tip = "#%d · %s · %s 字" % (idx, label, nfmt(n))
+        color = PALETTE.get(k, PALETTE["tool_result"])
+        inner = ('<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" '
+                 'style="fill:%s;fill-opacity:%.2f"/>' % (x, y, w, h, color, alpha))
+        if w >= 58 and h >= 38:
+            inner += ('<text x="%.1f" y="%.1f">%s</text>' %
+                      (x + 5, y + 15, esc(cut(label, max(4, int(w / 10))))))
+            inner += ('<text class="sub" x="%.1f" y="%.1f">≈ %s 字</text>' %
+                      (x + 5, y + 28, kh(n)))
+        elif w >= 34 and h >= 16:
+            inner += ('<text class="sub" x="%.1f" y="%.1f">%s</text>' %
+                      (x + 4, y + 12, kh(n)))
+        body.append('<a href="/s/%s/b/%d"><title>%s · 点开看全文</title>%s</a>' %
+                    (esc(sid), idx, esc(tip), inner))
+    legend = "".join('<span><i style="background:%s"></i>%s</span>' %
+                     (PALETTE[k], esc(TYPES[k])) for k in ORDER)
+    return ('<svg class="map" viewBox="0 0 800 300" role="img" '
+            'aria-label="上下文块地图，面积与字数成正比">%s</svg>'
+            '<div class="map-cap"><div class="legend">%s</div>'
+            '<span>· 面积 ∝ 字数，颜色 = 类型，深浅 = 相对大小</span>'
+            '<span>· 最大的 %d 块占归档原文 %.1f%%；点块看不截断全文</span></div>' %
+            ("".join(body), legend, len(picked), covered / total_arch * 100))
+
+
+def gradient_segments(r):
+    """只输出 5 个累计百分比作为 CSS 变量；渐变本体常驻 .trend a i。
+    一根柱 = 1 个 <i> + 约 70 字节，而不是 5 个 <i> + 约 250 字节。"""
+    total = r["chars"] or 1
+    acc, out = 0.0, []
+    for j, k in enumerate(ORDER):
+        acc += r["comp"][k]
+        out.append("--s%d:%.2f%%" % (j, min(acc / total * 100.0, 100.0)))
+    return ";".join(out)
+
+
+def trend_overlay(rows):
+    """命中率折线：单个 SVG polyline 叠在柱上，40 个点约 400 字节。"""
+    n = len(rows)
+    if n < 2:
+        return ""
+    pts = " ".join("%.2f,%.2f" % ((i + .5) * 100.0 / n, 100 - r["rate"] * 100)
+                   for i, r in enumerate(rows))
+    return ('<svg class="ovl" viewBox="0 0 100 100" preserveAspectRatio="none" '
+            'aria-hidden="true"><polyline points="%s"/></svg>' % pts)
 
 
 def rate_bar(c, width=True):
@@ -954,7 +1272,7 @@ def call_row(d, c, sid, show_turn=True):
              ('<span class="chip t" style="margin-left:6px">轮 %d</span>' % c["turn"]) if show_turn and c["turn"] else "",
              nfmt(c["pin"]), nfmt(c["pin"] - c["hit"]), nfmt(c["pout"]), pct,
              c.get("credit") or 0,
-             '<span style="color:#378ADD">详情 →</span>'))
+             '<span style="color:var(--accent)">详情 →</span>'))
 
 
 def turn_row(d, t, sid):
@@ -965,7 +1283,7 @@ def turn_row(d, t, sid):
             '<span class="num">%d 次</span><span class="num">in %s</span>'
             '<span class="num">命中 %s</span><span class="num">out %s</span>'
             '<span class="num credit">%.2f 分</span>'
-            '<span class="num" style="color:#378ADD">展开 →</span></a>' %
+            '<span class="num" style="color:var(--accent)">展开 →</span></a>' %
             (esc(sid), b["i"], b["i"], esc(b["q"] or "（只有系统注入）"),
              '<span class="chip cold" style="margin-left:6px">冷启动</span>' if b["cold"] else "",
              b["calls"], nfmt(b["pin"]), "%.0f%%" % (b["rate"] * 100),
@@ -1057,7 +1375,10 @@ def v_session(q, sid):
                  '<b>归档原文</b>是全部块总字数，<b>可见峰值</b>才是单次请求真正带上的最大值。'
                  '<a href="/s/%s/compact">打开压缩事件校验页核对</a></div>' %
                  (st["compactions"], nfmt(st["retired_chars"]), esc(sid)))
-    body += '<h3>进入上下文的文本构成 <span class="fine">按字符数，归档全文口径</span></h3>' + compose_bar(st["compose"])
+    body += compose_bar(st["compose"])
+    body += ('<div class="viz"><div class="viz-hd"><b>上下文规模与走势</b>'
+             '<small>归档 / 退役 · 可见字数走势按调用降采样 · ≈ 为原文统计</small></div>' +
+             reserve_bar(st) + sparkline_svg(visible_series(d)) + '</div>')
     if st.get("skipped_lines"):
         body += ('<div class="warn">源文件有 %d 行无法解析（多半是 WorkBuddy 写入中途被读到），'
                  '已跳过；本页统计与上下文不含这些行。刷新页面可重试。</div>' % st["skipped_lines"])
@@ -1068,11 +1389,12 @@ def v_session(q, sid):
     body += ('<form class="searchbox" method="get" action="/s/%s/search">'
              '<input type="text" name="q" placeholder="只在这个会话里搜（含 58 万字的长块）">'
              '<button type="submit">搜索</button></form>' % esc(sid))
-    body += ('<div class="tabs"><a class="btn" href="/s/%s/find">按块检索（列出命中块 + 跳到命中分片）</a>'
+    body += ('<div class="tabs"><a class="btn" href="/s/%s/map">上下文块地图</a>'
+             '<a class="btn" href="/s/%s/find">按块检索（列出命中块 + 跳到命中分片）</a>'
              '<a class="btn" href="/s/%s/tools">工具与命令</a>'
              '<a class="btn" href="/s/%s/trend">上下文趋势</a>'
              '<a class="btn" href="/s/%s/compact">压缩事件校验</a></div>' %
-             (esc(sid), esc(sid), esc(sid), esc(sid)))
+             ((esc(sid),) * 5))
     body += ('<div class="tabs"><a class="btn %s" href="/s/%s?view=turns">按轮浏览</a>' %
              ("on" if view == "turns" else "", esc(sid)) +
              '<a class="btn %s" href="/s/%s?view=calls">按调用浏览</a>' %
@@ -1191,7 +1513,7 @@ def v_call(q, sid, seq):
                  '<span class="idx">#%d</span><span class="chip %s">%s</span>'
                  '<span class="chip t">%s</span>'
                  '<span class="grow"><b style="font-weight:500">%s</b>%s</span>'
-                 '<span class="num">%s 字</span><span class="num" style="color:#378ADD">全文 →</span></a>' %
+                 '<span class="num">%s 字</span><span class="num" style="color:var(--accent)">全文 →</span></a>' %
                  (esc(sid), j, seq, j, st, G.CHIP[st], TYPES.get(b["k"], b["k"]),
                   esc(b["l"]), cmd, nfmt(b["n"])))
     body += pager("/s/%s/c/%d" % (sid, seq), q, p, PAGE_BLOCKS, len(chosen), "块")
@@ -1201,7 +1523,7 @@ def v_call(q, sid, seq):
         for k, seg in enumerate(c["out"]):
             body += ('<a class="row" href="/s/%s/o/%d?seg=%d" style="grid-template-columns:70px 1fr 100px 70px">'
                      '<span class="chip t">%s</span><span class="grow">%s</span>'
-                     '<span class="num">%s 字</span><span class="num" style="color:#378ADD">全文 →</span></a>' %
+                     '<span class="num">%s 字</span><span class="num" style="color:var(--accent)">全文 →</span></a>' %
                      (esc(sid), seq, k, esc(seg["kind"]), esc(seg["label"]),
                       nfmt(len(seg["text"]))))
     nav = ('<div class="tabs">'
@@ -1518,8 +1840,46 @@ def v_tools(q, sid=None):
                 sub="工具 usage 聚合 · Shell 程序 best-effort 提取")
 
 
+def v_map(q, sid):
+    """上下文块地图：按需页面，块排序只在这一屏发生，不影响其它路由的体积与耗时。"""
+    d = STORE.get(sid)
+    st = d["stats"]
+    kind = qstr(q, "k")
+    if kind not in ORDER:
+        kind = ""
+    limit = qint(q, "n", 24, 4, 48)
+    base = "/s/%s/map" % sid
+    crumbs = [("索引", "/"), (d["title"][:24], "/s/%s" % sid), ("上下文块地图", "")]
+    biggest = max((b["n"] for b in d["ctx"]), default=0)
+    tabs = '<div class="tabs"><a class="btn %s" href="%s">全部类型</a>' % (
+        "on" if not kind else "", esc(base))
+    for k in ORDER:
+        tabs += '<a class="btn %s" href="%s">%s</a>' % (
+            "on" if kind == k else "", esc(base + "?" + urlencode({"k": k})), esc(TYPES[k]))
+    tabs += '</div>'
+    body = kpi([("上下文块", nfmt(st["blocks"])),
+                ("归档原文", nfmt(st["chars"]) + " 字"),
+                ("最大单块", nfmt(biggest) + " 字"),
+                ("本页铺砖", "%d 块" % limit)])
+    body += tabs
+    body += ('<div class="viz"><div class="viz-hd"><b>上下文块地图</b>'
+             '<small>面积 ∝ 原文字符数 · 点块看不截断全文</small></div>' +
+             block_treemap(d, sid, limit, kind or None) + '</div>')
+    body += ('<div class="note"><b>口径与边界</b>：面积是块的原文字符数，不是官方 token 归因；'
+             '本图按「归档全文」口径统计，<b>不等于某次请求真正带上的上下文</b>。'
+             '要看单次调用的可见块与缓存边界，去<a href="/s/%s/trend">上下文趋势</a>点柱，'
+             '或直接打开该次调用的块清单。WorkBuddy 会话记录不含逐消息 token 拆分、'
+             '工具 schema 体积与上下文替换（surfaceOp）事件，因此无法像 dsh 那样'
+             '重建任意历史时刻的上下文快照；这里只做可得数据范围内的近似，缺失项一律不补造。</div>'
+             % esc(sid))
+    body += ('<div class="tabs"><a class="btn" href="/s/%s">← 会话概览</a>'
+             '<a class="btn" href="/s/%s/trend">上下文趋势</a></div>' % (esc(sid), esc(sid)))
+    return page("上下文块地图", crumbs, body,
+                sub="按需渲染 · 零脚本钻取 · 字数为原文统计")
+
+
 def v_trend(q, sid):
-    """逐调用上下文演化：纯 CSS 堆叠柱 + 数值表，零 JavaScript。"""
+    """逐调用上下文演化：纯 CSS 色带柱 + SVG 折线 + 数值表，零 JavaScript。"""
     d = STORE.get(sid)
     g = qstr(q, "g", "call")
     if g not in ("call", "turn"):
@@ -1548,38 +1908,48 @@ def v_trend(q, sid):
                  ("最大可见字", nfmt(mx)),
                  ("最大单步变化", nfmt(mxd)),
                  ("冷启动断点", nfmt(len(d["cold"])))])
-    body += ('<div class="note">每根柱是一次%s的<b>可见上下文</b>（字数为估算，'
-             '不含系统提示与工具 schema）。累计模式按 %d 类内容堆叠；'
-             '净变化模式蓝色为增长、红色为回落，高度按 |Δ| 归一化。'
-             '悬停看数值，点柱或表格行直达该次调用的完整块清单。'
-             '红点标记命中率骤降的冷启动调用，琥珀点（◆）标记上下文压缩：'
+    body += ('<div class="note">每根柱是一次%s的<b>可见上下文</b>（≈ 字数为原文统计，'
+             '不含系统提示与工具 schema，非官方 tokenizer）。'
+             '累计模式把 %d 类内容压成<b>一条色带</b>，净变化模式蓝色为增长、红色为回落；'
+             '高度按本页最大值归一化（翻页时刻度随本页数据重标定，跨页比高低请看左侧刻度），'
+             '左侧为刻度、背景横线为 25%% 网格。'
+             '细折线是缓存命中率（顶 = 100%%）。悬停看数值，点柱或表格行直达该次调用的完整块清单。'
+             '顶部 ● 标记命中率骤降的冷启动调用，✂ 标记上下文压缩：'
              '那一柱可见字数会断崖下降，是历史被摘要替换，不是缓存失效。</div>' %
              ("模型调用" if g == "call" else "轮（取该轮最后一次调用）", len(ORDER)))
     body += '<div class="legend">' + "".join(
         '<span><b style="background:%s"></b>%s</span>' % (PALETTE[k], esc(TYPES[k]))
-        for k in ORDER) + '</div>'
-    body += '<div class="trend">'
+        for k in ORDER) + '<span><b style="background:var(--fg);opacity:.45"></b>命中率折线</span></div>'
+    # 一根柱 = 一个 <i> + 一条 linear-gradient；网格线交给 .trend 的背景，刻度只输出文字。
+    # 纵轴按「本页」重标定：全局峰值常出现在很后面的调用，若用它归一化，
+    # 前几页的柱子会被压成底部一条边，看不出构成。KPI 仍保留全局峰值。
+    if mode == "total":
+        scale = max((r["chars"] for r in shown), default=1) or 1
+    else:
+        scale = max((abs(r["delta"]["chars"]) for r in shown), default=1) or 1
+    ticks = "".join('<span>%s</span>' % kh(scale * f) for f in (1, .75, .5, .25, 0))
+    body += '<div class="chart"><div class="chart-y">%s</div><div class="trend">' % ticks
     for r in shown:
         if mode == "total":
-            segs = "".join('<i style="height:%.3f%%;background:%s"></i>' %
-                           (r["comp"][k] / mx * 100, PALETTE[k])
-                           for k in ORDER if r["comp"][k])
+            h = r["chars"] / scale * 100
+            extra = gradient_segments(r)
             tip = "#%d · %s 字 · 命中 %.0f%%" % (
                 r["seq"], nfmt(r["chars"]), r["rate"] * 100)
         else:
             dv = r["delta"]["chars"]
-            h = abs(dv) / mxd * 100 if dv else 0
-            segs = '<i style="height:%.3f%%;background:%s"></i>' % (
-                max(h, 0.6), "#378ADD" if dv >= 0 else "#E24B4A")
+            h = abs(dv) / scale * 100 if dv else 0
+            extra = "background:%s" % ("var(--accent)" if dv >= 0 else "var(--neg2)")
             tip = "#%d · Δ %s%s 字" % (
                 r["seq"], "+" if dv >= 0 else "-", nfmt(abs(dv)))
-        if r["cold"]:
-            segs += '<i style="height:3px;background:#E24B4A"></i>'
+        segs = '<i style="height:%.3f%%;%s"></i>' % (max(h, .6), extra)
+        mark = ""
         if r.get("compact"):
-            segs += '<i style="height:3px;background:#BA7517"></i>'
+            mark = '<span class="mk c">✂</span>'
             tip += " · 此处发生上下文压缩"
-        body += '<a href="%s" title="%s">%s</a>' % (esc(r["href"]), esc(tip), segs)
-    body += '</div>'
+        elif r["cold"]:
+            mark = '<span class="mk">●</span>'
+        body += '<a href="%s" title="%s">%s%s</a>' % (esc(r["href"]), esc(tip), segs, mark)
+    body += trend_overlay(shown) + '</div></div>'
     body += ('<div class="trow hd"><span>#调用</span><span>轮</span><span>块数</span>'
              '<span class="num">可见字</span><span class="num">Δ 字</span>'
              '<span class="num">命中</span><span class="num">积分</span>'
@@ -1595,7 +1965,7 @@ def v_trend(q, sid):
                  (esc(r["href"]), r["seq"],
                   " ◆" if r.get("compact") else (" ●" if r["cold"] else ""), r["turn"],
                   nfmt(r["blocks"]), nfmt(r["chars"]),
-                  "#378ADD" if dv >= 0 else "#A32D2D",
+                  "var(--accent)" if dv >= 0 else "var(--neg)",
                   "+" if dv >= 0 else "-", nfmt(abs(dv)),
                   r["rate"] * 100, r["credit"], "+" if dc >= 0 else "", dc))
     body += pager(base, q, p, PAGE_CALLS, len(rows),
@@ -1653,7 +2023,7 @@ def v_compact(q, sid):
             return ('<div class="trow" style="grid-template-columns:150px 1fr 1fr 1fr">'
                     '<span>%s</span><span class="num">%s</span><span class="num">%s</span>'
                     '<span class="num" style="color:%s">%s</span></div>' %
-                    (label, bv, av, "#378ADD" if good else "#A32D2D", pct))
+                    (label, bv, av, "var(--accent)" if good else "var(--neg)", pct))
         if r["before"] and r["after"]:
             b, a = r["before"], r["after"]
             body += line("真实输入 tok（接口原值）", nfmt(b["pin"]), nfmt(a["pin"]),
@@ -1684,7 +2054,8 @@ def v_stats(q):
     t0 = time.time()
     with CALC_LOCK:
         st = global_stats()
-        compact_sid = next((s["id"] for s in STORE.sessions()
+        ss = STORE.sessions()
+        compact_sid = next((s["id"] for s in ss
                             if STORE.get(s["id"])["compacts"]), "")
     ms = int((time.time() - t0) * 1000)
     body = kpi([("会话", nfmt(st["sessions"])), ("工作区", nfmt(st["workspaces"])),
@@ -1696,7 +2067,8 @@ def v_stats(q):
                 ("未命中 tok", nfmt(st["miss"])), ("输出 tok", nfmt(st["pout"])),
                 ("累计积分", "%.2f" % st["credit"]),
                 ("积分/万未命中", "%.3f" % st["unit_miss"])])
-    body += '<h3>全库上下文构成 <span class="fine">归档全文口径</span></h3>' + compose_bar(st["compose"])
+    body += compose_bar(st["compose"])
+    body += activity_heatmap(ss)
     body += ('<div class="note">上面每个数字都是<b>全量</b>算出来的（%d ms，遍历 %d 个会话全文），'
              '不是抽样、不是截断后的静态页统计。<b>归档原文</b>是全部块的总字数，'
              '包含已被压缩替换、但保留下来供全文检索的历史；'
@@ -1717,7 +2089,7 @@ def v_stats(q):
     for x in st["top_blocks"]:
         body += ('<a class="row" href="/s/%s/b/%d" style="grid-template-columns:64px 1fr 110px 76px">'
                  '<span class="idx">#%d</span><span class="grow">%s · %s</span>'
-                 '<span class="num">%s 字</span><span class="num" style="color:#378ADD">全文 →</span></a>' %
+                 '<span class="num">%s 字</span><span class="num" style="color:var(--accent)">全文 →</span></a>' %
                  (esc(x["sid"]), x["idx"], x["idx"], TYPES.get(x["kind"], x["kind"]),
                   esc(x["label"]), nfmt(x["chars"])))
     body += '<h2>缓存冷启动断点 <small>共 %d 次；按当次输入量排序，列前 30</small></h2>' % len(st["cold"])
@@ -2056,6 +2428,8 @@ ROUTE_SPEC = [
       "GET /s/<sid>/tools?tool=&view=", "会话内工具与命令聚合", "/s/{sid}/tools"),
     H(r"^/s/([0-9A-Za-z_-]+)/trend$", lambda q, m: v_trend(q, m.group(1)),
       "GET /s/<sid>/trend?g=&mode=&p=", "逐调用上下文趋势（累计组成 / 净变化）", "/s/{sid}/trend"),
+    H(r"^/s/([0-9A-Za-z_-]+)/map$", lambda q, m: v_map(q, m.group(1)),
+      "GET /s/<sid>/map?k=&n=", "上下文块地图（面积 ∝ 字数，点块跳全文）", "/s/{sid}/map"),
     H(r"^/s/([0-9A-Za-z_-]+)/compact$", lambda q, m: v_compact(q, m.group(1)),
       "GET /s/<sid>/compact", "压缩事件：真实账单与修正前后统计对照", "/s/{sid}/compact"),
     H(r"^/s/([0-9A-Za-z_-]+)/calls$", lambda q, m: v_session(dict(q, view=["calls"]), m.group(1)),
