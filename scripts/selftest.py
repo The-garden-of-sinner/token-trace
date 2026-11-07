@@ -95,13 +95,25 @@ def main():
         print("  会话 %d 个，取最大会话 %s… 作样例" % (len(sessions), sid[:8]))
 
         print("== HTML 路由（状态码 / 体积 / 零脚本）==")
+        # 零脚本按严格口径：除了 <script>，还要没有内联事件、javascript: URL、
+        # 外链资源与 <link>（避免靠 CDN 偷偷引入脚本或样式）。
+        RE_EVENT = re.compile(rb"<[^>]+\son[a-z]+\s*=", re.I)
+        RE_EXT = re.compile(rb"""(?:src|href)\s*=\s*["'](?:https?:)?//""", re.I)
+        RE_LINK = re.compile(rb"<link\b", re.I)
         for r in html_items:
             path = r["sample"].replace("{sid}", sid)
             st, body = get(path)
             sc = body.count(b"<script")
-            check(st == 200 and sc == 0 and len(body) <= MAX_HTML,
-                  "%-38s %d %6.1f KB script=%d" %
-                  (path[:38], st, len(body) / 1024, sc))
+            ev = len(RE_EVENT.findall(body))
+            ext = len(RE_EXT.findall(body)) + len(RE_LINK.findall(body))
+            jsu = body.lower().count(b"javascript:")
+            m = re.search(rb"HTML ([\d.]+) KB", body)
+            kb_ok = bool(m) and abs(float(m.group(1)) - len(body) / 1024.0) <= 0.15
+            check(st == 200 and sc == 0 and ev == 0 and ext == 0 and jsu == 0
+                  and len(body) <= MAX_HTML and kb_ok,
+                  "%-34s %d %6.1f KB script=%d 事件=%d 外链=%d 页脚口径=%s" %
+                  (path[:34], st, len(body) / 1024, sc, ev, ext,
+                   "一致" if kb_ok else "偏差"))
 
         print("== JSON API（统一信封）==")
         for r in api_items:
@@ -182,14 +194,85 @@ def main():
 
         print("== 分页越界一致性 ==")
         paged = ["/s/{sid}?view=calls&p=999", "/s/{sid}/c/1?p=999",
+                 "/s/{sid}/t/1?p=999",
                  "/find?q=token&p=999", "/tools?p=999",
-                 "/s/{sid}/trend?p=999"]
+                 "/s/{sid}/trend?p=999", "/?p=999"]
         for path in paged:
             st, body = get(path.replace("{sid}", sid))
             rows = body.count(b'class="row') + body.count(b'class="trow')
             check(st == 200 and rows > 0,
                   "%-40s %d 数据行=%d（越界不空表）" %
                   (path[:40], st, rows))
+
+        print("== 首页：放大索引 / 空库 / 缓存自适应 ==")
+        orig_store = T.STORE
+
+        class _FakeStore(object):
+            """只实现 v_index 需要的最小接口，用来放大索引而不碰真实数据。"""
+            def __init__(self, ss):
+                self._ss = ss
+                self.cap = 32
+
+            def sessions(self, refresh=False):
+                return self._ss
+
+            def get(self, sid):
+                raise KeyError(sid)
+
+        def _sess(i):
+            return {"id": "sid-%04d-abcd" % i, "path": "p",
+                    "ws": "D:/ws/g%d/p%d" % (i % 3, i % 5), "title": "会话 %d" % i,
+                    "model": "m%d" % (i % 3), "models": {"m%d" % (i % 3): 1000 + i},
+                    "mtime": time.time() - i * 3600, "calls": 10, "turns": 5,
+                    "pin": 1000 + i, "pout": 500, "credit": 1.5, "meta_ok": True,
+                    "is_sub": False, "agent": "", "agent_calls": 0,
+                    "first_ts": 0, "root": ""}
+
+        try:
+            for n in (33, 132, 400):
+                T.STORE = _FakeStore([_sess(i) for i in range(n)])
+                h = T.v_index({}).encode("utf-8")
+                rows = h.count(b'class="row')
+                has_pager = b'class="pager"' in h
+                check(len(h) <= MAX_HTML and has_pager == (n > T.PAGE_SESSIONS)
+                      and rows <= T.PAGE_SESSIONS,
+                      "放大索引 %3d 会话：首页 %5.1f KB / 本页 %d 行 / 分页=%s"
+                      % (n, len(h) / 1024.0, rows, "有" if has_pager else "单页隐藏"))
+
+            T.STORE = _FakeStore([])
+            h = T.v_index({})
+            check(".hero{" in h and ".toolbar{display" in h and ".kpi{" in h,
+                  "空库首页仍注入 CSS_INDEX（hero / toolbar / kpi 不裸样式）")
+
+            # 缓存自适应：cap 覆盖全部会话，全库统计第二次访问不应再解析
+            st = T.Store(0)
+            st._index = [{"id": "s%d" % i, "path": "p", "ws": "w", "mtime": 0}
+                         for i in range(33)]
+            st._index_at = time.time() + 9999
+            st.sessions()
+            check(st.cap >= 33, "自适应缓存覆盖全部会话（cap=%d / 33）" % st.cap)
+            check(T.CACHE_SESSIONS == 0,
+                  "默认 --cache 为自适应（0），不是写死的固定值")
+        finally:
+            T.STORE = orig_store
+
+        print("== 命中块折叠不丢块行 ==")
+        cd0 = T.STORE.get(sid)
+        checked_fold = False
+        for n in range(1, min(20, len(cd0["calls"])) + 1):
+            st, body = get("/s/%s/c/%d" % (sid, n))
+            txt = body.decode("utf-8", "replace")
+            if "块缓存命中" not in txt:
+                continue
+            o = T.call_outline(cd0, n - 1)
+            rows = len(re.findall(r'href="/s/%s/b/\d+' % re.escape(sid), txt))
+            check(rows == o["n"],
+                  "调用 #%d 折叠后块行完整（%d / %d 块，块号区间与明细一致）"
+                  % (n, rows, o["n"]))
+            checked_fold = True
+            break
+        if not checked_fold:
+            print("  SKIP 样例会话没有连续命中块，跳过折叠完整性检查")
 
         print("== 运行期零写盘 ==")
         check(not os.path.isdir(os.path.join(ROOT, "__pycache__")),

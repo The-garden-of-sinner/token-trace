@@ -130,7 +130,7 @@
 **Linux（Debian / Ubuntu / 银河麒麟 / 统信 UOS / Deepin）**
 
 ```bash
-V=1.1.3   # 换成 Release 页上的最新版本号
+V=1.1.4   # 换成 Release 页上的最新版本号
 curl -fLO "https://github.com/The-garden-of-sinner/token-trace/releases/download/v$V/token-trace_${V}_all.deb"
 sudo dpkg -i "token-trace_${V}_all.deb"
 token-trace                     # 起服务并自动打开浏览器
@@ -210,7 +210,7 @@ TRACE_NO_BROWSER=1 ./start.sh  # 只起服务、不开浏览器（无头 / 自�
 ```bash
 python3 trace_server.py                       # http://127.0.0.1:8765/
 python3 trace_server.py --port 9000 --warm    # 换端口并预解析全部会话
-python3 trace_server.py --cache 4             # 内存吃紧时只缓存 4 个会话
+python3 trace_server.py --cache 4             # 内存吃紧时只缓存 4 个会话（会让 /stats 变慢）
 
 python3 gen_trace.py                          # 静态模式：全部会话 → trace/
 python3 gen_trace.py path/to/x.jsonl -o out.html
@@ -292,7 +292,8 @@ ar + `control.tar.gz` + `data.tar.gz` 容器，因此与 `dpkg-deb` 产物同构
 
 | 版本 | 主要内容 |
 | --- | --- |
-| **v1.1.3** | 轮来源标签（你发的 / 后台任务 / 压缩摘要 / 系统注入 / 内部消息）与 `?kind=` 筛选，非真人输入改显可读摘要；首页「会话 · 子代理关系」面板与会话列表子代理标签；新增 `scripts/build_deb.py`（无 `dpkg-deb` 时用纯标准库构建等价 deb）；Release 补齐 bat / deb / SHA256SUMS 附件。自检 64 项 |
+| **v1.1.4** | 社区复测反馈修复：`--cache` 默认改为按会话数自适应（cap < 会话数会让 `/stats` 每轮全部重解析，33 会话 / cap 32 实测约 5 s）；首页会话列表分页（此前 132 个会话时 94.8 KB 会顶破 80 KB 硬闸）；`page(need=...)` 显式声明样式，空库不再丢 `.hero` / `.toolbar`；页脚体积改算整页响应；源文件体积 / 长块字数改为运行时计算；修面包屑双重转义、模型环残差与 DST 分桶。自检增至 73 项 |
+| v1.1.3 | 轮来源标签（你发的 / 后台任务 / 压缩摘要 / 系统注入 / 内部消息）与 `?kind=` 筛选，非真人输入改显可读摘要；首页「会话 · 子代理关系」面板与会话列表子代理标签；新增 `scripts/build_deb.py`（无 `dpkg-deb` 时用纯标准库构建等价 deb）；Release 补齐 bat / deb / SHA256SUMS 附件。自检 64 项 |
 | v1.1.2 | 前端可视化升级：设计令牌 + 深浅色、SVG 构成环 / 日历热力图 / 块地图、渐变色带趋势柱、按需 CSS 注入；跨文档过渡动效与「返回上一层」；连续命中块折叠、命中率一位小数、首页全库画像、检索与菜单重构；模型名改从 jsonl 的 `providerData` 按输入 token 聚合（不再依赖 `workbuddy.db`），链接配色与首页 / 菜单 / 折叠视觉统一，工具条重排与过渡节奏放缓；修复单轮详情无分页撑破 80 KB 硬闸。自检 64 项 |
 | v1.1.1 | 修复 Windows 调用详情页 500（毫秒时间戳未归一，统一 `fmt_ts()` 并加越界保护，自检增至 63 项）；新增引用 Release 的一键安装、项目图标与 `TokenTrace.bat shortcut` 带图标快捷方式、`SHA256SUMS` 完整性校验与可选签名入口 |
 | v1.1.0 | 工具与命令聚合、逐调用上下文趋势与 Delta、声明式路由表 `ROUTE_SPEC` + 58 项固化自检、**压缩感知统计修复**（可见区间 `[vf, ctxN)`、压缩事件校验页、独立复核脚本）；文档补齐三部分单价与峰谷倍率口径 |
@@ -374,7 +375,7 @@ curl -s "http://127.0.0.1:8765/api/s/<sid>/compact"
 | `--port` | `TRACE_PORT` | `8765` | 监听端口，启动器同样支持 |
 | `--host` | — | `127.0.0.1` | 绑定非本机地址时**必须**同时给 `--token`，否则拒绝启动 |
 | `--token` | `TRACE_TOKEN` | 空 | 访问令牌；非空时所有请求都要带 `?token=` 或 `Authorization: Bearer` |
-| `--cache` | — | `32` | LRU 保留几个已解析会话 |
+| `--cache` | — | `0`（自适应） | LRU 保留几个已解析会话；0 = `max(32, 会话数 + 8)`，上限 256 |
 | `--warm` | — | 关 | 启动时预解析全部会话（约 3–7 s，换更快的首次搜索） |
 | 不开浏览器 | `TRACE_NO_BROWSER=1` | — | 无头 / 自动化场景 |
 | 数据目录 | `WORKBUDDY_HOME` | `~/.workbuddy` | Windows 启动器也支持 `-WorkBuddyHome` |
@@ -574,7 +575,9 @@ token（`providerData.requestModelName`）。db 不可读时只影响标题 / �
 | 构成环 | `compose_bar()` 用 `stroke-dasharray` 画 5 段，配明细行与 ≈ 口径标注 | 5 个 `<circle>` |
 | 渐变色带柱 | `gradient_segments()` 只输出 5 个累计百分比 `--s0..--s4`，渐变本体写在 `.trend a i` 一条规则里 | 40 根柱从约 200 个 DOM 降到 40 个，趋势页反而更小 |
 | 热力图 / 块地图 / 走势线 | `activity_heatmap()` 复用已缓存的会话索引；`block_treemap()` 只在 `/map` 页排序一次块列表；`visible_series()` 直接读 `_derive()` 的前缀和 | 不新增索引、不缓存大对象 |
-| 按需 CSS | `page()` 按 body 是否出现 `class="viz"` / `hm` / `map` / `chart` 决定拼哪几段样式 | 检索 / 全文页不带图表 CSS |
+| 按需 CSS | `page(need=...)` 显式声明 + body 里 `class="viz"` / `hm` / `map` / `chart` 探测，二者取并集；首页固定声明 `need=("index",)` | 检索 / 全文页不带图表 CSS；空库首页也不会丢 `.hero` / `.toolbar` |
+| 首页分页 | `v_index()` 先排序再按 `PAGE_SESSIONS=40` 切片，`clamp_p` + `pager` 保留 `sort` / `ws` 参数 | 单页体积与会话总数无关（400 会话仍 46.8 KB） |
+| 缓存容量 | `Store(0)` 自适应 `cap = max(32, 会话数 + 8)`，上限 256；索引刷新时同步 | 避免 cap < 会话数 导致的全库重解析（33 会话 / cap 32 时 /stats 约 5 s → 40 ms） |
 | 过渡 | `@view-transition{navigation:auto}` 跨文档淡入、`.kpi` 单独 `view-transition-name` 做数字区 morph、`@keyframes` 入场、`::details-content` 展开高度渐变；全站共用 `--ease: cubic-bezier(.22,.68,.24,1)`，淡出 240ms / 淡入 460ms / 入场 500–600ms / 展开 400ms，淡出短于淡入避免拖影 | 纯 CSS，服务端零开销；`prefers-reduced-motion` 一并关闭 |
 | 返回上一层 | `back_link()` 从面包屑倒数第二项**往前找第一个带链接的层级**（不带 `ref` 的块全文页中间一级无链接，会回退到会话概览），输出固定胶囊 + 页脚文字链接 | 一处推导覆盖全部视图，每页多一个 `<a>` |
 | 命中块折叠 | `cache_hit_span()` 用前缀和 + `bisect` 求命中前缀 `[lo, hi]`，`hit_fold_html()` 输出原生 `<details>`；折叠态为紧凑胶囊、展开态铺全宽，箭头旋转 + 高度渐变 | O(log B) / 次，不逐块遍历 |
@@ -633,15 +636,18 @@ token（`providerData.requestModelName`）。db 不可读时只影响标题 / �
 都从它生成。新增端点只需加一行，不会再出现「页面能开但文档没写」或反过来。
 
 ```bash
-python3 -B scripts/selftest.py                    # 63 项检查
+python3 -B scripts/selftest.py                    # 73 项检查
 TRACE_TEST_PORT=8901 python3 -B scripts/selftest.py
 ```
 
 自检脚本起临时服务（默认 8899）后依次核对：声明无重复且与分发逐条一致、
-全部 view 可调用、18 个 HTML 路由的状态码 / 单页 ≤ 80 KB / 零 `<script>`、
-17 个 API 的 `{ok:true}` 信封、`/api` 文档覆盖全部声明、
+全部 view 可调用、18 个 HTML 路由的状态码 / 单页 ≤ 80 KB / 严格零脚本
+（`<script>`、内联事件、`javascript:`、外链资源与 `<link>` 全为 0）/ 页脚体积与
+实际响应一致、17 个 API 的 `{ok:true}` 信封、`/api` 文档覆盖全部声明、
 **压缩感知专项**（方向一致、旧块仍可打开、区间外返回 `None`、
-真实 `pin` 不受影响、未压缩会话 `vf` 全 0）、5 个分页路由 `p=999` 不出现空表、
+真实 `pin` 不受影响、未压缩会话 `vf` 全 0）、7 个分页路由 `p=999` 不出现空表、
+首页放大索引 33 / 132 / 400 会话均 ≤ 80 KB、空库首页样式完整、
+缓存容量自适应、命中块折叠后块行不丢、
 运行期零写盘与 `write_files=false`。结束自动 `POST /shutdown` 退出，
 有失败返回 1。分页统一走 `clamp_p()`，与 `pager()` 同步夹取页码。
 
@@ -741,10 +747,17 @@ TRACE_TEST_PORT=8901 python3 -B scripts/selftest.py
 比测量进程多约 4 MB（HTTP 线程栈与请求期堆峰值）。占 15.1 GiB 内存的 0.57%，
 只访问 1 个最大会话时是 60.6 MB。
 
+**`--cache` 的默认值是自适应的，这一点很关键。** `/stats`、块检索这类路径要逐个访问
+全部会话；如果 cap 小于会话数，LRU 每轮淘汰的恰好是下一轮开头要用的会话，缓存等于
+完全失效。实测 33 个会话时 `--cache 32` 让 `/stats` 每次都重新解析全部会话（约 5 s），
+`--cache 33` 降到 40 ms 量级；本机 11 个会话用 `--cache 2` 复现同一现象
+（每次约 300 ms，默认自适应后降到 3–17 ms）。所以默认
+`cap = max(32, 会话数 + 8)`，上限 256；会话数超过上限时才退回 LRU，代价是 `/stats`
+每次重新解析超出部分。
+
 **`--cache` 不是内存硬上限。** 实测 `--cache 4` 遍历完 29 个会话后，逻辑上只留 4 个，
 RSS 仍是 84.0 MB —— Python 不把 arena 归还 OS。它限制的是缓存条目数与重复解析，
 不是进程峰值；想真正压低驻留得限制峰值（少用会遍历全部会话的 `/stats`）或重启服务。
-默认全缓存反而划算：内存一样涨到 ~88 MB，还省掉反复解析。
 
 `GET /api/health` 随时会自报 `pid` / `rss_mb` / `uptime_s` / `cached_sessions` / `write_files`。
 
@@ -902,7 +915,10 @@ RSS 仍是 84.0 MB —— Python 不把 arena 归还 OS。它限制的是缓存�
 18. **零脚本下折叠内容仍占 HTML 字节**：`<details>` 收起的部分依然在响应里，
     「按调用浏览」每页 40 行折叠摘要约 +8 KB；逐块清单放在调用详情页（那里同样折叠），
     不在此重复铺开。单轮详情 `/s/<sid>/t/<n>` 已补分页，避免一轮几百次调用把单页
-    撑过 80 KB 硬闸（长会话实测修复前 89.4 KB、修复后回到 56 KB 量级）。
+    撑过 80 KB 硬闸（长会话实测修复前 89.4 KB、修复后回到 56 KB 量级）；首页会话
+    列表同样按 40 条/页分页，单页体积与会话总数无关（放大索引 400 个会话仍 46.8 KB）。
+    页脚「本页 HTML x KB」按**整页响应字节**计算（含内联 CSS 与 header），与 80 KB
+    硬闸同口径。
     首页「按模型」环的模型名来自 jsonl 的 `providerData`，与 `workbuddy.db` 是否
     可读无关；只有整库都没有模型名时才显示空态，不画「未知模型 100%」的单色环。
 19. **轮来源分类依赖客户端写入的字段**：判定用的是 `providerData.isCompacted` /
@@ -915,6 +931,10 @@ RSS 仍是 84.0 MB —— Python 不把 arena 归还 OS。它限制的是缓存�
     子代理、或日志时间戳缺失时可能匹配不准；匹配不上的子代理会单独列出并标注
     「未匹配到主会话」。子代理会话本身、token 与调用统计是**事实**，只有归属是推断。
     另外子代理的 token / 积分在独立会话里统计，不会自动汇总到主会话。
+21. **缓存容量自适应有上限**：默认 `cap = max(32, 会话数 + 8)`，最多 256 个会话。
+    超过 256 个会话时超出部分仍走 LRU，`/stats` 每次请求会重新解析它们（单次约
+    0.1–0.7 s/会话，线性而非二次退化）；此时可用 `--cache` 显式调大，代价是内存
+    （单会话约 1.5 MB）。这是「内存上限」与「全库统计速度」之间的取舍，不是缺陷。
 
 ---
 

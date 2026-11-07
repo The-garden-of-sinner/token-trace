@@ -13,6 +13,7 @@
 
 import argparse
 import bisect
+import datetime
 import hmac
 import html
 import json
@@ -36,15 +37,18 @@ import gen_trace as G  # noqa: E402  复用 build / scan_all / brief / cmd_html
 PAGE_TURNS = 20        # 会话页每页轮数
 PAGE_CALLS = 40        # 调用列表每页条数
 PAGE_BLOCKS = 40       # 单次调用的上下文块列表每页条数
+PAGE_SESSIONS = 40     # 首页每页会话数：约 0.6 KB/会话，40 条约 25 KB，留足余量
 PART_CHARS = 12000     # 全文每片字数（约 30 KB HTML）
 SEARCH_MAX = 80        # 搜索结果上限
 FIND_MAX_BLOCKS = 40   # 块检索结果每页块数（与 PAGE_BLOCKS 同量级）
 FIND_MAX_HITS = 500    # 单块最多记录多少处命中位置
 FIND_MAX_PARTS = 60    # 单块导航最多列多少个命中分片
-FIND_CACHE_MAX = 8     # 缓存几个检索词的全库扫描结果，翻页不重扫 940 万字
+FIND_CACHE_MAX = 8     # 缓存几个检索词的全库扫描结果，翻页不重扫全库原文
 FIND_CACHE_TTL = 60    # 与会话索引同 TTL；源文件新增会话后结果不会一直陈旧
 HL_MAX = 200           # 单片最多高亮多少处（守住单页体积）
-CACHE_SESSIONS = 32    # 内存保留几个已解析会话：实测全量 28 个仅 83 MB，默认全缓存
+CACHE_SESSIONS = 0     # 0 = 自适应：按会话数定容，避免 cap < 会话数 导致缓存永久失效
+CACHE_MIN = 32         # 自适应下限
+CACHE_MAX = 256        # 自适应上限：单会话约 1.5 MB，256 个约 380 MB；超出部分走 LRU
 API_MAX_LIMIT = 500    # /api/ 单次返回条数上限
 MAX_CHARS = 10_000_000  # 块/输出全文的字符 offset 上限，与 limit 同一量级
 
@@ -100,12 +104,18 @@ class Store(object):
     """会话索引 + 按需解析 + LRU 缓存。
 
     索引常驻；单个会话全文只在第一次访问时解析（最大会话 0.7 s）。
-    实测 28 个会话全部常驻仅 83 MB RSS，所以默认全缓存，翻页不再重复解析；
-    会话特别多时可用 --cache 调小，走 LRU 淘汰。
+
+    容量默认**自适应**：cap 取 max(CACHE_MIN, 会话数 + 8)，上限 CACHE_MAX。
+    这一点是必要的——全库统计 / 搜索这类路径要逐个遍历所有会话，若 cap 小于
+    会话数，LRU 会在每轮把开头刚解析的会话淘汰掉，下一轮又全部重解析，
+    缓存等于完全失效（33 个会话 / cap 32 时 /stats 实测 ~5 s，cap 33 时 ~40 ms）。
+    会话数超过 CACHE_MAX 时退回 LRU，代价是 /stats 每次重新解析超出部分，
+    可用 --cache 显式指定一个更大或更小的值。
     """
 
     def __init__(self, cap=CACHE_SESSIONS):
-        self.cap = cap
+        self.auto = not cap or cap <= 0
+        self.cap = CACHE_MIN if self.auto else cap
         self.lock = threading.RLock()
         self._index = None
         self._index_at = 0.0
@@ -117,6 +127,9 @@ class Store(object):
             if refresh or self._index is None or time.time() - self._index_at > 60:
                 self._index = G.scan_all()
                 self._index_at = time.time()
+            if self.auto:
+                # 索引刷新后同步容量：让「全部会话」能同时驻留，避免抖动。
+                self.cap = max(CACHE_MIN, min(len(self._index) + 8, CACHE_MAX))
             return self._index
 
     def by_id(self, sid):
@@ -400,7 +413,7 @@ def global_stats():
 
 
 def search(q, sid=None, scope="all", limit=SEARCH_MAX):
-    """跨会话全文搜索。用 re 直接在原文上扫，不复制 940 万字的小写副本。"""
+    """跨会话全文搜索。用 re 直接在原文上扫，不复制一份小写副本。"""
     q = (q or "").strip()
     if len(q) < 2:
         return [], "关键词至少 2 个字"
@@ -509,7 +522,7 @@ def find_blocks(term, sid=None, refresh=False):
     """按块聚合的精确检索：一个块一行，记下全部命中位置与分片分布。
 
     不建倒排索引，仍是流式正则扫描；结果按 (关键词, 会话) 缓存在进程内，
-    翻页 / 回看 / 点进块页都不会重扫 940 万字。调用方需持有 CALC_LOCK。
+    翻页 / 回看 / 点进块页都不会重扫全库原文。调用方需持有 CALC_LOCK。
     """
     term = (term or "").strip()
     if len(term) < 2:
@@ -1117,7 +1130,7 @@ CSS_INDEX = """
 .hero .viz-hd{margin-bottom:14px}
 .hero .viz-hd b{font-size:12px;font-weight:600;letter-spacing:.02em}
 .ovgrid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0}
-.ovcell{min-width:0;padding:0 18px;border-right:1px solid var(--line2)}
+.ovcell{min-width:0;padding:0 18px;border-right:1px solid var(--line2);display:flex;flex-direction:column}
 .ovcell:first-child{padding-left:0}
 .ovcell:last-child{border-right:0;padding-right:0}
 .ovt{display:flex;align-items:center;gap:6px;font-size:10.5px;font-weight:600;
@@ -1129,6 +1142,8 @@ CSS_INDEX = """
 .ovgrid .slice{min-width:0;flex:1}
 .ovgrid .sl{font-size:10.5px;padding:2px 0}
 .ovgrid .sl em{min-width:36px}
+/* 三列底部说明共用一条基线：列高不一致时由留白吸收，而不是在某一列下方留洞 */
+.ovnote{margin-top:auto;padding-top:12px}
 .ovaxis{display:flex;justify-content:space-between;font-size:10px;color:var(--faint);margin-top:2px}
 .wsrow{display:grid;grid-template-columns:minmax(80px,1fr) 72px 28px;gap:7px;align-items:center;font-size:10.5px;padding:2px 0}
 .wsrow.top{font-weight:600;color:var(--fg);margin-top:3px}
@@ -1255,38 +1270,55 @@ def back_link(crumbs, footer=False):
     return ""
 
 
-def page(title, crumbs, body, sub="", extra_head=""):
-    # 只注入本屏真正用到的图表样式；纯列表页保持原来的 CSS 体积量级。
+def page(title, crumbs, body, sub="", extra_head="", need=()):
+    """need 显式声明本页需要的图表样式片段（"viz"/"hm"/"map"/"chart"/
+    "fold"/"nav"/"index"/"rel"），与 body 探测取并集。
+
+    探测靠扫 body 里的 class 子串，只在「图形一定有输出」时可靠：空库时
+    index_overview() 返回空串，.ovgrid 不出现，而 .hero / .toolbar 照常渲染，
+    整页就会裸样式。这类边界由调用方显式声明，探测继续兜住其余页面。
+    """
+    need = set(need or ())
     css = CSS
-    if 'class="viz' in body:          # 同时匹配 class="viz" 与 class="viz relmap"
+    if need.intersection(("viz", "rel")) or 'class="viz' in body:   # 含 class="viz relmap"
         css += CSS_VIZ
-    if 'class="hm"' in body:
+    if "hm" in need or 'class="hm"' in body:
         css += CSS_HM
-    if 'class="map"' in body:
+    if "map" in need or 'class="map"' in body:
         css += CSS_MAP
-    if 'class="chart"' in body:
+    if "chart" in need or 'class="chart"' in body:
         css += CSS_TREND
-    if 'class="hitfold' in body:
+    if "fold" in need or 'class="hitfold' in body:
         css += CSS_FOLD
-    if 'class="navgrid"' in body:
+    if "nav" in need or 'class="navgrid"' in body:
         css += CSS_NAV
-    if 'class="ovgrid"' in body:
+    if "index" in need or 'class="ovgrid"' in body:
         css += CSS_INDEX
-    if 'class="viz relmap"' in body:
+    if "rel" in need or 'class="viz relmap"' in body:
         css += CSS_REL
     head = ('<!DOCTYPE html><html lang="zh-CN"><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
             '<title>%s · Token 轨迹</title><style>%s</style>' % (esc(title), css))
     back = back_link(crumbs)
-    return (head + '<header><div class="wrap">' + crumb(crumbs) +
-            '<h1>%s<span class="badge">完整模式 · 零截断</span></h1>' % esc(title) +
-            ('<div class="sub">%s</div>' % esc(sub) if sub else '') +
-            '</div></header><div class="wrap">' + extra_head + body +
-            '<footer><span>本页 HTML %.1f KB</span>' % (len(body.encode("utf-8")) / 1024.0) +
-            '<span>数据只读 · 全文由后端按需提供 · 无需 JavaScript</span>' +
-            back_link(crumbs, footer=True) +
-            '<a href="/">索引</a><a href="/stats">全局统计</a><a href="/api">API</a></footer>' +
-            back + '</div></html>')
+    doc = (head + '<header><div class="wrap">' + crumb(crumbs) +
+           '<h1>%s<span class="badge">完整模式 · 零截断</span></h1>' % esc(title) +
+           ('<div class="sub">%s</div>' % esc(sub) if sub else '') +
+           '</div></header><div class="wrap">' + extra_head + body +
+           '<footer><span>本页 HTML @@KB@@ KB</span>' +
+           '<span>数据只读 · 全文由后端按需提供 · 无需 JavaScript</span>' +
+           back_link(crumbs, footer=True) +
+           '<a href="/">索引</a><a href="/stats">全局统计</a><a href="/api">API</a></footer>' +
+           back + '</div></html>')
+    # 页脚口径与 80 KB 硬闸对齐：算整页响应字节（含内联 CSS 与 header），
+    # 不是只算 body。替换会改变长度，迭代到数字稳定为止（最多 3 轮）。
+    kb = "0.0"
+    for _ in range(3):
+        out = doc.replace("@@KB@@", kb)
+        nxt = "%.1f" % (len(out.encode("utf-8")) / 1024.0)
+        if nxt == kb:
+            break
+        kb = nxt
+    return out
 
 
 def clamp_p(q, total, size):
@@ -1457,17 +1489,17 @@ def activity_heatmap(ss, weeks=10):
     列 = 周，行 = 周日..周六；5 级色阶，无数据的格子只输出一个空 <i>。"""
     agg = Counter()
     for s in ss:
-        day = fmt_ts(s["mtime"] * 1000 if s["mtime"] < 1e11 else s["mtime"], "%Y-%m-%d", "")
+        day = fmt_ts(s["mtime"], "%Y-%m-%d", "")
         if day:
             agg[day] += s["calls"]
-    now = time.localtime()
-    today0 = time.mktime((now.tm_year, now.tm_mon, now.tm_mday, 0, 0, 0, 0, 0, -1))
-    end = today0 + (6 - now.tm_wday) * 86400
-    start = end - (weeks * 7 - 1) * 86400
+    # 用 date 运算而不是 +i*86400：有夏令时的地区跨切换日不会错位一格。
+    today = datetime.date.today()
+    end = today + datetime.timedelta(days=6 - today.weekday())
+    start = end - datetime.timedelta(days=weeks * 7 - 1)
     mx = max(agg.values(), default=0) or 1
     cells = []
     for i in range(weeks * 7):
-        day = time.strftime("%Y-%m-%d", time.localtime(start + i * 86400))
+        day = (start + datetime.timedelta(days=i)).strftime("%Y-%m-%d")
         v = agg.get(day, 0)
         if not v:
             cells.append("<i></i>")
@@ -1559,7 +1591,8 @@ def index_overview(ss):
     """
     if not ss:
         return ""
-    total = sum(s["pin"] for s in ss) or 1
+    raw_total = sum(s["pin"] for s in ss)
+    total = raw_total or 1
 
     # 1) 按模型：输入 token 构成环
     by_model = Counter()
@@ -1571,6 +1604,12 @@ def index_overview(ss):
             by_model.update(mm)
         else:
             by_model[s["model"] or "未知模型"] += s["pin"]
+    # 残差桶：少数调用有 prompt_tokens 却没写模型名，pin 进了 total 却进不了
+    # by_model，环会画不满、图例百分比也不到 100%。显式归到「未知模型」，
+    # 保证 sum(by_model) == sum(pin)。
+    residual = raw_total - sum(by_model.values())
+    if residual > 0:
+        by_model["未知模型"] += residual
     models = sorted(by_model.items(), key=lambda x: -x[1])
     if len(models) > 5:
         models = models[:5] + [("其他 %d 个模型" % (len(by_model) - 5),
@@ -1594,14 +1633,15 @@ def index_overview(ss):
              '<circle class="trk" cx="21" cy="21" r="15.9155"/>' +
              "".join(arcs) + '</svg>')
 
-    # 2) 按时间：最近 14 天，会话按 mtime 落桶
+    # 2) 按时间：最近 14 天，会话按 mtime 落桶（date 运算，DST 安全）
     days = 14
-    now = time.localtime()
-    today0 = time.mktime((now.tm_year, now.tm_mon, now.tm_mday, 0, 0, 0, 0, 0, -1))
+    day_list = [datetime.date.today() - datetime.timedelta(days=days - 1 - i)
+                for i in range(days)]
+    day_idx = dict((d.strftime("%Y-%m-%d"), i) for i, d in enumerate(day_list))
     buckets = [0.0] * days
     for s in ss:
-        k = int((s["mtime"] - today0) // 86400) + days - 1
-        if 0 <= k < days:
+        k = day_idx.get(fmt_ts(s["mtime"], "%Y-%m-%d", ""))
+        if k is not None:
             buckets[k] += s["pin"]
     mx = max(buckets) or 1
     pts = " ".join("%.2f,%.2f" % (i * 100.0 / (days - 1), 38 - v / mx * 34)
@@ -1610,7 +1650,7 @@ def index_overview(ss):
             'role="img" aria-label="按天输入 token 走势">'
             '<polygon points="0,40 %s 100,40"/><polyline points="%s"/></svg>' % (pts, pts))
     axis = ('<div class="ovaxis"><span>%s</span><span>峰值 %s tok/天</span><span>今天</span></div>' %
-            (fmt_ts(today0 - (days - 1) * 86400, "%m-%d", ""), kh(mx)))
+            (day_list[0].strftime("%m-%d"), kh(mx)))
 
     # 3) 工作区：按路径最后两段聚成「父目录 → 工作区」两层树
     leaf = OrderedDict()
@@ -1651,10 +1691,12 @@ def index_overview(ss):
     return ('<div class="viz"><div class="viz-hd"><b>全库画像</b>'
             '<small>只读取已缓存的会话索引 · 输入 token 口径 · 无额外全库遍历</small></div>'
             '<div class="ovgrid">'
-            '<div class="ovcell"><div class="ovt">按模型 · 输入 token</div>%s</div>'
+            '<div class="ovcell"><div class="ovt">按模型 · 输入 token</div>%s'
+            '<div class="fine ovnote">按 <code>providerData</code> 模型名聚合，输入 token 加权</div></div>'
             '<div class="ovcell"><div class="ovt">按时间 · 输入 token</div>%s%s'
-            '<div class="fine" style="margin-top:6px">按会话最后修改日落桶；同一天多个会话合并</div></div>'
-            '<div class="ovcell"><div class="ovt">工作区 · 递归关系</div>%s</div>'
+            '<div class="fine ovnote">按会话最后修改日落桶；同一天多个会话合并</div></div>'
+            '<div class="ovcell"><div class="ovt">工作区 · 递归关系</div>%s'
+            '<div class="fine ovnote">父目录 → 工作区；右侧数字为会话数</div></div>'
             '</div></div>' %
             (model_cell, line, axis, "".join(tree)))
 
@@ -1855,6 +1897,16 @@ def turn_row(d, t, sid):
 
 # ---------------------------------------------------------------- HTML 视图
 
+def human_size(n):
+    """字节数转可读体积：首页「源文件」这类会随数据增长的量，不写死。"""
+    n = float(n or 0)
+    if n >= 1024 ** 3:
+        return "%.1f GB" % (n / 1024 ** 3)
+    if n >= 1024 ** 2:
+        return "%.0f MB" % (n / 1024 ** 2)
+    return "%.0f KB" % (n / 1024.0)
+
+
 def v_index(q):
     ss = STORE.sessions(refresh=qstr(q, "refresh") == "1")
     ws = qstr(q, "ws")
@@ -1866,6 +1918,13 @@ def v_index(q):
         shown = sorted(shown, key=lambda s: -s["calls"])
     else:
         shown = sorted(shown, key=lambda s: -s["mtime"])
+
+    # 首页也分页：会话列表随使用线性增长，全量渲染迟早会顶破 80 KB 硬闸
+    # （实测 132 个会话 94.8 KB）。分页后单页体积与总会话数无关。
+    total_shown = len(shown)
+    pg = clamp_p(q, total_shown, PAGE_SESSIONS)
+    lo = pg * PAGE_SESSIONS
+    page_items = shown[lo:lo + PAGE_SESSIONS]
 
     total_cr = sum(s["credit"] for s in ss)
     total_calls = sum(s["calls"] for s in ss)
@@ -1891,6 +1950,10 @@ def v_index(q):
         for k, lab in (("mtime", "最近修改"), ("credit", "积分"), ("calls", "调用数")))
     clear_ws = (('<a class="tb-clear" href="/">清除工作区筛选：%s ✕</a>' % esc(ws))
                 if ws else "")
+    try:
+        src_bytes = sum(os.path.getsize(s["path"]) for s in ss)
+    except OSError:
+        src_bytes = 0
     body += ('<div class="toolbar"><nav class="tb-nav">'
              '<a href="/tools">工具与命令</a>'
              '<a href="/stats">全局统计与冷启动断点</a>'
@@ -1898,11 +1961,11 @@ def v_index(q):
              '<a href="/?refresh=1">重新扫描源文件</a></nav>'
              '<div class="tb-sort"><span class="tb-lab">排序</span>'
              '<span class="tb-seg">%s</span>%s</div>'
-             '<span class="tb-meta">源文件 68 MB · 只读</span></div>' %
-             (sort_links, clear_ws))
+             '<span class="tb-meta">源文件 %s · 只读</span></div>' %
+             (sort_links, clear_ws, human_size(src_bytes) if src_bytes else "体积未知"))
 
     groups = OrderedDict()
-    for s in shown:
+    for s in page_items:
         groups.setdefault(s["ws"], []).append(s)
     for name in sorted(groups, key=lambda w: -max(x["mtime"] for x in groups[w])):
         items = groups[name]
@@ -1935,8 +1998,11 @@ def v_index(q):
         body += ('<details class="grp" open><summary>%s<small>%d 个会话 · %.1f 分</small></summary>'
                  '<div class="in">%s</div></details>' %
                  (esc(name), len(items), sum(s["credit"] for s in items), "".join(cards)))
+    if total_shown > PAGE_SESSIONS:
+        body += pager("/", q, pg, PAGE_SESSIONS, total_shown, "个会话")
     return page("会话索引", [("索引", "")], body,
-                sub="%d 个会话 · 点任一会话进入全量轨迹（不裁调用、不裁文本）" % len(shown))
+                sub="%d 个会话 · 点任一会话进入全量轨迹（不裁调用、不裁文本）" % total_shown,
+                need=("index",))
 
 
 def v_session(q, sid):
@@ -1969,8 +2035,10 @@ def v_session(q, sid):
              '按轮 / 按调用翻页，点任意一次调用看它当时带上的完整块列表，'
              '再点任意一块看<b>不截断</b>的全文（超长块自动分片）。</div>' %
              (nfmt(st["calls"]), nfmt(st["blocks"]), nfmt(st["chars"])))
+    biggest = max((b["n"] for b in d["ctx"]), default=0)
+    hint = ("含 %.1f 万字的长块" % (biggest / 1e4)) if biggest >= 1e4 else "含长块"
     body += search_box("/s/%s/search" % sid, "", "text", "all",
-                       "只在这个会话里搜（含 58 万字的长块）")
+                       "只在这个会话里搜（%s）" % hint)
     body += ('<div class="navgrid">'
              '<a class="navcard" style="--nc:var(--p0)" href="/s/%s/map"><i>↗</i><b>上下文块地图</b>'
              '<span>面积 ∝ 字数 · 点块看全文</span></a>'
@@ -2320,7 +2388,8 @@ def v_search(q, sid=None):
                       nfmt(h["chars"]), nfmt(h["pos"]), esc(h["ws"]), sn))
     else:
         body += '<div class="note">输入关键词搜索；结果里的每一条都能点进去看不截断的全文。</div>'
-    return page("全文搜索", crumbs, body, sub="服务端检索 940 万字原文，不建索引、不落盘")
+    return page("全文搜索", crumbs, body,
+                sub="服务端逐行扫描全库原文，不建索引、不落盘")
 
 
 def v_find(q, sid=None):
@@ -2598,7 +2667,7 @@ def v_compact(q, sid):
     d = STORE.get(sid)
     st = d["stats"]
     rows = compact_rows(d)
-    crumbs = [("索引", "/"), (d["title"][:30], "/s/%s" % esc(sid)), ("压缩事件", "")]
+    crumbs = [("索引", "/"), (d["title"][:30], "/s/%s" % sid), ("压缩事件", "")]
     body = kpi([("压缩次数", nfmt(len(rows))),
                 ("归档原文", nfmt(st["chars"]) + " 字"),
                 ("可见峰值", nfmt(st["visible_peak"]) + " 字"),
@@ -3253,7 +3322,10 @@ def main():
     ap = argparse.ArgumentParser(description="token-trace 完整模式服务（零脚本、按需渲染）")
     ap.add_argument("--host", default="127.0.0.1", help="默认只监听本机")
     ap.add_argument("--port", type=int, default=8765)
-    ap.add_argument("--cache", type=int, default=CACHE_SESSIONS, help="内存中保留几个已解析会话")
+    ap.add_argument("--cache", type=int, default=CACHE_SESSIONS,
+                    help="内存中保留几个已解析会话；0（默认）按会话数自适应，"
+                         "上限 %d。设为小于会话数的值会让 /stats 每次重新解析"
+                         % CACHE_MAX)
     ap.add_argument("--warm", action="store_true", help="启动时预解析全部会话（可选，约 3 秒）")
     ap.add_argument("--token", default=os.environ.get("TRACE_TOKEN") or "",
                     help="访问令牌；绑定非本机地址时必填，也可由 TRACE_TOKEN 提供")
