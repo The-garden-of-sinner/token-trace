@@ -2,9 +2,9 @@
 
 把 WorkBuddy 的会话记录还原成逐次调用的 token 轨迹：每一次调用花了多少积分、带上了哪些上下文、缓存命中到哪里，都能逐条回溯到原文；页面零 JavaScript、运行期零写盘，只依赖 Python 3.8+ 标准库。**在银河麒麟 V10 SP1（兆芯）实测通过**，适配银河麒麟 / 统信 UOS / Deepin 等国产 Linux，提供 `deb` 包与桌面图标、无需 apt 安装第三方依赖，Windows 另有单文件启动器。
 
-![界面演示](docs/demo.svg)
+![界面截图](docs/demo.png)
 
-*界面演示（按真实页面绘制），数据为虚构 demo（`scripts/make_demo.py` 生成），不含任何真实会话内容。*
+*界面截图：会话概览页，数据由 `scripts/make_demo.py` 生成的虚构 demo 会话渲染，不含任何真实会话内容。*
 
 ![Python](https://img.shields.io/badge/python-3.8%2B-blue) ![Linux](https://img.shields.io/badge/Linux-Kylin%20%7C%20UOS%20%7C%20Deepin-blue) ![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen) ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -511,7 +511,7 @@ python3 -B scripts/verify_compact.py 9367d786       # 只看某个会话
 | `start.sh` / `install-desktop.sh` / `token-trace.desktop` | Linux 一键启动、启动器安装与模板 |
 | `windows/` | Windows 版 `start.cmd` / `start.ps1` / `install-shortcut.ps1` |
 | `scripts/` | 发行构建（`build_win_bat.py`、`build_deb.sh`、`release.sh`、`VERSION`）、回归自检（`selftest.py`）、独立压缩校验（`verify_compact.py`）、演示数据生成（`make_demo.py`） |
-| `docs/` | `architecture.svg` / `architecture.mmd` 架构图与图源、`demo.svg` 界面演示图 |
+| `docs/` | `architecture.svg` / `architecture.mmd` 架构图与图源、`demo.png` 界面截图（demo 数据） |
 | `REVIEW_CHANGES.md` | 安全与跨平台改造的分阶段变更记录 |
 | `.gitignore` | 排除含会话原文的静态页与运行时产物 |
 | `trace/` | 静态模式产物（不入库），随时可由 `gen_trace.py` 重建 |
