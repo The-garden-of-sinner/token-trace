@@ -107,6 +107,10 @@
 - **上下文块地图**：面积 ∝ 字数的 SVG treemap，按类型着色、同色深浅二次编码；`?k=` 按类型聚焦，点任意块直跳不截断全文
 - **轻量视觉系统**：CSS 设计令牌 + 深浅色自适应、构成环、归档 / 退役斜纹条、可见字数走势、会话活动日历热力图；图表样式按页面按需注入，纯列表页不带图表 CSS
 - **过渡与返回**：跨文档淡入、KPI 数字区局部 morph、卡片 / 数字入场渐变、`<details>` 展开高度渐变；悬浮「返回上一层」胶囊 + 页脚同名链接，父级从面包屑自动推导，长内容页不用浏览器回退
+- **命中块折叠**：调用详情里连续命中块默认折成一行「#a–#b 块缓存命中」，点开逐块查看；「按调用浏览」每行也带同样的折叠摘要；主动选「只看命中」时全部展开
+- **首页全库画像**：按模型的输入 token 环、按时间的输入 token 折线、工作区路径递归树（两级 + 占比条），只消费已缓存的会话索引
+- **统一检索入口**：搜索框内切换「按字符匹配 / 按块匹配」，由服务端分流；会话页入口改为卡片网格 + 分段浏览控件，次要链接降级
+- 缓存命中率统一显示到小数点后一位
 - **压缩感知**：识别上下文压缩，只统计本次请求真正带上的块；压缩事件页把真实账单与修正前后口径并列，可人工核对
 - 跨会话统计：字数构成、最贵调用、最大块、冷启动断点、计费单价
 - 17 个 JSON 端点，统一 `{ok, data, meta}` 信封，供脚本调用
@@ -299,14 +303,14 @@ python3 scripts/make_checksums.py    # -> dist/SHA256SUMS
 | --- | --- |
 | `/` | 会话索引；`?sort=mtime\|credit\|calls`、`?ws=`、`?refresh=1` |
 | `/stats` | 跨会话聚合、最贵 20 次调用、最大 20 个块、冷启动断点 |
-| `/search?q=&scope=` | 全文搜索；`scope=blocks\|outputs\|turns\|all` |
-| `/find?q=&p=` | **按块精确检索**（跨会话）；`/s/<sid>/find?q=` 为会话内 |
+| `/search?q=&scope=&mode=` | 全文搜索；`scope=blocks\|outputs\|turns\|all`；`mode=blocks` 由服务端转交按块检索；会话内为 `/s/<sid>/search` |
+| `/find?q=&p=` | **按块精确检索**（跨会话）；`/s/<sid>/find?q=` 为会话内；也可从搜索框切「按块匹配」进入 |
 | `/tools?tool=&view=&q=&p=` | **工具与命令聚合**；`view=tools\|progs` 切换，`tool=` 下钻到该工具全部调用；会话内为 `/s/<sid>/tools` |
 | `/s/<sid>/trend?g=&mode=&p=` | **上下文趋势**；`g=call\|turn` 粒度，`mode=total\|delta` 累计组成 / 净变化 |
 | `/s/<sid>/map?k=&n=` | **上下文块地图**；`k=` 按块类型聚焦（`user` / `injected` / `tool_result` / `tool_call` / `assistant`），`n=4..48` 控制铺砖数，默认 24 |
 | `/s/<sid>/compact` | **压缩事件校验**：真实账单与修正前 / 后统计逐条并列 |
 | `/s/<sid>?view=turns\|calls&p=` | 会话概览，按轮或按调用分页 |
-| `/s/<sid>/t/<n>` | 单轮的全部调用 |
+| `/s/<sid>/t/<n>?p=` | 单轮的全部调用，每页 40 条（一轮几百次调用也不会撑破单页上限） |
 | `/s/<sid>/c/<seq>?state=&p=` | 单次调用的上下文块清单；`state=all\|hit\|miss\|part` |
 | `/s/<sid>/b/<idx>?part=&q=&ref=` | 块全文分片；`raw=1` 纯文本，`q=` 高亮命中并列出命中片 |
 | `/s/<sid>/o/<seq>?seg=&part=` | 该次调用的输出（思考 / 回答）分片 |
@@ -560,6 +564,10 @@ python3 -B scripts/verify_compact.py 9367d786       # 只看某个会话
 | 按需 CSS | `page()` 按 body 是否出现 `class="viz"` / `hm` / `map` / `chart` 决定拼哪几段样式 | 检索 / 全文页不带图表 CSS |
 | 过渡 | `@view-transition{navigation:auto}` 跨文档淡入、`.kpi` 单独 `view-transition-name` 做数字区 morph、`@keyframes` 入场、`::details-content` 展开高度渐变 | 纯 CSS，服务端零开销；`prefers-reduced-motion` 一并关闭 |
 | 返回上一层 | `back_link()` 从面包屑倒数第二项**往前找第一个带链接的层级**（不带 `ref` 的块全文页中间一级无链接，会回退到会话概览），输出固定胶囊 + 页脚文字链接 | 一处推导覆盖全部视图，每页多一个 `<a>` |
+| 命中块折叠 | `cache_hit_span()` 用前缀和 + `bisect` 求命中前缀 `[lo, hi]`，`hit_fold_html()` 输出原生 `<details>`；口径与 `call_state()` 一致 | O(log B) / 次，不逐块遍历 |
+| 首页全库画像 | `index_overview()` 只聚合 `STORE.sessions()` 的 `model / mtime / ws / pin`，输出模型环、时间折线、工作区两级树 | 零额外全库遍历、零新增索引 |
+| 统一检索 | `search_box()` 固定 form action，`v_search()` 按 `mode` 分流到 `v_find()` | 零 JS、零新增路由；分页仍直连 `/find` |
+| 按需 CSS（续） | `CSS_FOLD` / `CSS_NAV` / `CSS_INDEX` 分别按 `hitfold` / `navgrid` / `ovgrid` 注入 | 只有用到的页面才带对应图表样式 |
 | 降级 | 渐变色标不被老浏览器识别时回落纯色轨道（柱高与链接不变）；`prefers-reduced-motion` 关动效；数据不足显示统一空态 | 信息不丢，静态预览仍可读 |
 
 静态模式（`gen_trace.py`）保留自己那套内联样式，继续作为浅色离线兜底，
@@ -856,6 +864,12 @@ RSS 仍是 84.0 MB —— Python 不把 arena 归还 OS。它限制的是缓存�
     **不是**从旧值滚动到新值的 count-up —— 后者需要 JS，或把带千分位的数字
     改写成 CSS counter，会破坏可复制文本与 `≈` / 单位标注。系统的
     `prefers-reduced-motion` 会一并关掉所有动效，打印时隐藏悬浮返回胶囊。
+18. **零脚本下折叠内容仍占 HTML 字节**：`<details>` 收起的部分依然在响应里，
+    「按调用浏览」每页 40 行折叠摘要约 +8 KB；逐块清单放在调用详情页（那里同样折叠），
+    不在此重复铺开。单轮详情 `/s/<sid>/t/<n>` 已补分页，避免一轮几百次调用把单页
+    撑过 80 KB 硬闸（长会话实测修复前 89.4 KB、修复后回到 56 KB 量级）。
+    首页「按模型」环依赖 `workbuddy.db` 提供模型名；读不到时该格显示空态说明，
+    而不是画一个「未知模型 100%」的无信息量单色环。
 
 ---
 

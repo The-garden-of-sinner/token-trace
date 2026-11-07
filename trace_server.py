@@ -808,9 +808,12 @@ h3{font-size:12.5px;font-weight:500;margin:18px 0 7px;color:var(--fg)}
 .note{background:var(--accent-bg);border-left:2px solid var(--accent);padding:9px 13px;border-radius:0 7px 7px 0;font-size:12px;color:var(--accent-fg);margin-bottom:16px}
 .warn{background:var(--warn-bg);border-left:2px solid var(--warn);padding:9px 13px;border-radius:0 7px 7px 0;font-size:12px;color:var(--credit);margin-bottom:16px}
 .fine{color:var(--faint);font-size:11px}
-form.searchbox{display:flex;gap:7px;margin-bottom:16px;flex-wrap:wrap}
-form.searchbox input[type=text]{flex:1;min-width:220px;padding:7px 11px;border:1px solid var(--border);border-radius:7px;font:13px inherit;background:var(--bg);color:var(--fg)}
-form.searchbox select{padding:7px 9px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--fg);font:12px inherit}
+form.searchbox{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center;
+ background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+form.searchbox input[type=text]{flex:1;min-width:220px;padding:8px 12px;border:1px solid var(--border);border-radius:7px;font:13px inherit;background:var(--bg);color:var(--fg)}
+form.searchbox select{padding:8px 10px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--fg);font:12px inherit;cursor:pointer}
+form.searchbox button{background:var(--fg);color:var(--bg);border-color:var(--fg);padding:8px 17px;border-radius:7px;font-weight:500}
+form.searchbox button:hover{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 button,.btn{display:inline-block;padding:6px 13px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--fg);font:12px inherit;text-decoration:none;cursor:pointer}
 button:hover,.btn:hover{border-color:var(--accent);color:var(--accent-d);background:var(--accent-bg)}
 .btn.on{background:var(--fg);color:var(--bg);border-color:var(--fg)}
@@ -870,7 +873,7 @@ code{font:11.5px ui-monospace,monospace;background:var(--track);padding:1px 4px;
 ::view-transition-old(root){animation:vt-out .16s cubic-bezier(.4,0,1,1) both}
 ::view-transition-new(root){animation:vt-in .26s cubic-bezier(0,0,.2,1) both}
 @keyframes vt-out{to{opacity:0;transform:translateY(-5px)}}
-@keyframes vt-in{from{opacity:0;transform:translateY(8px)}}
+@keyframes vt-in{from{opacity:.35;transform:translateY(8px)}}
 /* KPI 单独命名：跨页时数字区局部变形 + 聚焦淡入，而不是整页一起淡。
    每个视图最多一个 .kpi，名字不会在同一文档里重复。 */
 .kpi{view-transition-name:trace-kpi}
@@ -878,9 +881,9 @@ code{font:11.5px ui-monospace,monospace;background:var(--track);padding:1px 4px;
 ::view-transition-old(trace-kpi){animation:vt-fade .16s ease both}
 ::view-transition-new(trace-kpi){animation:vt-kpi .34s cubic-bezier(.2,.7,.2,1) both}
 @keyframes vt-fade{to{opacity:0}}
-@keyframes vt-kpi{from{opacity:0;transform:translateY(6px);filter:blur(2px)}to{opacity:1;transform:none;filter:none}}
-@keyframes tt-in{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
-@keyframes tt-num{from{opacity:0;transform:translateY(5px);filter:blur(2.5px)}to{opacity:1;transform:none;filter:none}}
+@keyframes vt-kpi{from{opacity:.4;transform:translateY(6px);filter:blur(1px)}to{opacity:1;transform:none;filter:none}}
+@keyframes tt-in{from{opacity:.3;transform:translateY(7px)}to{opacity:1;transform:none}}
+@keyframes tt-num{from{opacity:.45;transform:translateY(5px);filter:blur(1px)}to{opacity:1;transform:none;filter:none}}
 .kpi>div,.viz{animation:tt-in .34s cubic-bezier(.2,.7,.2,1) both}
 .kpi b{animation:tt-num .42s cubic-bezier(.2,.7,.2,1) both}
 .kpi>div:nth-child(2){animation-delay:.03s}.kpi>div:nth-child(3){animation-delay:.06s}
@@ -901,7 +904,7 @@ code{font:11.5px ui-monospace,monospace;background:var(--track);padding:1px 4px;
 .back:hover{opacity:1;transform:translateY(-2px)}
 .back:active{transform:translateY(0)}
 .back .ar{font-size:15px;line-height:1}
-@media print{.back{display:none}}
+@media print{.back{display:none}*{animation:none!important;transition:none!important}}
 @media(prefers-reduced-motion:reduce){
  *{animation:none!important;transition:none!important}
  ::view-transition-group(*),::view-transition-old(*),::view-transition-new(*){animation:none!important}
@@ -991,6 +994,64 @@ CSS_TREND = """
 @keyframes tt-rise{from{transform:scaleY(.02);opacity:.35}to{transform:scaleY(1);opacity:1}}
 """
 
+# 命中块折叠：只在按调用浏览 / 调用详情这类有块清单的页面注入。
+CSS_FOLD = """
+.hitfold{border:1px solid var(--line);border-radius:8px;margin:0 0 4px;background:var(--panel);overflow:hidden}
+.hitfold>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:9px;
+ padding:7px 11px;font-size:11.5px;background:var(--accent-bg);color:var(--accent-fg)}
+.hitfold>summary::-webkit-details-marker{display:none}
+.hitfold>summary .hf-dot{width:8px;height:8px;border-radius:50%;background:var(--accent);flex:none}
+.hitfold>summary b{font-weight:600}
+.hitfold>summary .hf-n{color:var(--muted);font-variant-numeric:tabular-nums}
+.hitfold>summary small{margin-left:auto;color:var(--faint);font-size:10.5px}
+.hitfold>summary:hover{filter:brightness(.97)}
+.hitfold .in{padding:6px 8px 2px;background:var(--bg)}
+.hitfold.mini{margin:-1px 0 6px;border-left:2px solid var(--accent);border-radius:0 0 6px 6px}
+.hitfold.mini>summary{background:transparent;padding:4px 9px;font-size:10.5px}
+.hitfold.mini .in{padding:7px 11px;font-size:11px;display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+"""
+
+# 首页全库画像：只有索引页带这些规则。
+CSS_INDEX = """
+.ovgrid{display:grid;grid-template-columns:250px 1fr 1fr;gap:18px}
+.ovcell{min-width:0}
+.ovt{font-size:11.5px;font-weight:600;color:var(--muted);margin-bottom:9px;padding-bottom:6px;border-bottom:1px solid var(--line2)}
+.ovgrid .donut-row{gap:10px}
+.ovgrid .donut-wrap,.ovgrid .donut{width:84px;height:84px}
+.ovgrid .donut-wrap .ctr b{font-size:13px}
+.ovgrid .slice{min-width:0;flex:1}
+.ovgrid .sl{font-size:10.5px;padding:2px 0}
+.ovgrid .sl em{min-width:36px}
+.ovaxis{display:flex;justify-content:space-between;font-size:10px;color:var(--faint);margin-top:2px}
+.wsrow{display:grid;grid-template-columns:minmax(80px,1fr) 72px 28px;gap:7px;align-items:center;font-size:10.5px;padding:2px 0}
+.wsrow.top{font-weight:600;color:var(--fg);margin-top:3px}
+.wsrow.sub{color:var(--muted);padding-left:9px}
+.wsname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wsbar{height:6px;background:var(--track);border-radius:3px;overflow:hidden}
+.wsbar i{display:block;height:100%;background:var(--accent);opacity:.72}
+.wsrow.top .wsbar i{opacity:1}
+.wsn{text-align:right;color:var(--faint);font-variant-numeric:tabular-nums}
+@media(max-width:900px){.ovgrid{grid-template-columns:1fr}}
+"""
+
+# 会话页入口卡片与分段控件：只在有 navgrid 的页面注入。
+CSS_NAV = """
+.navgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin:14px 0 10px}
+.navcard{display:flex;flex-direction:column;gap:3px;padding:11px 13px;border:1px solid var(--line);
+ border-radius:9px;background:var(--panel);text-decoration:none;color:var(--fg);
+ transition:border-color .18s,transform .18s,box-shadow .18s}
+.navcard:hover{border-color:var(--accent);transform:translateY(-2px);box-shadow:var(--shadow)}
+.navcard b{font-size:12px;font-weight:600}
+.navcard span{font-size:10.5px;color:var(--muted);line-height:1.45}
+.segrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0 4px;padding-bottom:10px;border-bottom:1px solid var(--line2)}
+.seg{display:inline-flex;background:var(--track);border-radius:8px;padding:3px}
+.seg a{padding:5px 13px;border-radius:6px;font-size:11.5px;color:var(--muted);text-decoration:none}
+.seg a.on{background:var(--bg);color:var(--fg);font-weight:600;box-shadow:var(--shadow)}
+.seglink{margin-left:auto;font-size:11px;color:var(--faint);text-decoration:none}
+.seglink:hover{color:var(--accent)}
+@media(max-width:820px){.navgrid{grid-template-columns:repeat(2,1fr)}}
+"""
+
 
 def crumb(items):
     out = []
@@ -1034,6 +1095,12 @@ def page(title, crumbs, body, sub="", extra_head=""):
         css += CSS_MAP
     if 'class="chart"' in body:
         css += CSS_TREND
+    if 'class="hitfold' in body:
+        css += CSS_FOLD
+    if 'class="navgrid"' in body:
+        css += CSS_NAV
+    if 'class="ovgrid"' in body:
+        css += CSS_INDEX
     head = ('<!DOCTYPE html><html lang="zh-CN"><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
             '<title>%s · Token 轨迹</title><style>%s</style>' % (esc(title), css))
@@ -1097,6 +1164,30 @@ def kpi(items):
 # 不新增索引、不缓存大对象。数据一律来自已解析会话或已缓存的会话索引，
 # 因此只在被请求的那一屏产生开销，且复杂度对块数 / 调用数是线性的。
 # 字数是原文统计、token 来自 API usage，二者不同口径，页面统一用 ≈ 标注估算项。
+
+def search_box(action, term="", mode="text", scope="all", placeholder="关键词"):
+    """统一搜索框：「按字符匹配 / 按块匹配」由 v_search 在服务端分流。
+
+    零 JS 下 form 的 action 是固定的，所以用 mode 参数让 /search 决定交给
+    全文检索还是按块检索，而不是靠脚本改 action。
+    """
+    mode_sel = ('<select name="mode" aria-label="匹配方式">'
+                '<option value="text" %s>按字符匹配</option>'
+                '<option value="blocks" %s>按块匹配</option></select>' %
+                ("selected" if mode == "text" else "", "selected" if mode == "blocks" else ""))
+    scope_sel = ""
+    if mode == "text":
+        scope_sel = '<select name="scope" aria-label="检索范围">' + "".join(
+            '<option value="%s" %s>%s</option>' %
+            (k, "selected" if scope == k else "", lab)
+            for k, lab in (("all", "全部范围"), ("blocks", "只看上下文块"),
+                           ("outputs", "只看模型输出"), ("turns", "只看提问"))) + '</select>'
+    return ('<form class="searchbox" method="get" action="%s">'
+            '<input type="text" name="q" value="%s" placeholder="%s">%s%s'
+            '<button type="submit">%s</button></form>' %
+            (esc(action), esc(term), esc(placeholder), mode_sel, scope_sel,
+             "检索" if mode == "blocks" else "搜索"))
+
 
 def kh(n):
     """紧凑数字：图表内的轴标签与块标签，避免长数字撑破小矩形。"""
@@ -1215,6 +1306,108 @@ def activity_heatmap(ss, weeks=10):
             (weeks, "".join(cells), len(agg)))
 
 
+def index_overview(ss):
+    """首页全库画像：按模型的输入 token 环 + 按时间的折线 + 工作区递归树。
+
+    三种图都只消费 STORE.sessions() 已缓存的会话索引字段（model / mtime / ws /
+    pin），不解析任何会话全文、不新增索引、不新增一次全库遍历。
+    """
+    if not ss:
+        return ""
+    total = sum(s["pin"] for s in ss) or 1
+
+    # 1) 按模型：输入 token 构成环
+    by_model = Counter()
+    for s in ss:
+        by_model[s["model"] or "未知模型"] += s["pin"]
+    models = sorted(by_model.items(), key=lambda x: -x[1])
+    if len(models) > 5:
+        models = models[:5] + [("其他 %d 个模型" % (len(by_model) - 5),
+                                sum(v for _, v in models[5:]))]
+    colors = ("var(--p0)", "var(--p1)", "var(--p2)", "var(--p3)",
+              "var(--p4)", "var(--accent)")
+    arcs, legend, acc = [], [], 0.0
+    for i, (name, val) in enumerate(models):
+        frac = val / total * 100.0
+        seg = max(0.0, frac - min(.6, frac * .2))
+        color = colors[i % len(colors)]
+        arcs.append('<circle cx="21" cy="21" r="15.9155" style="stroke:%s" '
+                    'stroke-dasharray="%.3f %.3f" transform="rotate(%.2f 21 21)"/>' %
+                    (color, seg, 100 - seg, -90 + acc * 3.6))
+        legend.append('<div class="sl"><i style="background:%s"></i>'
+                      '<span class="g">%s</span><b>%s</b><em>%.1f%%</em></div>' %
+                      (color, esc(cut(name, 20)), kh(val), frac))
+        acc += frac
+    donut = ('<svg class="donut" viewBox="0 0 42 42" role="img" '
+             'aria-label="按模型的输入 token 构成">'
+             '<circle class="trk" cx="21" cy="21" r="15.9155"/>' +
+             "".join(arcs) + '</svg>')
+
+    # 2) 按时间：最近 14 天，会话按 mtime 落桶
+    days = 14
+    now = time.localtime()
+    today0 = time.mktime((now.tm_year, now.tm_mon, now.tm_mday, 0, 0, 0, 0, 0, -1))
+    buckets = [0.0] * days
+    for s in ss:
+        k = int((s["mtime"] - today0) // 86400) + days - 1
+        if 0 <= k < days:
+            buckets[k] += s["pin"]
+    mx = max(buckets) or 1
+    pts = " ".join("%.2f,%.2f" % (i * 100.0 / (days - 1), 38 - v / mx * 34)
+                   for i, v in enumerate(buckets))
+    line = ('<svg class="spark" viewBox="0 0 100 40" preserveAspectRatio="none" '
+            'role="img" aria-label="按天输入 token 走势">'
+            '<polygon points="0,40 %s 100,40"/><polyline points="%s"/></svg>' % (pts, pts))
+    axis = ('<div class="ovaxis"><span>%s</span><span>峰值 %s tok/天</span><span>今天</span></div>' %
+            (fmt_ts(today0 - (days - 1) * 86400, "%m-%d", ""), kh(mx)))
+
+    # 3) 工作区：按路径最后两段聚成「父目录 → 工作区」两层树
+    leaf = OrderedDict()
+    for s in ss:
+        parts = [p for p in re.split(r"[\\/]+", s["ws"]) if p]
+        parent = parts[-2] if len(parts) >= 2 else (parts[0] if parts else "?")
+        name = parts[-1] if parts else "?"
+        a = leaf.setdefault(parent + "/" + name, [parent, name, 0.0, 0])
+        a[2] += s["pin"]
+        a[3] += 1
+    parents = OrderedDict()
+    for parent, name, pin, n in sorted(leaf.values(), key=lambda x: -x[2]):
+        parents.setdefault(parent, []).append((name, pin, n))
+    tree = []
+    for parent, kids in list(parents.items())[:3]:
+        ppin = sum(k[1] for k in kids)
+        tree.append('<div class="wsrow top"><span class="wsname">%s</span>'
+                    '<span class="wsbar"><i style="width:%.1f%%"></i></span>'
+                    '<span class="wsn">%d</span></div>' %
+                    (esc(cut(parent, 18)), min(ppin / total * 100, 100),
+                     sum(k[2] for k in kids)))
+        for name, pin, n in kids[:3]:
+            tree.append('<div class="wsrow sub"><span class="wsname">└ %s</span>'
+                        '<span class="wsbar"><i style="width:%.1f%%"></i></span>'
+                        '<span class="wsn">%d</span></div>' %
+                        (esc(cut(name, 20)), min(pin / total * 100, 100), n))
+
+    # 模型名来自 workbuddy.db；读不到时不画「未知模型 100%」这种无信息量的单色环。
+    if any(s.get("meta_ok", True) for s in ss):
+        model_cell = ('<div class="donut-row"><div class="donut-wrap">%s'
+                      '<div class="ctr"><b>%s</b><span>tok</span></div></div>'
+                      '<div class="slice">%s</div></div>' %
+                      (donut, kh(total), "".join(legend)))
+    else:
+        model_cell = ('<div class="empty">模型名来自 workbuddy.db，当前不可读；'
+                      '此图暂不可用（见页面顶部提示）</div>')
+
+    return ('<div class="viz"><div class="viz-hd"><b>全库画像</b>'
+            '<small>只读取已缓存的会话索引 · 输入 token 口径 · 无额外全库遍历</small></div>'
+            '<div class="ovgrid">'
+            '<div class="ovcell"><div class="ovt">按模型 · 输入 token</div>%s</div>'
+            '<div class="ovcell"><div class="ovt">按时间 · 输入 token</div>%s%s'
+            '<div class="fine" style="margin-top:6px">按会话最后修改日落桶；同一天多个会话合并</div></div>'
+            '<div class="ovcell"><div class="ovt">工作区 · 递归关系</div>%s</div>'
+            '</div></div>' %
+            (model_cell, line, axis, "".join(tree)))
+
+
 def _tile(items, x, y, w, h, out, depth=0):
     """交替方向二分铺砖：按权重把矩形切成两块，长边优先，得到接近方形的分块。
     比 squarify 更短、更可预测，且不依赖浮点最优化。"""
@@ -1321,10 +1514,64 @@ def rate_bar(c, width=True):
             ("flex:1" if width else "width:100px", r * 100, (1 - r) * 100))
 
 
+def cache_hit_span(d, i):
+    """第 i 次调用的缓存命中前缀 [lo, hi]（绝对块号，含端点），O(log B)。
+
+    口径与 call_state / call_outline 完全一致：按可见区间内的相对字数二分。
+    不逐块遍历，所以「按调用浏览」给 40 行各算一次也不增加可感知开销。
+    hi 这一块可能正好跨缓存边界（part），展开后按真实状态 chip 显示。
+    """
+    c = d["calls"][i]
+    n = min(c["ctxN"], len(d["ctx"]))
+    lo = min(c.get("vf", 0), n)
+    if not c["pin"] or n <= lo:
+        return lo, None
+    pref = d["pref"]
+    b = bisect.bisect_left(
+        pref, pref[lo] + (pref[n] - pref[lo]) * c["hit"] / c["pin"], lo, n + 1)
+    return lo, max(lo, min(n - 1, b - 1))
+
+
+def block_row_html(d, i, sid, seq, j, st):
+    """上下文块清单里的一行（抽出来供折叠 / 展开两种路径共用）。"""
+    b = d["ctx"][j]
+    return ('<a class="row" href="/s/%s/b/%d?ref=%d" '
+            'style="grid-template-columns:52px 64px 92px 1fr 84px 62px">'
+            '<span class="idx">#%d</span><span class="chip %s">%s</span>'
+            '<span class="chip t">%s</span>'
+            '<span class="grow"><b style="font-weight:500">%s</b>%s</span>'
+            '<span class="num">%s 字</span><span class="num" style="color:var(--accent)">全文 →</span></a>' %
+            (esc(sid), j, seq, j, st, G.CHIP[st], TYPES.get(b["k"], b["k"]),
+             esc(b["l"]), G.cmd_html(b, 140), nfmt(b["n"])))
+
+
+def hit_fold_html(lo, hi, rows):
+    """把连续命中块折成一行「#lo–#hi 块缓存命中」，点开逐块查看。原生 details，零 JS。"""
+    return ('<details class="hitfold"><summary><span class="hf-dot"></span>'
+            '<b>#%d–#%d 块缓存命中</b><span class="hf-n">%d 块</span>'
+            '<small>点开逐块查看</small></summary><div class="in">%s</div></details>' %
+            (lo, hi, hi - lo + 1, "".join(rows)))
+
+
+def call_hit_fold(d, i, sid):
+    """「按调用浏览」列表里的折叠摘要：只算区间，不展开块行。
+
+    零 JS 下 <details> 内容仍占 HTML 字节，每页 40 行必须写得很短；
+    逐块清单交给调用详情（那里同样有折叠），不在这里重复铺开。
+    """
+    lo, hi = cache_hit_span(d, i)
+    if hi is None or hi < lo:
+        return ""
+    return ('<details class="hitfold mini"><summary><span class="hf-dot"></span>'
+            '<b>#%d–#%d 块缓存命中</b><span class="hf-n">%d 块</span></summary>'
+            '<div class="in"><a href="/s/%s/c/%d">展开逐块清单 →</a></div></details>' %
+            (lo, hi, hi - lo + 1, esc(sid), i + 1))
+
+
 def call_row(d, c, sid, show_turn=True):
     r = (c["hit"] / c["pin"]) if c["pin"] else None
     cls = "bad" if (r is not None and r < 0.5) else ("warn2" if (r is not None and r < 0.8) else "")
-    pct = "%.0f%%" % (r * 100) if r is not None else "—"
+    pct = "%.1f%%" % (r * 100) if r is not None else "—"
     return ('<a class="row %s" href="/s/%s/c/%d" style="grid-template-columns:40px 90px 1fr 78px 78px 78px 66px 60px 92px">'
             '<span class="idx">#%d</span>%s'
             '<span class="grow"><b style="font-weight:500">%s</b>%s</span>'
@@ -1350,7 +1597,7 @@ def turn_row(d, t, sid):
             '<span class="num" style="color:var(--accent)">展开 →</span></a>' %
             (esc(sid), b["i"], b["i"], esc(b["q"] or "（只有系统注入）"),
              '<span class="chip cold" style="margin-left:6px">冷启动</span>' if b["cold"] else "",
-             b["calls"], nfmt(b["pin"]), "%.0f%%" % (b["rate"] * 100),
+             b["calls"], nfmt(b["pin"]), "%.1f%%" % (b["rate"] * 100),
              nfmt(b["pout"]), b["credit"]))
 
 
@@ -1374,15 +1621,13 @@ def v_index(q):
                 ("模型调用", nfmt(total_calls)), ("累计积分", "%.1f" % total_cr),
                 ("累计输入 tok", nfmt(sum(s["pin"] for s in ss))),
                 ("累计输出 tok", nfmt(sum(s["pout"] for s in ss)))])
+    body += index_overview(ss)
     if any(not s.get("meta_ok", True) for s in ss):
         body += ('<div class="warn">workbuddy.db 未读到：会话标题、工作区与模型名已退回兜底值，'
                  '详情见服务端终端输出。</div>')
-    body += ('<form class="searchbox" method="get" action="/search">'
-             '<input type="text" name="q" placeholder="搜上下文块 / 输出 / 提问原文（跨全部会话）" value="">'
-             '<select name="scope"><option value="all">全部范围</option><option value="blocks">只看上下文块</option>'
-             '<option value="outputs">只看模型输出</option><option value="turns">只看提问</option></select>'
-             '<button type="submit">搜索</button></form>')
-    body += ('<div class="tabs"><a class="btn" href="/find">按块检索</a>'
+    body += search_box("/search", "", "text", "all",
+                       "搜上下文块 / 输出 / 提问原文（跨全部会话）")
+    body += ('<div class="tabs">'
              '<a class="btn" href="/tools">工具与命令</a>'
              '<a class="btn" href="/stats">全局统计与冷启动断点</a>'
              '<a class="btn" href="/api">后端 API 契约</a>'
@@ -1450,28 +1695,32 @@ def v_session(q, sid):
              '按轮 / 按调用翻页，点任意一次调用看它当时带上的完整块列表，'
              '再点任意一块看<b>不截断</b>的全文（超长块自动分片）。</div>' %
              (nfmt(st["calls"]), nfmt(st["blocks"]), nfmt(st["chars"])))
-    body += ('<form class="searchbox" method="get" action="/s/%s/search">'
-             '<input type="text" name="q" placeholder="只在这个会话里搜（含 58 万字的长块）">'
-             '<button type="submit">搜索</button></form>' % esc(sid))
-    body += ('<div class="tabs"><a class="btn" href="/s/%s/map">上下文块地图</a>'
-             '<a class="btn" href="/s/%s/find">按块检索（列出命中块 + 跳到命中分片）</a>'
-             '<a class="btn" href="/s/%s/tools">工具与命令</a>'
-             '<a class="btn" href="/s/%s/trend">上下文趋势</a>'
-             '<a class="btn" href="/s/%s/compact">压缩事件校验</a></div>' %
-             ((esc(sid),) * 5))
-    body += ('<div class="tabs"><a class="btn %s" href="/s/%s?view=turns">按轮浏览</a>' %
-             ("on" if view == "turns" else "", esc(sid)) +
-             '<a class="btn %s" href="/s/%s?view=calls">按调用浏览</a>' %
-             ("on" if view == "calls" else "", esc(sid)) +
-             '<a class="btn" href="/api/s/%s">这个会话的 JSON</a>' % esc(sid) + '</div>')
+    body += search_box("/s/%s/search" % sid, "", "text", "all",
+                       "只在这个会话里搜（含 58 万字的长块）")
+    body += ('<div class="navgrid">'
+             '<a class="navcard" href="/s/%s/map"><b>上下文块地图</b>'
+             '<span>面积 ∝ 字数 · 点块看全文</span></a>'
+             '<a class="navcard" href="/s/%s/trend"><b>上下文趋势</b>'
+             '<span>逐调用构成 / 净变化 / 命中率</span></a>'
+             '<a class="navcard" href="/s/%s/tools"><b>工具与命令</b>'
+             '<span>按工具看积分与调用频次</span></a>'
+             '<a class="navcard" href="/s/%s/compact"><b>压缩事件校验</b>'
+             '<span>真实账单与修正前后口径</span></a></div>' % ((esc(sid),) * 4))
+    body += ('<div class="segrow"><span class="fine">浏览方式</span>'
+             '<span class="seg"><a class="%s" href="/s/%s?view=turns">按轮浏览</a>'
+             '<a class="%s" href="/s/%s?view=calls">按调用浏览</a></span>'
+             '<a class="seglink" href="/api/s/%s">这个会话的 JSON ↗</a></div>' %
+             ("on" if view == "turns" else "", esc(sid),
+              "on" if view == "calls" else "", esc(sid), esc(sid)))
 
     if view == "calls":
         total = len(d["calls"])
         p = clamp_p(q, total, PAGE_CALLS)
         lo = p * PAGE_CALLS
         body += '<h2>全部 %s 次调用 <small>每页 %d 条，一次都不省</small></h2>' % (nfmt(total), PAGE_CALLS)
-        for c in d["calls"][lo:lo + PAGE_CALLS]:
-            body += call_row(d, c, sid)
+        for k in range(lo, min(lo + PAGE_CALLS, total)):
+            body += call_row(d, d["calls"][k], sid)
+            body += call_hit_fold(d, k, sid)
         pq = dict(q)
         pq["view"] = ["calls"]
         body += pager("/s/%s" % sid, pq, p, PAGE_CALLS, total, "次调用")
@@ -1509,14 +1758,19 @@ def v_turn(q, sid, turn):
     body = ""
     if tb:
         body += kpi([("调用次数", nfmt(tb["calls"])), ("输入 tok", nfmt(tb["pin"])),
-                     ("命中率", "%.0f%%" % (tb["rate"] * 100)), ("输出 tok", nfmt(tb["pout"])),
+                     ("命中率", "%.1f%%" % (tb["rate"] * 100)), ("输出 tok", nfmt(tb["pout"])),
                      ("积分", "%.2f" % tb["credit"]), ("系统注入", nfmt(tb["inj"]) + " 字")])
         body += ('<div class="note"><b>你这一轮问的是：</b>%s</div>' % esc(tb["q"] or "（只有系统注入）"))
         if tb["cold"]:
             body += '<div class="warn">这一轮首次调用命中率 &lt;50%，是缓存冷启动：整段历史按全价重算。</div>'
-    body += '<h2>这一轮的 %d 次调用</h2>' % len(idxs)
-    for i in idxs:
+    # 一轮可能含几百次调用：不分页会把单页撑过 80 KB 硬闸（长会话实测 89 KB）。
+    p = clamp_p(q, len(idxs), PAGE_CALLS)
+    lo = p * PAGE_CALLS
+    body += '<h2>这一轮的 %s 次调用 <small>每页 %d 条，一次都不省</small></h2>' % (
+        nfmt(len(idxs)), PAGE_CALLS)
+    for i in idxs[lo:lo + PAGE_CALLS]:
         body += call_row(d, d["calls"][i], sid, show_turn=False)
+    body += pager("/s/%s/t/%d" % (sid, turn), q, p, PAGE_CALLS, len(idxs), "次调用")
     return page(label + " · " + d["title"][:28], crumbs, body,
                 sub="点任意一次调用 → 看它当时带上的完整上下文")
 
@@ -1548,7 +1802,8 @@ def v_call(q, sid, seq):
                  (nfmt(o["lo"]), esc(sid)))
     body += ('<div class="note">工具 <b>%s</b> · 模型 %s · %s<br>'
              '下面列出这次请求<b>实际带上的全部 %s 个块</b>：蓝色=命中缓存的前缀，琥珀=本次未命中，'
-             '紫色块是跨边界的那一块。<b>点任意一行看该块不截断的全文</b>。</div>' %
+             '紫色块是跨边界的那一块。<b>连续命中块默认折叠成一行「#a–#b 块缓存命中」，'
+             '点一下再逐块展开</b>；点任意一行看该块不截断的全文。</div>' %
              (esc(c["tool"] or "最终回答"), esc(c["model"]),
               fmt_ts(c["ts"]),
               nfmt(o["n"])))
@@ -1568,18 +1823,21 @@ def v_call(q, sid, seq):
     page_idx = chosen[lo:lo + PAGE_BLOCKS]
     body += '<h2>上下文块 <small>共 %s 个，当前筛选 %s 个 · 每页 %d</small></h2>' % (
         nfmt(o["n"]), nfmt(len(chosen)), PAGE_BLOCKS)
+    # 连续的缓存命中块默认折成一行「#a–#b 块缓存命中」，点开逐块查看；
+    # 用户主动选「只看命中」时全部展开，不再折叠。
+    fold = state == "all"
+    span_lo, span_hi = cache_hit_span(d, i) if fold else (0, None)
+    plain, folded = [], []
     for j in page_idx:
-        b = d["ctx"][j]
         st = call_state(d, i, j)
-        cmd = G.cmd_html(b, 140)
-        body += ('<a class="row" href="/s/%s/b/%d?ref=%d" '
-                 'style="grid-template-columns:52px 64px 92px 1fr 84px 62px">'
-                 '<span class="idx">#%d</span><span class="chip %s">%s</span>'
-                 '<span class="chip t">%s</span>'
-                 '<span class="grow"><b style="font-weight:500">%s</b>%s</span>'
-                 '<span class="num">%s 字</span><span class="num" style="color:var(--accent)">全文 →</span></a>' %
-                 (esc(sid), j, seq, j, st, G.CHIP[st], TYPES.get(b["k"], b["k"]),
-                  esc(b["l"]), cmd, nfmt(b["n"])))
+        row = block_row_html(d, i, sid, seq, j, st)
+        if span_hi is not None and span_lo <= j <= span_hi:
+            folded.append((j, row))
+        else:
+            plain.append(row)
+    if folded:
+        body += hit_fold_html(folded[0][0], folded[-1][0], [r for _, r in folded])
+    body += "".join(plain)
     body += pager("/s/%s/c/%d" % (sid, seq), q, p, PAGE_BLOCKS, len(chosen), "块")
 
     if c["out"]:
@@ -1718,6 +1976,9 @@ def v_output(q, sid, seq):
 
 
 def v_search(q, sid=None):
+    # 搜索框选「按块匹配」时服务端直接转交 v_find：form action 固定也能分流，零 JS。
+    if qstr(q, "mode", "text") == "blocks":
+        return v_find(q, sid)
     term = qstr(q, "q")
     scope = qstr(q, "scope", "all")
     d = STORE.get(sid) if sid else None
@@ -1727,19 +1988,9 @@ def v_search(q, sid=None):
     ms = int((time.time() - t0) * 1000)
     action = "/s/%s/search" % sid if sid else "/search"
     crumbs = [("索引", "/")] + ([(d["title"][:24], "/s/%s" % sid)] if d else []) + [("搜索", "")]
-    body = ('<form class="searchbox" method="get" action="%s">'
-            '<input type="text" name="q" value="%s" placeholder="全文关键词">'
-            '<select name="scope">%s</select><button type="submit">搜索</button></form>' %
-            (action, esc(term), "".join(
-                '<option value="%s" %s>%s</option>' %
-                (k, "selected" if scope == k else "", lab)
-                for k, lab in (("all", "全部范围"), ("blocks", "只看上下文块"),
-                               ("outputs", "只看模型输出"), ("turns", "只看提问")))))
-    fq = urlencode({"q": term}) if term else ""
-    fbase = "/s/%s/find" % sid if sid else "/find"
-    body += ('<div class="tabs"><a class="btn" href="%s">按块精确检索 →</a>'
-             '<span class="fine" style="align-self:center">列出全部命中块并跳到命中分片</span></div>' %
-             esc(fbase + ("?" + fq if fq else "")))
+    body = search_box(action, term, "text", scope, "全文关键词 · 可切换「按块匹配」")
+    body += ('<div class="fine" style="margin:-8px 0 14px">切到「按块匹配」会按块聚合，'
+             '给出块内命中总数并直跳命中分片。</div>')
     if warn:
         body += '<div class="warn">%s</div>' % esc(warn)
     if term:
@@ -1778,12 +2029,11 @@ def v_find(q, sid=None):
     p = clamp_p(q, total, FIND_MAX_BLOCKS)
     lo = p * FIND_MAX_BLOCKS
     shown = rows[lo:lo + FIND_MAX_BLOCKS]
-    action = "/s/%s/find" % sid if sid else "/find"
+    # 表单统一提交到 /search 由 mode 分流；分页仍走 /find，避免每次翻页重走分流。
+    action = "/s/%s/search" % sid if sid else "/search"
     base = "/s/%s/find" % sid if sid else "/find"
     crumbs = [("索引", "/")] + ([(d["title"][:24], "/s/%s" % sid)] if d else []) + [("块检索", "")]
-    body = ('<form class="searchbox" method="get" action="%s">'
-            '<input type="text" name="q" value="%s" placeholder="关键词：列出所有命中的上下文块">'
-            '<button type="submit">检索</button></form>' % (action, esc(term)))
+    body = search_box(action, term, "blocks", placeholder="关键词：列出所有命中的上下文块")
     body += ('<div class="note">按<b>块</b>聚合：一个块只列一行，给出块内命中总数与它们落在'
              '哪些 %s 字分片。点片号直接跳到该片并高亮，超长块不用手翻几十页。'
              '与<a href="%s">全文搜索</a>共用同一份原文，不建索引、不落盘。</div>' %
@@ -1880,7 +2130,7 @@ def v_tools(q, sid=None):
                 body += ('<div class="row" style="grid-template-columns:142px 1fr 76px 84px 88px 68px 82px">'
                          '<span class="grow"><a href="%s">%s</a></span>'
                          '<span class="bar"><i class="h" style="width:%.1f%%"></i></span>'
-                         '<span class="num">%s 次</span><span class="num">命中 %.0f%%</span>'
+                         '<span class="num">%s 次</span><span class="num">命中 %.1f%%</span>'
                          '<span class="num credit">%.2f 分</span>'
                          '<span class="num">%d 会话</span><span class="num">%s</span></div>' %
                          (esc(base + "?" + urlencode({"tool": x["tool"]})), esc(x["tool"]),
@@ -1997,7 +2247,7 @@ def v_trend(q, sid):
         if mode == "total":
             h = r["chars"] / scale * 100
             extra = gradient_segments(r)
-            tip = "#%d · %s 字 · 命中 %.0f%%" % (
+            tip = "#%d · %s 字 · 命中 %.1f%%" % (
                 r["seq"], nfmt(r["chars"]), r["rate"] * 100)
         else:
             dv = r["delta"]["chars"]
@@ -2024,7 +2274,7 @@ def v_trend(q, sid):
                  '<span>#%d%s</span><span>%d</span><span>%s</span>'
                  '<span class="num">%s</span>'
                  '<span class="num" style="color:%s">%s%s</span>'
-                 '<span class="num">%.0f%%</span><span class="num">%.2f</span>'
+                 '<span class="num">%.1f%%</span><span class="num">%.2f</span>'
                  '<span class="num">%s%.2f</span></a>' %
                  (esc(r["href"]), r["seq"],
                   " ◆" if r.get("compact") else (" ●" if r["cold"] else ""), r["turn"],
@@ -2127,7 +2377,7 @@ def v_stats(q):
                 ("上下文块", nfmt(st["blocks"])), ("归档原文", nfmt(st["chars"]) + " 字"),
                 ("可见峰值合计", nfmt(st["visible_peak_sum"]) + " 字"),
                 ("压缩次数", nfmt(st["compactions"])),
-                ("累计输入 tok", nfmt(st["pin"])), ("缓存命中率", "%.2f%%" % (st["rate"] * 100)),
+                ("累计输入 tok", nfmt(st["pin"])), ("缓存命中率", "%.1f%%" % (st["rate"] * 100)),
                 ("未命中 tok", nfmt(st["miss"])), ("输出 tok", nfmt(st["pout"])),
                 ("累计积分", "%.2f" % st["credit"]),
                 ("积分/万未命中", "%.3f" % st["unit_miss"])])
@@ -2145,7 +2395,7 @@ def v_stats(q):
     for x in st["top_calls"]:
         body += ('<a class="row bad" href="/s/%s/c/%d" style="grid-template-columns:64px 1fr 104px 84px 84px">'
                  '<span class="idx">#%d</span><span class="grow">%s · %s</span>'
-                 '<span class="num">in %s</span><span class="num">命中 %.0f%%</span>'
+                 '<span class="num">in %s</span><span class="num">命中 %.1f%%</span>'
                  '<span class="num credit">%.2f 分</span></a>' %
                  (esc(x["sid"]), x["seq"], x["seq"], esc(x["ws"]), esc(x["tool"] or "最终回答"),
                   nfmt(x["pin"]), x["rate"] * 100, x["credit"]))
