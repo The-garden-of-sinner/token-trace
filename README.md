@@ -2,9 +2,9 @@
 
 把 WorkBuddy 的会话记录还原成逐次调用的 token 轨迹：每一次调用花了多少积分、带上了哪些上下文、缓存命中到哪里，都能逐条回溯到原文；页面零 JavaScript、运行期零写盘，只依赖 Python 3.8+ 标准库。**在银河麒麟 V10 SP1（兆芯）实测通过**，适配银河麒麟 / 统信 UOS / Deepin 等国产 Linux，提供 `deb` 包与桌面图标、无需 apt 安装第三方依赖，Windows 另有单文件启动器。
 
-![界面截图](docs/demo.png)
+![会话索引](docs/demo.png)
 
-*界面截图：一次虚构的「订单服务 /checkout P99 延迟排查」会话。标题、路径、命令、日志、token 与积分均由 `scripts/make_demo.py` 生成，模型 ID 为平台公开标识，不含任何真实用户数据。*
+*会话索引：全库画像（按模型的输入 token 环、按天走势、工作区递归关系）与会话列表。截图中的数据由 `scripts/make_demo.py` 虚构生成，模型 ID 为平台公开标识，不含任何真实用户数据。*
 
 ![Python](https://img.shields.io/badge/python-3.8%2B-blue) ![Linux](https://img.shields.io/badge/Linux-Kylin%20%7C%20UOS%20%7C%20Deepin-blue) ![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen) ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -105,7 +105,7 @@
 - **工具与命令聚合**：按工具看调用次数 / 积分 / 命中率，按 shell 程序看执行频次，可下钻到该工具的每一次调用
 - **上下文趋势**：逐调用渐变色带柱看五类内容的累计组成与净变化（25% 网格、左侧刻度、命中率折线、压缩 / 冷启动旗标），按调用 / 按轮切换，点柱直达调用详情
 - **上下文块地图**：面积 ∝ 字数的 SVG treemap，按类型着色、同色深浅二次编码；`?k=` 按类型聚焦，点任意块直跳不截断全文
-- **轻量视觉系统**：低饱和墨青主色 + 近墨灰文字链接（全局 `a` 兜底，不再落回浏览器默认亮蓝）、CSS 设计令牌 + 深浅色自适应、构成环、归档 / 退役斜纹条、可见字数走势、会话活动日历热力图；KPI 统一为连续数字带，首页数字条与三张图合成一块概览面板；图表样式按页面按需注入
+- **轻量视觉系统**：低饱和墨青主色 + 近墨灰文字链接（全局 `a` 兜底，不再落回浏览器默认亮蓝）、CSS 设计令牌 + 深浅色自适应、构成环、归档 / 退役斜纹条、可见字数走势、会话活动日历热力图；KPI 统一为连续数字带且**列宽按内容分配**（两位数的「会话」不再和九位 token 一样宽），首页数字条与三张图合成一块概览面板；图表样式按页面按需注入
 - **过渡与返回**：跨文档淡入（淡出 240ms / 淡入 460ms）、KPI 数字区局部 morph（540ms）、卡片 / 数字入场渐变（500 / 600ms，50ms 错峰）、`<details>` 展开高度渐变（400ms），全站共用 `--ease` 缓动曲线；悬浮「返回上一层」胶囊 + 页脚同名链接，父级从面包屑自动推导，长内容页不用浏览器回退
 - **首页工具条**：导航、排序、元信息合成一条分区横带，取代原先两行 pill 按钮；排序为分段控件，窄屏自动折行
 - **命中块折叠**：调用详情里连续命中块默认折成一枚紧凑胶囊「#a–#b 块缓存命中」，展开时才铺成全宽标题条并拉出逐块清单；「按调用浏览」每行也带同样的折叠摘要；主动选「只看命中」时全部展开
@@ -130,7 +130,7 @@
 **Linux（Debian / Ubuntu / 银河麒麟 / 统信 UOS / Deepin）**
 
 ```bash
-V=1.1.4   # 换成 Release 页上的最新版本号
+V=1.1.5   # 换成 Release 页上的最新版本号
 curl -fLO "https://github.com/The-garden-of-sinner/token-trace/releases/download/v$V/token-trace_${V}_all.deb"
 sudo dpkg -i "token-trace_${V}_all.deb"
 token-trace                     # 起服务并自动打开浏览器
@@ -292,7 +292,8 @@ ar + `control.tar.gz` + `data.tar.gz` 容器，因此与 `dpkg-deb` 产物同构
 
 | 版本 | 主要内容 |
 | --- | --- |
-| **v1.1.4** | 社区复测反馈修复：`--cache` 默认改为按会话数自适应（cap < 会话数会让 `/stats` 每轮全部重解析，33 会话 / cap 32 实测约 5 s）；首页会话列表分页（此前 132 个会话时 94.8 KB 会顶破 80 KB 硬闸）；`page(need=...)` 显式声明样式，空库不再丢 `.hero` / `.toolbar`；页脚体积改算整页响应；源文件体积 / 长块字数改为运行时计算；修面包屑双重转义、模型环残差与 DST 分桶。自检增至 73 项 |
+| **v1.1.5** | 视觉收尾：KPI 数字带列宽改为**按内容分配**（`kpi_weights()` 估算每格文字宽度并输出 `fr` 表，两位数的「会话」不再和九位 token 等宽，12 项两行仍按列对齐）；工具条 / 检索区 / 分段控件 / 入口卡 / 会话分组 / 图表卡补齐入场错峰；构成环各段按起始角度错峰生长、概览与走势折线用 `clip-path` 从左往右揭开、渐变色带柱 `scaleY` 拉起；README 替换为最新界面截图（会话索引 + 会话概览）。自检 73 项 |
+| v1.1.4 | 社区复测反馈修复：`--cache` 默认改为按会话数自适应（cap < 会话数会让 `/stats` 每轮全部重解析，33 会话 / cap 32 实测约 5 s）；首页会话列表分页（此前 132 个会话时 94.8 KB 会顶破 80 KB 硬闸）；`page(need=...)` 显式声明样式，空库不再丢 `.hero` / `.toolbar`；页脚体积改算整页响应；源文件体积 / 长块字数改为运行时计算；修面包屑双重转义、模型环残差与 DST 分桶。自检增至 73 项 |
 | v1.1.3 | 轮来源标签（你发的 / 后台任务 / 压缩摘要 / 系统注入 / 内部消息）与 `?kind=` 筛选，非真人输入改显可读摘要；首页「会话 · 子代理关系」面板与会话列表子代理标签；新增 `scripts/build_deb.py`（无 `dpkg-deb` 时用纯标准库构建等价 deb）；Release 补齐 bat / deb / SHA256SUMS 附件。自检 64 项 |
 | v1.1.2 | 前端可视化升级：设计令牌 + 深浅色、SVG 构成环 / 日历热力图 / 块地图、渐变色带趋势柱、按需 CSS 注入；跨文档过渡动效与「返回上一层」；连续命中块折叠、命中率一位小数、首页全库画像、检索与菜单重构；模型名改从 jsonl 的 `providerData` 按输入 token 聚合（不再依赖 `workbuddy.db`），链接配色与首页 / 菜单 / 折叠视觉统一，工具条重排与过渡节奏放缓；修复单轮详情无分页撑破 80 KB 硬闸。自检 64 项 |
 | v1.1.1 | 修复 Windows 调用详情页 500（毫秒时间戳未归一，统一 `fmt_ts()` 并加越界保护，自检增至 63 项）；新增引用 Release 的一键安装、项目图标与 `TokenTrace.bat shortcut` 带图标快捷方式、`SHA256SUMS` 完整性校验与可选签名入口 |
@@ -309,6 +310,10 @@ ar + `control.tar.gz` + `data.tar.gz` 容器，因此与 `dpkg-deb` 产物同构
 
 打开首页后按「工作区 → 会话 → 轮 / 调用 → 上下文块 → 块全文」逐层进入。
 每一级都是独立 URL，可收藏、分享、用 `curl` 直接取。
+
+![会话概览](docs/demo-session.png)
+
+*会话概览：12 项统计、上下文文本构成环、可见规模与归档 / 退役对比条、按轮 / 按调用 / 工具 / 趋势的入口卡。同一份虚构数据。*
 
 | 路由 | 内容 |
 | --- | --- |
@@ -571,7 +576,7 @@ token（`providerData.requestModelName`）。db 不可读时只影响标题 / �
 | 手法 | 落点 | 开销 |
 | --- | --- | --- |
 | 设计令牌 + 深浅色 | `CSS` 的 `:root` 与末尾 `prefers-color-scheme` media；主色 `--accent` 为低饱和墨青，文字链接用 `--link` / `--link-h` 并有全局 `a` 兜底；分类色 `--p0..--p4` 同时供行内 style、SVG 与渐变 | 基础 CSS 每页固定 +1.4 KB；行内颜色不再写死，深浅色各切一次 |
-| 连续数字带与概览面板 | `kpi()` 按项数选列（6/7/4…，见 `kpi_cols()`），用 grid + 1px 间隙露出底色当分隔线，数值 `white-space:nowrap` 不再把单位挤到第二行；首页 `CSS_INDEX` 的 `.hero` 再把 KPI 与三张图合成一块面板、细竖线分栏 | 列数固定后每行填满，不会在末行留出空格；窄屏 3 列 / 2 列自动降级 |
+| 连续数字带与概览面板 | `kpi()` 先用 `kpi_cols()` 按项数选列（6/7/4…），再用 `kpi_weights()` 按每格「文字宽度估算」输出 `--kcols` 的 `fr` 表：CJK 记 1em、西文 0.56em，同一列的多个单元格取最宽值，加固定底盘并按 2.6 倍封顶。grid + 1px 间隙露出底色当分隔线，数值 `white-space:nowrap`；首页 `CSS_INDEX` 的 `.hero` 再把 KPI 与三张图合成一块面板、细竖线分栏 | 列数固定后每行填满，列宽随内容伸缩（28 项实测 1 : 1.9），窄屏 3 列 / 2 列自动降级；纯服务端算宽度，无脚本 |
 | 工作区递归卡片 | 第三列的「父目录 → 工作区」树收进原生 `<details class="wsfold">`，摘要只留「N 个父目录 · M 个工作区」，展开才铺开（父目录最多 8 个、每个最多 4 个子项，其余折叠计数） | 零 JS；默认高度约一行，不会把三列拉得高低差一截 |
 | 构成环 | `compose_bar()` 用 `stroke-dasharray` 画 5 段，配明细行与 ≈ 口径标注 | 5 个 `<circle>` |
 | 渐变色带柱 | `gradient_segments()` 只输出 5 个累计百分比 `--s0..--s4`，渐变本体写在 `.trend a i` 一条规则里 | 40 根柱从约 200 个 DOM 降到 40 个，趋势页反而更小 |
@@ -579,7 +584,7 @@ token（`providerData.requestModelName`）。db 不可读时只影响标题 / �
 | 按需 CSS | `page(need=...)` 显式声明 + body 里 `class="viz"` / `hm` / `map` / `chart` 探测，二者取并集；首页固定声明 `need=("index",)` | 检索 / 全文页不带图表 CSS；空库首页也不会丢 `.hero` / `.toolbar` |
 | 首页分页 | `v_index()` 先排序再按 `PAGE_SESSIONS=40` 切片，`clamp_p` + `pager` 保留 `sort` / `ws` 参数 | 单页体积与会话总数无关（400 会话仍 46.8 KB） |
 | 缓存容量 | `Store(0)` 自适应 `cap = max(32, 会话数 + 8)`，上限 256；索引刷新时同步 | 避免 cap < 会话数 导致的全库重解析（33 会话 / cap 32 时 /stats 约 5 s → 40 ms） |
-| 过渡 | `@view-transition{navigation:auto}` 跨文档淡入、`.kpi` 单独 `view-transition-name` 做数字区 morph、`@keyframes` 入场、`::details-content` 展开高度渐变；全站共用 `--ease: cubic-bezier(.22,.68,.24,1)`，淡出 240ms / 淡入 460ms / 入场 500–600ms / 展开 400ms，淡出短于淡入避免拖影 | 纯 CSS，服务端零开销；`prefers-reduced-motion` 一并关闭 |
+| 过渡 | `@view-transition{navigation:auto}` 跨文档淡入、`.kpi` 单独 `view-transition-name` 做数字区 morph、`@keyframes` 入场（工具条 / 检索区 / 分段控件 / 入口卡 / 会话分组 / 图表卡统一错峰）、`::details-content` 展开高度渐变；构成环的各段按起始角度错峰生长、折线用 `clip-path` 从左往右揭开、渐变色带柱 `scaleY` 拉起；全站共用 `--ease: cubic-bezier(.22,.68,.24,1)`，淡出 240ms / 淡入 460ms / 入场 500–800ms / 展开 400ms，淡出短于淡入避免拖影 | 纯 CSS，服务端零开销；只动 `opacity` / `transform` / `clip-path`，不触发重排；`prefers-reduced-motion` 与打印一并关闭 |
 | 返回上一层 | `back_link()` 从面包屑倒数第二项**往前找第一个带链接的层级**（不带 `ref` 的块全文页中间一级无链接，会回退到会话概览），输出固定胶囊 + 页脚文字链接 | 一处推导覆盖全部视图，每页多一个 `<a>` |
 | 命中块折叠 | `cache_hit_span()` 用前缀和 + `bisect` 求命中前缀 `[lo, hi]`，`hit_fold_html()` 输出原生 `<details>`；折叠态为紧凑胶囊、展开态铺全宽，箭头旋转 + 高度渐变 | O(log B) / 次，不逐块遍历 |
 | 轮来源标签 | `gen_trace.user_kind()` 按 `isCompacted` / `isSummary` / `<cb_summary`、`<task-notification` / `<task-id>`、`isMeta`、`startsNewUserRequest` / `<user_query` 依次判定；`user_disp()` 给非真人输入一句可读摘要，`q` 原文保留供全文检索；`turn_chip()` 输出标签，`v_session` 按 `?kind=` 筛选 | 复用解析时已在手的字段，零额外遍历、零新增索引 |
@@ -616,7 +621,7 @@ token（`providerData.requestModelName`）。db 不可读时只影响标题 / �
 | `windows/` | Windows 版 `start.cmd` / `start.ps1` / `install-shortcut.ps1`，可选签名入口 `sign-release.ps1` |
 | `scripts/` | 发行构建（`build_win_bat.py`、`build_deb.sh`、`build_deb.py`、`release.sh`、`VERSION`）、回归自检（`selftest.py`）、独立压缩校验（`verify_compact.py`）、演示数据生成（`make_demo.py`，虚构排查会话）、图标生成（`make_icon.py`）、校验清单（`make_checksums.py`） |
 | `assets/` | `TokenTrace.ico`（内嵌进单 bat、供快捷方式用）与 `token-trace.png`（Linux hicolor 图标） |
-| `docs/` | `architecture.svg` / `architecture.mmd` 架构图与图源、`demo.png` 界面截图（虚构数据） |
+| `docs/` | `architecture.svg` / `architecture.mmd` 架构图与图源；`demo.png`（会话索引）与 `demo-session.png`（会话概览）界面截图，均由 `scripts/make_demo.py` 的虚构数据渲染 |
 | `REVIEW_CHANGES.md` | 安全与跨平台改造的分阶段变更记录 |
 | `.gitignore` | 排除含会话原文的静态页与运行时产物 |
 | `trace/` | 静态模式产物（不入库），随时可由 `gen_trace.py` 重建 |

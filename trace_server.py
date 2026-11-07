@@ -841,8 +841,10 @@ h2{font-size:13px;font-weight:500;margin:24px 0 9px;padding-bottom:6px;border-bo
 h2 small{font-weight:400;color:var(--dim);font-size:11.5px;margin-left:8px}
 h3{font-size:12.5px;font-weight:500;margin:18px 0 7px;color:var(--fg)}
 /* KPI 是一条连续数字带：1px 网格间隙露出底色当分隔线，换行也自动对齐，
-   不再是一排各自带阴影的小方块。首页 hero 再覆盖成无边界版本。 */
-.kpi{display:grid;grid-template-columns:repeat(var(--kc,6),minmax(0,1fr));gap:1px;
+   不再是一排各自带阴影的小方块。首页 hero 再覆盖成无边界版本。
+   列宽不用等分：由 kpi() 按每格「文字宽度估算」算出 fr 表（--kcols），
+   两位数的「会话」不会占掉和九位 token 一样的位置。 */
+.kpi{display:grid;grid-template-columns:var(--kcols,repeat(6,minmax(0,1fr)));gap:1px;
  background:var(--line2);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:16px}
 .kpi div{background:var(--panel2);padding:10px 14px;min-width:0}
 .kpi b{display:block;font-size:18px;font-weight:550;line-height:1.35;letter-spacing:-.02em;
@@ -852,7 +854,8 @@ h3{font-size:12.5px;font-weight:500;margin:18px 0 7px;color:var(--fg)}
 @media(max-width:980px){.kpi{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}}
 @media(max-width:640px){.kpi{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .compose{display:flex;height:19px;border-radius:5px;overflow:hidden;background:var(--track);margin-bottom:6px}
-.compose i{display:block;height:100%}
+.compose i{display:block;height:100%;transform-origin:left center;animation:tt-bar .62s var(--ease) both}
+@keyframes tt-bar{from{transform:scaleX(.02)}}
 .legend{font-size:11px;color:var(--muted);margin-bottom:12px;display:flex;gap:12px;flex-wrap:wrap}
 .legend span{display:inline-flex;align-items:center;gap:5px}
 .legend i{display:inline-block;width:9px;height:9px;border-radius:2px}
@@ -970,7 +973,21 @@ code{font:11.5px ui-monospace,monospace;background:var(--track);padding:1px 4px;
    慢设备、打印或 headless 快照如果没跑完动画，内容也不会看起来是空白的。 */
 @keyframes tt-in{from{opacity:.88;transform:translateY(7px)}to{opacity:1;transform:none}}
 @keyframes tt-num{from{opacity:.92;transform:translateY(5px);filter:blur(1.2px)}to{opacity:1;transform:none;filter:none}}
-.kpi>div,.viz{animation:tt-in .5s var(--ease) both}
+/* 分区入场：数字带、图表卡、工具条、检索区、入口卡、会话分组都用同一段位移淡入。
+   按文档顺序给 40–140ms 的错峰，页面从上往下「落」下来，而不是整块同时闪出。 */
+.kpi>div,.viz,.toolbar,form.searchbox,.segrow,.tkfilter,.tabs,
+.navcard,details.grp,.chart,.warn,.note{animation:tt-in .5s var(--ease) both}
+/* hero 只做透明度：它带着 view-transition-name 的 KPI，若整体位移，
+   跨文档 morph 的起始快照会被垫高几像素，看起来像数字跳了一下。 */
+.hero{animation:tt-soft .5s var(--ease) both}
+@keyframes tt-soft{from{opacity:.62}to{opacity:1}}
+.toolbar{animation-delay:.06s}form.searchbox{animation-delay:.1s}
+.segrow,.tkfilter{animation-delay:.04s}.warn,.note{animation-delay:.02s}
+.navcard:nth-child(2){animation-delay:.05s}.navcard:nth-child(3){animation-delay:.1s}
+.navcard:nth-child(4){animation-delay:.15s}
+details.grp:nth-of-type(2){animation-delay:.05s}
+details.grp:nth-of-type(3){animation-delay:.1s}
+details.grp:nth-of-type(n+4){animation-delay:.14s}
 .kpi b{animation:tt-num .6s var(--ease) both}
 .kpi>div:nth-child(2){animation-delay:.05s}.kpi>div:nth-child(3){animation-delay:.1s}
 .kpi>div:nth-child(4){animation-delay:.15s}.kpi>div:nth-child(5){animation-delay:.2s}
@@ -1024,9 +1041,14 @@ CSS_VIZ = """
  padding:5px 8px;border-radius:5px;white-space:pre-line;max-width:250px;min-width:90px;box-shadow:var(--shadow);pointer-events:none}
 .donut-row{display:flex;align-items:center;gap:22px;flex-wrap:wrap}
 .donut-wrap{position:relative;width:112px;height:112px;flex:none}
-.donut{width:112px;height:112px;display:block}
+.donut{width:112px;height:112px;display:block;animation:tt-pop .62s var(--ease) both}
 .donut circle{fill:none;stroke-width:5.2}
 .donut .trk{stroke:var(--track)}
+/* 环的唤起：底盘先轻微放大浮起，各段按自己的起始角度错峰「长」出来，
+   读起来是一圈顺时针扫过，而不是整张图一起淡入。 */
+.donut circle:not(.trk){animation:tt-arc .72s var(--ease) both}
+@keyframes tt-pop{from{opacity:.55;transform:scale(.93)}to{opacity:1;transform:none}}
+@keyframes tt-arc{from{stroke-dasharray:0 100}}
 .donut-wrap .ctr{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:none}
 .donut-wrap .ctr b{font-size:16px;font-weight:600;line-height:1.2;font-variant-numeric:tabular-nums}
 .donut-wrap .ctr span{font-size:10px;color:var(--faint)}
@@ -1039,7 +1061,10 @@ CSS_VIZ = """
 .reserve{display:flex;height:14px;border-radius:4px;overflow:hidden;background:var(--track);margin:7px 0 4px}
 .reserve .used{background:var(--accent)}
 .reserve .retired{background:repeating-linear-gradient(45deg,var(--dim) 0 4px,var(--track) 4px 8px)}
-.spark{width:100%;height:38px;display:block}
+/* 折线图的拉起：从左往右用 clip 逐步揭开，折线与面积一起「画」出来。
+   clip-path 只影响合成层，不触发重排；不支持 inset 的浏览器直接显示整条线。 */
+.spark{width:100%;height:38px;display:block;animation:tt-draw .8s var(--ease) both}
+@keyframes tt-draw{from{clip-path:inset(0 100% 0 0);opacity:.55}to{clip-path:inset(0 0 0 0);opacity:1}}
 .spark polyline{fill:none;stroke:var(--accent);stroke-width:1.6;vector-effect:non-scaling-stroke}
 .spark polygon{fill:var(--accent);opacity:.11}
 """
@@ -1077,7 +1102,9 @@ CSS_TREND = """
 .trend a:hover,.trend a:focus-visible{outline:1px solid var(--accent);outline-offset:1px}
 .trend a .mk{position:absolute;top:-3px;left:50%;transform:translateX(-50%);font-size:9px;line-height:1;color:var(--neg2)}
 .trend a .mk.c{color:var(--warn-fg)}
-.trend .ovl{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.trend .ovl{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;
+ animation:tt-line .9s .2s var(--ease) both}
+@keyframes tt-line{from{clip-path:inset(0 100% 0 0);opacity:0}to{clip-path:inset(0 0 0 0);opacity:1}}
 .trend .ovl polyline{fill:none;stroke:var(--fg);stroke-width:1.2;opacity:.42;vector-effect:non-scaling-stroke}
 @keyframes tt-rise{from{transform:scaleY(.02);opacity:.35}to{transform:scaleY(1);opacity:1}}
 """
@@ -1130,7 +1157,7 @@ CSS_INDEX = """
  border:1px solid var(--line);border-radius:14px;overflow:hidden;margin:0 0 18px;box-shadow:var(--shadow)}
 .hero:before{content:"";position:absolute;left:0;right:0;top:0;height:2px;
  background:linear-gradient(90deg,var(--p0),var(--p1),var(--p2),var(--p3),var(--p4));opacity:.55}
-.hero .kpi{display:grid;grid-template-columns:repeat(var(--kc,6),minmax(0,1fr));gap:0;margin:0;
+.hero .kpi{display:grid;grid-template-columns:var(--kcols,repeat(6,minmax(0,1fr)));gap:0;margin:0;
  background:transparent;border:0;border-bottom:1px solid var(--line);border-radius:0;
  padding:16px 4px 18px}
 .hero .kpi>div{background:transparent;border:0;border-right:1px solid var(--line2);
@@ -1373,7 +1400,7 @@ def kpi_cols(n):
     """数字带的列数：优先让每行填满，避免最后一行只剩一两格、右边空一片。
 
     6 列 ≈ 178 px / 7 列 ≈ 152 px（1120 容器内），足够容纳 9 位带千分位的数字
-    加单位；8 项拆成 4×2 而不是挤成一行 8 格。
+    加单位；8 项拆成 4×2 而不是挤成一行 8 格。列宽由 kpi_weights 再细分。
     """
     if n <= 7:
         return max(1, n)
@@ -1386,10 +1413,45 @@ def kpi_cols(n):
     return min(6, n)
 
 
-def kpi(items):
-    n = len(items)
-    return ('<div class="kpi" style="--kc:%d">' % kpi_cols(n) + "".join(
-        '<div><b>%s</b><span>%s</span></div>' % (esc(v), esc(k)) for k, v in items) + '</div>')
+def _text_px(s, fs):
+    """粗估一段文字的显示宽度（px）：CJK 记 1em，西文 0.56em，逗号/空格更窄。
+
+    只用来分配 KPI 列宽，不需要精确：误差在几十 px 内，靠后面的底盘吸收。
+    """
+    w = 0.0
+    for ch in s:
+        if ch == " ":
+            w += fs * .28
+        elif ord(ch) < 128:
+            w += fs * (.30 if ch in ",.:·%|" else .56)
+        else:
+            w += fs
+    return w
+
+
+def kpi_weights(items, cols, fs=18, pad=32):
+    """按内容宽度给每列一个 fr 权重，替代「每格一样宽」。
+
+    「会话 11」只要 60 px，而「177,353,380 tok」要 160 px；等分的结果就是
+    左边一片空白、右边数字贴着边框。这里以每列最宽的那格为基准，加一个
+    固定底盘（保证短格不贴边），再压到 2.6 倍以内（避免一个长数字吃掉半行）。
+    同一列的多行取最大值，所以 12 项 6 列的两行也仍然对齐。
+    """
+    need = [0.0] * cols
+    for i, (k, v) in enumerate(items):
+        n = max(_text_px(str(v), fs), _text_px(str(k), 10.5)) + pad
+        need[i % cols] = max(need[i % cols], n)
+    raw = [n + 46.0 for n in need]
+    lo = min(raw) or 1.0
+    return " ".join("minmax(0,%.2ffr)" % min(r / lo, 2.6) for r in raw)
+
+
+def kpi(items, fs=18, pad=32):
+    """KPI 数字带。fs/pad 由调用方按版面给：首页 hero 用 21px 字号、18px 内边距。"""
+    cols = kpi_cols(len(items))
+    return ('<div class="kpi" style="--kcols:%s">' % kpi_weights(items, cols, fs, pad)
+            + "".join('<div><b>%s</b><span>%s</span></div>' % (esc(v), esc(k))
+                      for k, v in items) + '</div>')
 
 
 # ---------------------------------------------------------------- 可视化原语
@@ -1609,9 +1671,9 @@ def index_overview(ss):
         frac = val / total * 100.0
         seg = max(0.0, frac - min(.6, frac * .2))
         color = colors[i % len(colors)]
-        arcs.append('<circle cx="21" cy="21" r="15.9155" style="stroke:%s" '
+        arcs.append('<circle cx="21" cy="21" r="15.9155" style="stroke:%s;animation-delay:%.2fs" '
                     'stroke-dasharray="%.3f %.3f" transform="rotate(%.2f 21 21)"/>' %
-                    (color, seg, 100 - seg, -90 + acc * 3.6))
+                    (color, .03 + acc / 100.0 * .42, seg, 100 - seg, -90 + acc * 3.6))
         legend.append('<div class="sl"><i style="background:%s"></i>'
                       '<span class="g">%s</span><b>%s</b><em>%.1f%%</em></div>' %
                       (color, esc(cut(name, 20)), kh(val), frac))
@@ -1932,7 +1994,8 @@ def v_index(q):
                 ("会话", nfmt(len(ss))), ("工作区", nfmt(len(set(s["ws"] for s in ss)))),
                 ("模型调用", nfmt(total_calls)), ("累计积分", "%.1f" % total_cr),
                 ("累计输入 tok", nfmt(sum(s["pin"] for s in ss))),
-                ("累计输出 tok", nfmt(sum(s["pout"] for s in ss)))]) +
+                ("累计输出 tok", nfmt(sum(s["pout"] for s in ss)))],
+                fs=21, pad=42) +
             index_overview(ss) + '</div>')
     # 子代理不再单独占用一块高度：关系已在下方会话列表里以「子代理 · Explore」
     # /「N 个子代理」标签体现，避免把列表挤到首屏之外。
