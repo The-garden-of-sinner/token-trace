@@ -105,11 +105,11 @@
 - **工具与命令聚合**：按工具看调用次数 / 积分 / 命中率，按 shell 程序看执行频次，可下钻到该工具的每一次调用
 - **上下文趋势**：逐调用渐变色带柱看五类内容的累计组成与净变化（25% 网格、左侧刻度、命中率折线、压缩 / 冷启动旗标），按调用 / 按轮切换，点柱直达调用详情
 - **上下文块地图**：面积 ∝ 字数的 SVG treemap，按类型着色、同色深浅二次编码；`?k=` 按类型聚焦，点任意块直跳不截断全文
-- **轻量视觉系统**：CSS 设计令牌 + 深浅色自适应、构成环、归档 / 退役斜纹条、可见字数走势、会话活动日历热力图；图表样式按页面按需注入，纯列表页不带图表 CSS
+- **轻量视觉系统**：低饱和墨青主色 + 近墨灰文字链接（全局 `a` 兜底，不再落回浏览器默认亮蓝）、CSS 设计令牌 + 深浅色自适应、构成环、归档 / 退役斜纹条、可见字数走势、会话活动日历热力图；KPI 统一为连续数字带，首页数字条与三张图合成一块概览面板；图表样式按页面按需注入
 - **过渡与返回**：跨文档淡入、KPI 数字区局部 morph、卡片 / 数字入场渐变、`<details>` 展开高度渐变；悬浮「返回上一层」胶囊 + 页脚同名链接，父级从面包屑自动推导，长内容页不用浏览器回退
-- **命中块折叠**：调用详情里连续命中块默认折成一行「#a–#b 块缓存命中」，点开逐块查看；「按调用浏览」每行也带同样的折叠摘要；主动选「只看命中」时全部展开
-- **首页全库画像**：按模型的输入 token 环、按时间的输入 token 折线、工作区路径递归树（两级 + 占比条），只消费已缓存的会话索引
-- **统一检索入口**：搜索框内切换「按字符匹配 / 按块匹配」，由服务端分流；会话页入口改为卡片网格 + 分段浏览控件，次要链接降级
+- **命中块折叠**：调用详情里连续命中块默认折成一枚紧凑胶囊「#a–#b 块缓存命中」，展开时才铺成全宽标题条并拉出逐块清单；「按调用浏览」每行也带同样的折叠摘要；主动选「只看命中」时全部展开
+- **首页全库画像**：按模型的输入 token 环（模型名取自 jsonl 的 `providerData`，不依赖 db）、按时间的输入 token 折线、工作区路径递归树（两级 + 占比条），只消费已缓存的会话索引
+- **统一检索入口**：搜索框内用零脚本分段开关切换「按字符匹配 / 按块匹配」，由服务端分流；会话页入口改为无边框渐变卡片（分类色侧条）+ 分段浏览控件，次要链接降级
 - 缓存命中率统一显示到小数点后一位
 - **压缩感知**：识别上下文压缩，只统计本次请求真正带上的块；压缩事件页把真实账单与修正前后口径并列，可人工核对
 - 跨会话统计：字数构成、最贵调用、最大块、冷启动断点、计费单价
@@ -439,7 +439,7 @@ Top 为 `python3` 552、`ls` 251、`grep` 216。聚合结果缓存 60 秒，
 
 `/s/<sid>/trend` 两个维度：`g=call|turn` 按 1328 次调用或按 103 轮
 （每轮取最后一次调用）；`mode=total` 按五类颜色堆叠累计组成，
-`mode=delta` 蓝色为增长、红色为回落，高度按 |Δ| 归一化。
+`mode=delta` 墨青为增长、红色为回落，高度按 |Δ| 归一化。
 柱子是 `<a href>` 包住的纯 CSS 堆叠 `<i>`，悬停用原生 `title`，
 点进去直达该次调用的完整块清单 —— 零 JavaScript、每页 40 根、页面 27–36 KB。
 红点标记命中率骤降的冷启动调用，琥珀点（◆）标记上下文压缩 —— 那一柱会断崖下降。
@@ -531,7 +531,9 @@ python3 -B scripts/verify_compact.py 9367d786       # 只看某个会话
 `scan_all`、`brief`、`cmd_html`、`seg_user`），两个模式共用同一套口径。
 
 **数据层：一次解析，全文常驻。** `Store.sessions()` 常驻会话索引（60 秒或
-`/?refresh=1` 失效），从 `workbuddy.db` 补 `cwd` / 标题 / 模型，从 jsonl 补统计。
+`/?refresh=1` 失效），从 `workbuddy.db` 补 `cwd` / 标题，从 jsonl 补统计与按模型拆分的输入
+token（`providerData.requestModelName`）。db 不可读时只影响标题 / 工作区的兜底，
+模型环与所有 token 统计照常可用。
 `Store.get(sid)` 第一次访问某会话时调 `build(path, full=True)`，最大会话解析 0.69 s；
 `_derive()` 一次算好 `pref[]` 累积字数前缀和、`ctxns[]` 每次调用前的块数、
 `by_turn` 归属、冷启动断点与全量 KPI。**不建倒排索引、不落盘、不改源文件。**
@@ -557,16 +559,17 @@ python3 -B scripts/verify_compact.py 9367d786       # 只看某个会话
 
 | 手法 | 落点 | 开销 |
 | --- | --- | --- |
-| 设计令牌 + 深浅色 | `CSS` 的 `:root` 与末尾 `prefers-color-scheme` media；分类色 `--p0..--p4` 同时供行内 style、SVG 与渐变 | 基础 CSS 每页固定 +1.4 KB；行内颜色不再写死 |
+| 设计令牌 + 深浅色 | `CSS` 的 `:root` 与末尾 `prefers-color-scheme` media；主色 `--accent` 为低饱和墨青，文字链接用 `--link` / `--link-h` 并有全局 `a` 兜底；分类色 `--p0..--p4` 同时供行内 style、SVG 与渐变 | 基础 CSS 每页固定 +1.4 KB；行内颜色不再写死，深浅色各切一次 |
+| 连续数字带与概览面板 | 全局 `.kpi` 用 flex + 1px 间隙露出底色当分隔线（换行自动均分）；首页 `CSS_INDEX` 的 `.hero` 再把 KPI 与三张图合成一块面板、细竖线分栏 | 纯 CSS，无新增 DOM；窄屏自动折行 |
 | 构成环 | `compose_bar()` 用 `stroke-dasharray` 画 5 段，配明细行与 ≈ 口径标注 | 5 个 `<circle>` |
 | 渐变色带柱 | `gradient_segments()` 只输出 5 个累计百分比 `--s0..--s4`，渐变本体写在 `.trend a i` 一条规则里 | 40 根柱从约 200 个 DOM 降到 40 个，趋势页反而更小 |
 | 热力图 / 块地图 / 走势线 | `activity_heatmap()` 复用已缓存的会话索引；`block_treemap()` 只在 `/map` 页排序一次块列表；`visible_series()` 直接读 `_derive()` 的前缀和 | 不新增索引、不缓存大对象 |
 | 按需 CSS | `page()` 按 body 是否出现 `class="viz"` / `hm` / `map` / `chart` 决定拼哪几段样式 | 检索 / 全文页不带图表 CSS |
 | 过渡 | `@view-transition{navigation:auto}` 跨文档淡入、`.kpi` 单独 `view-transition-name` 做数字区 morph、`@keyframes` 入场、`::details-content` 展开高度渐变 | 纯 CSS，服务端零开销；`prefers-reduced-motion` 一并关闭 |
 | 返回上一层 | `back_link()` 从面包屑倒数第二项**往前找第一个带链接的层级**（不带 `ref` 的块全文页中间一级无链接，会回退到会话概览），输出固定胶囊 + 页脚文字链接 | 一处推导覆盖全部视图，每页多一个 `<a>` |
-| 命中块折叠 | `cache_hit_span()` 用前缀和 + `bisect` 求命中前缀 `[lo, hi]`，`hit_fold_html()` 输出原生 `<details>`；口径与 `call_state()` 一致 | O(log B) / 次，不逐块遍历 |
-| 首页全库画像 | `index_overview()` 只聚合 `STORE.sessions()` 的 `model / mtime / ws / pin`，输出模型环、时间折线、工作区两级树 | 零额外全库遍历、零新增索引 |
-| 统一检索 | `search_box()` 固定 form action，`v_search()` 按 `mode` 分流到 `v_find()` | 零 JS、零新增路由；分页仍直连 `/find` |
+| 命中块折叠 | `cache_hit_span()` 用前缀和 + `bisect` 求命中前缀 `[lo, hi]`，`hit_fold_html()` 输出原生 `<details>`；折叠态为紧凑胶囊、展开态铺全宽，箭头旋转 + 高度渐变 | O(log B) / 次，不逐块遍历 |
+| 首页全库画像 | `index_overview()` 只聚合 `STORE.sessions()` 的 `models / model / mtime / ws / pin`，输出模型环、时间折线、工作区两级树；`models` 由 `scan_all()` 在原有逐行遍历里按输入 token 加权得出 | 零额外全库遍历、零新增索引、不依赖 `workbuddy.db` |
+| 统一检索 | `search_box()` 用 `radio + label` 分段开关（无 `id`、无脚本、同页可复用），固定 form action，`v_search()` 按 `mode` 分流到 `v_find()` | 零 JS、零新增路由；分页仍直连 `/find` |
 | 按需 CSS（续） | `CSS_FOLD` / `CSS_NAV` / `CSS_INDEX` 分别按 `hitfold` / `navgrid` / `ovgrid` 注入 | 只有用到的页面才带对应图表样式 |
 | 降级 | 渐变色标不被老浏览器识别时回落纯色轨道（柱高与链接不变）；`prefers-reduced-motion` 关动效；数据不足显示统一空态 | 信息不丢，静态预览仍可读 |
 
@@ -740,13 +743,15 @@ RSS 仍是 84.0 MB —— Python 不把 arena 归还 OS。它限制的是缓存�
 | 路径 | 内容 |
 | --- | --- |
 | `~/.workbuddy/projects/**/*.jsonl` | 每次调用记录：消息、工具调用与结果、`providerData.rawUsage` |
-| `~/.workbuddy/workbuddy.db` | `sessions` 表提供 `cwd`、标题、模型名 |
+| `~/.workbuddy/workbuddy.db` | `sessions` 表提供 `cwd`、标题（仅用于展示；读不到时退回路径兜底） |
 
 **模型标识**：`providerData` 的 `model` / `requestModelId` / `requestModelName` 记录了每次
 调用的模型（本机出现过 `deepseek-v4.1-flash`、`hy4-free`、`step-5-preview`、
-`hy4-preview-f`、`hy3`），`sessions` 表也有模型名。但**当前页面不显示模型类型，也不按
-模型分组统计**：所有视图都是会话内全模型合计，积分只对扣费模型非零；需要按模型拆分时
-得自行筛选 jsonl。这也是后续最值得补的一处展示。
+`hy4-preview-f`、`hy3`）。`scan_all()` 在扫描 jsonl 时按输入 token 把每次调用归到
+`requestModelName`（缺省回退 `model`），首页「按模型 · 输入 token」环据此按调用拆分，
+会话中途换模型也能分别计入；会话列表显示该会话按 token 加权的主模型。`sessions` 表的
+模型名只作为整段会话都没有 `providerData` 时的兜底，因此 db 不可读不影响模型环。
+口径提示：该环按**输入 token** 归因，不是按积分或调用次数；积分只对扣费模型非零。
 
 `rawUsage` 用到 `prompt_tokens`、`prompt_cache_hit_tokens`、`completion_tokens`、`credit`。
 `providerData.isCompacted` / `compactType` / `isSummary` 用于识别上下文压缩，
@@ -836,8 +841,9 @@ RSS 仍是 84.0 MB —— Python 不把 arena 归还 OS。它限制的是缓存�
     系统提示与工具 schema 也不在可见块里，两者不能换算。
     另外压缩后的第一次调用常有 `pin=0`（并列调用，无独立 usage），
     校验表会自动取之后第一个带 usage 的调用，所以「压缩后调用号」可能不紧邻压缩点。
-13. **页面不显示模型类型，也不按模型分组**：会话里混用多个模型时统计是合计值，
-    数据来源本身有模型字段（见「数据来源与口径」）。
+13. **按模型拆分只做到首页画像这一层**：首页环按 `providerData` 的输入 token
+    分模型统计，会话列表只显示该会话的加权主模型；会话内 KPI、趋势与积分仍是
+    全模型合计，不提供按模型筛选会话或按模型拆分计费（见「数据来源与口径」）。
 14. **积分单价分 1× / 2× / 4× 三档**，且时段与策略会变；跨日比较单位成本前须先
     归一到同一档，`/stats` 的粗算单价不能当真实单价用（见「数据来源与口径」）。
 15. **`.bat` 无法内嵌图标或做 Authenticode 签名**：批处理是纯文本，Windows 的图标
@@ -868,8 +874,8 @@ RSS 仍是 84.0 MB —— Python 不把 arena 归还 OS。它限制的是缓存�
     「按调用浏览」每页 40 行折叠摘要约 +8 KB；逐块清单放在调用详情页（那里同样折叠），
     不在此重复铺开。单轮详情 `/s/<sid>/t/<n>` 已补分页，避免一轮几百次调用把单页
     撑过 80 KB 硬闸（长会话实测修复前 89.4 KB、修复后回到 56 KB 量级）。
-    首页「按模型」环依赖 `workbuddy.db` 提供模型名；读不到时该格显示空态说明，
-    而不是画一个「未知模型 100%」的无信息量单色环。
+    首页「按模型」环的模型名来自 jsonl 的 `providerData`，与 `workbuddy.db` 是否
+    可读无关；只有整库都没有模型名时才显示空态，不画「未知模型 100%」的单色环。
 
 ---
 

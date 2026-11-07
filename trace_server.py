@@ -773,21 +773,28 @@ CSS = """
 :root{
 --bg:#fff;--fg:#2C2C2A;--panel:#F7F6F2;--panel2:#FAFAF7;--track:#F1EFE8;
 --line:#E3E1D9;--line2:#EDEBE3;--border:#D3D1C7;--muted:#5F5E5A;--faint:#888780;--dim:#B4B2A9;
---accent:#378ADD;--accent-d:#185FA5;--accent-bg:#E6F1FB;--accent-fg:#0C447C;
---neg:#A32D2D;--neg2:#E24B4A;--neg-bg:#FCEBEB;--credit:#854F0B;
---warn:#EF9F27;--warn-bg:#FAEEDA;--warn-fg:#BA7517;--ok-bg:#E1F5EE;--ok-fg:#0F6E56;
---part-bg:#EEEDFE;--part-fg:#534AB7;--mark:#FFE9A8;
+/* 主色是低饱和墨青，与五类数据色分开一档；文字链接用近墨灰，
+   hover 才浮出墨青与细下划线，避免整页亮蓝/蓝紫的廉价感。 */
+--accent:#2E7D74;--accent-d:#245F58;--accent-bg:#E8F2F0;--accent-fg:#1E5550;
+--link:#3E4B4D;--link-h:#1D6C64;--rule:#C4D5D1;
+--neg:#A32D2D;--neg2:#E24B4A;--neg-bg:#FCEBEB;--credit:#7A5326;
+--warn:#C08A2E;--warn-bg:#F8EFE0;--warn-fg:#8A6220;--ok-bg:#E1F0EC;--ok-fg:#1F6155;
+--part-bg:#ECEEF2;--part-fg:#59627A;--mark:#F2DFA0;
 --p0:#1FA39A;--p1:#EF9F27;--p2:#3B82D6;
 --p3:#8A63D2;--p4:#D26A9B;
 --shadow:0 1px 2px #0000000a,0 2px 8px #00000008
 }
 *{box-sizing:border-box}
 body{margin:0;padding:0 0 84px;font:14px/1.65 system-ui,-apple-system,"Noto Sans CJK SC",sans-serif;color:var(--fg);background:var(--bg)}
+/* 全局兜底：提示条 / 折叠内容等内联 <a> 原先落回浏览器默认亮蓝，
+   统一为近墨灰 + 淡色细下划线；下面各组件再用更高特异性覆盖。 */
+a{color:var(--link);text-decoration-color:var(--rule);text-underline-offset:3px}
+a:hover{color:var(--link-h)}
 .wrap{max-width:1120px;margin:0 auto;padding:0 26px}
 header{background:var(--panel);border-bottom:1px solid var(--line);padding:16px 0 13px;margin-bottom:20px}
 .crumb{font-size:11.5px;color:var(--faint);margin-bottom:5px}
-.crumb a{color:var(--accent);text-decoration:none}
-.crumb a:hover{text-decoration:underline}
+.crumb a{color:var(--link);text-decoration:none;text-underline-offset:3px}
+.crumb a:hover{color:var(--link-h);text-decoration:underline;text-decoration-color:var(--rule)}
 .crumb .sep{color:var(--dim);margin:0 6px}
 h1{font-size:19px;font-weight:500;margin:0 0 3px}
 .sub{color:var(--muted);font-size:12px}
@@ -795,10 +802,13 @@ h1{font-size:19px;font-weight:500;margin:0 0 3px}
 h2{font-size:13px;font-weight:500;margin:24px 0 9px;padding-bottom:6px;border-bottom:1px solid var(--line);color:var(--fg)}
 h2 small{font-weight:400;color:var(--dim);font-size:11.5px;margin-left:8px}
 h3{font-size:12.5px;font-weight:500;margin:18px 0 7px;color:var(--fg)}
-.kpi{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
-.kpi div{background:var(--track);border-radius:9px;padding:9px 13px;min-width:112px;box-shadow:var(--shadow)}
-.kpi b{display:block;font-size:18px;font-weight:500;line-height:1.35;font-variant-numeric:tabular-nums}
-.kpi span{font-size:11px;color:var(--muted)}
+/* KPI 是一条连续数字带：1px 网格间隙露出底色当分隔线，换行也自动对齐，
+   不再是一排各自带阴影的小方块。首页 hero 再覆盖成无边界版本。 */
+.kpi{display:flex;flex-wrap:wrap;gap:1px;
+ background:var(--line2);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:16px}
+.kpi div{flex:1 1 112px;background:var(--panel2);padding:10px 14px;min-width:0}
+.kpi b{display:block;font-size:18px;font-weight:550;line-height:1.35;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.kpi span{font-size:10.5px;letter-spacing:.04em;color:var(--muted)}
 .compose{display:flex;height:19px;border-radius:5px;overflow:hidden;background:var(--track);margin-bottom:6px}
 .compose i{display:block;height:100%}
 .legend{font-size:11px;color:var(--muted);margin-bottom:12px;display:flex;gap:12px;flex-wrap:wrap}
@@ -808,21 +818,38 @@ h3{font-size:12.5px;font-weight:500;margin:18px 0 7px;color:var(--fg)}
 .note{background:var(--accent-bg);border-left:2px solid var(--accent);padding:9px 13px;border-radius:0 7px 7px 0;font-size:12px;color:var(--accent-fg);margin-bottom:16px}
 .warn{background:var(--warn-bg);border-left:2px solid var(--warn);padding:9px 13px;border-radius:0 7px 7px 0;font-size:12px;color:var(--credit);margin-bottom:16px}
 .fine{color:var(--faint);font-size:11px}
-form.searchbox{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center;
- background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
-form.searchbox input[type=text]{flex:1;min-width:220px;padding:8px 12px;border:1px solid var(--border);border-radius:7px;font:13px inherit;background:var(--bg);color:var(--fg)}
-form.searchbox select{padding:8px 10px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--fg);font:12px inherit;cursor:pointer}
-form.searchbox button{background:var(--fg);color:var(--bg);border-color:var(--fg);padding:8px 17px;border-radius:7px;font-weight:500}
-form.searchbox button:hover{background:var(--accent);border-color:var(--accent);color:var(--bg)}
+/* 检索区：无外框，上排是轻控制条、下排是柔和凹槽输入，避免白色文本框的呆板感。 */
+form.searchbox{display:flex;flex-direction:column;gap:10px;background:transparent;border:0;padding:0;margin:0 0 18px}
+.sb-tools{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.sb-main{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+form.searchbox input[type=text]{flex:1;min-width:220px;padding:11px 16px;
+ border:1px solid transparent;border-radius:11px;font:13px inherit;
+ background:var(--track);color:var(--fg);box-shadow:inset 0 1px 2px #0000000a;
+ transition:border-color .18s,background-color .18s}
+form.searchbox input[type=text]::placeholder{color:var(--faint)}
+form.searchbox input[type=text]:focus{outline:none;border-color:var(--accent);background:var(--bg)}
+form.searchbox select{padding:6px 11px;border:1px solid transparent;border-radius:999px;
+ background:var(--track);color:var(--muted);font:11px inherit;cursor:pointer}
+form.searchbox select:hover{border-color:var(--line)}
+.modepick{display:inline-flex;gap:2px;background:var(--track);border-radius:999px;padding:3px}
+.modepick label{position:relative;cursor:pointer}
+.modepick input{position:absolute;opacity:0;width:0;height:0}
+.modepick label>span{display:block;padding:5px 14px;border-radius:999px;font-size:11px;
+ color:var(--muted);transition:background-color .2s,color .2s,box-shadow .2s}
+.modepick input:checked + span{background:var(--bg);color:var(--fg);font-weight:600;box-shadow:var(--shadow)}
+.modepick input:focus-visible + span{outline:2px solid var(--accent);outline-offset:2px}
+form.searchbox button{background:var(--accent);color:var(--bg);border:1px solid var(--accent);
+ padding:10px 22px;border-radius:11px;font:12px inherit;font-weight:500}
+form.searchbox button:hover{background:var(--link-h);border-color:var(--link-h);color:var(--bg)}
 button,.btn{display:inline-block;padding:6px 13px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--fg);font:12px inherit;text-decoration:none;cursor:pointer}
-button:hover,.btn:hover{border-color:var(--accent);color:var(--accent-d);background:var(--accent-bg)}
-.btn.on{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+button:hover,.btn:hover{border-color:var(--accent);color:var(--link-h);background:var(--accent-bg)}
+.btn.on{background:var(--accent);color:var(--bg);border-color:var(--accent)}
 .tabs{display:flex;gap:6px;margin:14px 0;flex-wrap:wrap}
-.row{display:grid;align-items:center;gap:9px;padding:7px 11px;border:1px solid var(--line);border-radius:7px;margin-bottom:4px;background:var(--bg);font-size:12px}
-.row:hover{border-color:var(--accent);background:var(--panel)}
+.row{display:grid;align-items:center;gap:9px;padding:7px 11px;border:1px solid var(--line);border-radius:7px;margin-bottom:4px;background:var(--bg);color:var(--fg);font-size:12px}
+.row:hover{border-color:var(--accent);background:var(--panel);color:var(--fg)}
 .row .grow{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.row a,.row a:visited{color:var(--accent-d);text-decoration:none}
-.row a:hover{text-decoration:underline}
+.row a,.row a:visited{color:var(--link);text-decoration:none;text-underline-offset:3px}
+.row a:hover{color:var(--link-h);text-decoration:underline;text-decoration-color:var(--rule)}
 .row .num{font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
 .row .num.credit{color:var(--credit);font-weight:500}
 .row.bad{border-left:3px solid var(--neg2)}
@@ -840,7 +867,7 @@ a:focus-visible,button:focus-visible,summary:focus-visible{outline:2px solid var
 .chip.part{background:var(--part-bg);color:var(--part-fg)}.chip.none{background:var(--track);color:var(--faint)}
 .chip.cold{background:var(--neg-bg);color:var(--neg)}
 .chip.t{background:var(--track);color:var(--muted)}
-.cmd{display:block;font:11px/1.5 ui-monospace,"Noto Sans Mono CJK SC",monospace;color:var(--accent-d);word-break:break-all;margin-top:3px}
+.cmd{display:block;font:11px/1.5 ui-monospace,"Noto Sans Mono CJK SC",monospace;color:var(--muted);word-break:break-all;margin-top:3px}
 .pager{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:16px 0 6px;font-size:12px;color:var(--muted)}
 .pager .info{margin:0 8px;font-variant-numeric:tabular-nums}
 .pager .btn{min-width:64px;text-align:center}
@@ -858,7 +885,7 @@ th{color:var(--muted);font-weight:500;font-size:11.5px;background:var(--panel)}
 td.r,th.r{text-align:right}
 footer{margin-top:26px;padding-top:10px;border-top:1px solid var(--line2);font-size:11px;color:var(--dim);display:flex;gap:14px;flex-wrap:wrap}
 footer a{color:var(--faint);text-decoration:none}
-footer a:hover{color:var(--accent)}
+footer a:hover{color:var(--link-h)}
 details.grp{margin-bottom:9px;border:1px solid var(--line);border-radius:9px;overflow:hidden}
 details.grp>summary{padding:9px 13px;cursor:pointer;list-style:none;background:var(--panel2);font-size:12.5px}
 details.grp>summary::-webkit-details-marker{display:none}
@@ -866,7 +893,7 @@ details.grp>summary small{color:var(--dim);font-weight:400;margin-left:8px}
 details.grp .in{padding:8px 11px 3px}
 code{font:11.5px ui-monospace,monospace;background:var(--track);padding:1px 4px;border-radius:3px}
 .apirow{display:grid;grid-template-columns:minmax(260px,1fr) 2fr;gap:10px;padding:7px 10px;border-bottom:1px solid var(--line2);font-size:12px}
-.apirow code{background:none;padding:0;color:var(--accent-d)}
+.apirow code{background:none;padding:0;color:var(--link)}
 /* 跨文档视图过渡：同源跳转整页 cross-fade，纯 CSS 声明，不支持的浏览器直接忽略，
    页面照常跳转。数字 / 卡片只动 opacity 与 transform，不触发重排。 */
 @view-transition{navigation:auto}
@@ -901,7 +928,7 @@ code{font:11.5px ui-monospace,monospace;background:var(--track);padding:1px 4px;
  padding:9px 16px;border-radius:999px;background:var(--fg);color:var(--bg);border:1px solid var(--line);
  font-size:12px;font-weight:500;text-decoration:none;box-shadow:0 4px 16px #0000002e;opacity:.94;
  transition:transform .18s,opacity .18s}
-.back:hover{opacity:1;transform:translateY(-2px)}
+.back:hover{opacity:1;transform:translateY(-2px);color:var(--bg)}
 .back:active{transform:translateY(0)}
 .back .ar{font-size:15px;line-height:1}
 @media print{.back{display:none}*{animation:none!important;transition:none!important}}
@@ -912,10 +939,11 @@ code{font:11.5px ui-monospace,monospace;background:var(--track);padding:1px 4px;
 @media(prefers-color-scheme:dark){:root{
 --bg:#15171A;--fg:#E4E6E8;--panel:#1C1F23;--panel2:#202429;--track:#262A30;
 --line:#33383F;--line2:#2B3036;--border:#3A4048;--muted:#A7ACB3;--faint:#838B93;--dim:#666E77;
---accent:#6BA9EE;--accent-d:#9CC7F7;--accent-bg:#1B2C3E;--accent-fg:#A8D0F7;
+--accent:#6FC2B4;--accent-d:#9EDBD0;--accent-bg:#1A302D;--accent-fg:#A9DDD4;
+--link:#C4CECD;--link-h:#8AD6C8;--rule:#3A4B48;
 --neg:#E87777;--neg2:#E26363;--neg-bg:#3A1F1F;--credit:#D9A441;
 --warn:#D9A441;--warn-bg:#332A18;--warn-fg:#E3BC72;--ok-bg:#173029;--ok-fg:#7FCFB2;
---part-bg:#272440;--part-fg:#AEA6F0;--mark:#6B5417;
+--part-bg:#262B35;--part-fg:#AAB6CC;--mark:#6B5417;
 --p0:#4FCFC2;--p1:#E0AE4B;--p2:#6BA9EE;
 --p3:#B292F0;--p4:#E88FB8;
 --shadow:0 1px 2px #00000040,0 2px 8px #00000030
@@ -996,26 +1024,70 @@ CSS_TREND = """
 
 # 命中块折叠：只在按调用浏览 / 调用详情这类有块清单的页面注入。
 CSS_FOLD = """
-.hitfold{border:1px solid var(--line);border-radius:8px;margin:0 0 4px;background:var(--panel);overflow:hidden}
-.hitfold>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:9px;
- padding:7px 11px;font-size:11.5px;background:var(--accent-bg);color:var(--accent-fg)}
+/* 折叠行：默认是「一枚安静的胶囊」，展开后才拉出带边框的内容区，
+   箭头随之旋转。mini 版贴附在调用行下方，不另起一张卡片。 */
+.hitfold{margin:0 0 6px;border-radius:10px}
+.hitfold>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:10px;
+ width:auto;padding:7px 15px;font-size:11.5px;border:1px solid var(--line);border-radius:999px;
+ background:var(--panel2);color:var(--muted);
+ transition:background-color .2s,border-color .2s,color .2s,box-shadow .2s,border-radius .2s}
 .hitfold>summary::-webkit-details-marker{display:none}
-.hitfold>summary .hf-dot{width:8px;height:8px;border-radius:50%;background:var(--accent);flex:none}
-.hitfold>summary b{font-weight:600}
-.hitfold>summary .hf-n{color:var(--muted);font-variant-numeric:tabular-nums}
-.hitfold>summary small{margin-left:auto;color:var(--faint);font-size:10.5px}
-.hitfold>summary:hover{filter:brightness(.97)}
-.hitfold .in{padding:6px 8px 2px;background:var(--bg)}
-.hitfold.mini{margin:-1px 0 6px;border-left:2px solid var(--accent);border-radius:0 0 6px 6px}
-.hitfold.mini>summary{background:transparent;padding:4px 9px;font-size:10.5px}
-.hitfold.mini .in{padding:7px 11px;font-size:11px;display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.hitfold>summary:before{content:"";width:0;height:0;flex:none;
+ border-left:5px solid var(--accent);border-top:4px solid transparent;border-bottom:4px solid transparent;
+ transition:transform .22s}
+.hitfold[open]>summary:before{transform:rotate(90deg)}
+.hitfold>summary .hf-dot{display:none}
+.hitfold>summary b{font-weight:600;color:var(--fg)}
+.hitfold>summary .hf-n{color:var(--muted);font-variant-numeric:tabular-nums;font-size:10.5px;
+ padding:1px 8px;border-radius:999px;background:var(--track)}
+.hitfold>summary small{margin-left:4px;color:var(--faint);font-size:10.5px}
+.hitfold[open]>summary small{margin-left:auto}
+.hitfold>summary:hover{background:var(--accent-bg);border-color:var(--accent);color:var(--accent-fg)}
+.hitfold[open]>summary{display:flex;width:100%;padding:9px 13px;
+ border-radius:10px 10px 0 0;background:var(--accent-bg);border-color:var(--accent)}
+.hitfold .in{padding:8px 10px 2px;background:var(--bg);border:1px solid var(--line);
+ border-top:0;border-radius:0 0 10px 10px}
+.hitfold.mini{margin:-2px 0 8px}
+.hitfold.mini>summary{display:inline-flex;width:auto;padding:4px 12px;border-radius:999px;
+ background:var(--track);border-color:transparent;font-size:10.5px}
+.hitfold.mini[open]>summary{width:auto;padding:4px 12px;border-radius:999px}
+.hitfold.mini>summary:before{border-left-width:4px;border-top-width:3.5px;border-bottom-width:3.5px}
+.hitfold.mini[open]>summary{border-radius:999px;background:var(--accent-bg)}
+.hitfold.mini .in{display:inline-block;border:0;background:transparent;padding:6px 12px 0;font-size:11px}
+@supports (interpolate-size:allow-keywords){
+ .hitfold{interpolate-size:allow-keywords}
+ .hitfold::details-content{block-size:0;overflow:hidden;
+  transition:block-size .24s ease,content-visibility .24s ease allow-discrete}
+ .hitfold[open]::details-content{block-size:auto}
+}
 """
 
 # 首页全库画像：只有索引页带这些规则。
 CSS_INDEX = """
-.ovgrid{display:grid;grid-template-columns:250px 1fr 1fr;gap:18px}
-.ovcell{min-width:0}
-.ovt{font-size:11.5px;font-weight:600;color:var(--muted);margin-bottom:9px;padding-bottom:6px;border-bottom:1px solid var(--line2)}
+/* 首页概览：数字条与三张图合成一块连续面板，消除「六个小方块 + 一张大白卡」的割裂。
+   只覆盖 .hero 内部，其他页面的 .kpi / .viz 保持原样。 */
+.hero{position:relative;background:linear-gradient(160deg,var(--panel2),var(--panel));
+ border:1px solid var(--line);border-radius:14px;overflow:hidden;margin:0 0 18px;box-shadow:var(--shadow)}
+.hero:before{content:"";position:absolute;left:0;right:0;top:0;height:2px;
+ background:linear-gradient(90deg,var(--p0),var(--p1),var(--p2),var(--p3),var(--p4));opacity:.55}
+.hero .kpi{display:grid;grid-template-columns:repeat(6,1fr);gap:0;margin:0;
+ background:transparent;border:0;border-bottom:1px solid var(--line);border-radius:0;
+ padding:16px 4px 18px}
+.hero .kpi>div{background:transparent;border:0;border-right:1px solid var(--line2);
+ border-radius:0;min-width:0;padding:2px 18px;box-shadow:none}
+.hero .kpi>div:last-child{border-right:0}
+.hero .kpi b{font-size:21px;font-weight:550;letter-spacing:-.025em;line-height:1.3;color:var(--fg)}
+.hero .kpi span{font-size:10.5px;letter-spacing:.05em;color:var(--faint)}
+.hero .viz{background:transparent;border:0;border-radius:0;box-shadow:none;margin:0;padding:16px 18px 18px}
+.hero .viz-hd{margin-bottom:14px}
+.hero .viz-hd b{font-size:12px;font-weight:600;letter-spacing:.02em}
+.ovgrid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0}
+.ovcell{min-width:0;padding:0 18px;border-right:1px solid var(--line2)}
+.ovcell:first-child{padding-left:0}
+.ovcell:last-child{border-right:0;padding-right:0}
+.ovt{display:flex;align-items:center;gap:6px;font-size:10.5px;font-weight:600;
+ letter-spacing:.06em;color:var(--faint);margin-bottom:12px}
+.ovt:before{content:"";width:5px;height:5px;border-radius:50%;background:var(--accent);opacity:.75;flex:none}
 .ovgrid .donut-row{gap:10px}
 .ovgrid .donut-wrap,.ovgrid .donut{width:84px;height:84px}
 .ovgrid .donut-wrap .ctr b{font-size:13px}
@@ -1031,24 +1103,41 @@ CSS_INDEX = """
 .wsbar i{display:block;height:100%;background:var(--accent);opacity:.72}
 .wsrow.top .wsbar i{opacity:1}
 .wsn{text-align:right;color:var(--faint);font-variant-numeric:tabular-nums}
-@media(max-width:900px){.ovgrid{grid-template-columns:1fr}}
+@media(max-width:900px){
+ .hero .kpi{grid-template-columns:repeat(3,1fr)}
+ .hero .kpi>div:nth-child(3){border-right:0}
+ .hero .kpi>div:nth-child(-n+3){border-bottom:1px solid var(--line2);padding-bottom:10px;margin-bottom:8px}
+ .ovgrid{grid-template-columns:1fr}
+ .ovcell{border-right:0;border-top:1px solid var(--line2);padding:14px 0 0;margin-top:14px}
+ .ovcell:first-child{border-top:0;margin-top:0;padding-top:0}
+}
 """
 
 # 会话页入口卡片与分段控件：只在有 navgrid 的页面注入。
 CSS_NAV = """
-.navgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin:14px 0 10px}
-.navcard{display:flex;flex-direction:column;gap:3px;padding:11px 13px;border:1px solid var(--line);
- border-radius:9px;background:var(--panel);text-decoration:none;color:var(--fg);
- transition:border-color .18s,transform .18s,box-shadow .18s}
-.navcard:hover{border-color:var(--accent);transform:translateY(-2px);box-shadow:var(--shadow)}
-.navcard b{font-size:12px;font-weight:600}
+/* 入口卡片：无边框、柔和渐变底，只靠左侧分类色细条区分，hover 时色条展开。 */
+.navgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:14px 0 10px}
+.navcard{position:relative;display:flex;flex-direction:column;gap:4px;padding:14px 16px 13px;
+ border:0;border-radius:12px;background:linear-gradient(150deg,var(--panel),var(--panel2));
+ text-decoration:none;color:var(--fg);overflow:hidden;
+ transition:transform .2s,box-shadow .2s}
+.navcard:before{content:"";position:absolute;left:0;top:16px;bottom:16px;width:2px;border-radius:2px;
+ background:var(--nc,var(--accent));opacity:.85;transition:top .22s,bottom .22s,opacity .22s}
+.navcard:hover{transform:translateY(-2px);box-shadow:var(--shadow)}
+.navcard:hover:before{top:0;bottom:0;opacity:1}
+.navcard b{font-size:12px;font-weight:600;letter-spacing:.01em}
 .navcard span{font-size:10.5px;color:var(--muted);line-height:1.45}
+.navcard i{position:absolute;right:14px;top:12px;font-style:normal;font-size:13px;
+ color:var(--faint);opacity:.5;transition:transform .2s,opacity .2s,color .2s}
+.navcard:hover i{transform:translate(2px,-2px);opacity:1;color:var(--link-h)}
 .segrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0 4px;padding-bottom:10px;border-bottom:1px solid var(--line2)}
-.seg{display:inline-flex;background:var(--track);border-radius:8px;padding:3px}
-.seg a{padding:5px 13px;border-radius:6px;font-size:11.5px;color:var(--muted);text-decoration:none}
+.seg{display:inline-flex;background:var(--track);border-radius:999px;padding:3px}
+.seg a{padding:5px 15px;border-radius:999px;font-size:11.5px;color:var(--muted);text-decoration:none;
+ transition:background-color .2s,color .2s}
+.seg a:hover{color:var(--link-h)}
 .seg a.on{background:var(--bg);color:var(--fg);font-weight:600;box-shadow:var(--shadow)}
 .seglink{margin-left:auto;font-size:11px;color:var(--faint);text-decoration:none}
-.seglink:hover{color:var(--accent)}
+.seglink:hover{color:var(--link-h)}
 @media(max-width:820px){.navgrid{grid-template-columns:repeat(2,1fr)}}
 """
 
@@ -1171,10 +1260,13 @@ def search_box(action, term="", mode="text", scope="all", placeholder="关键词
     零 JS 下 form 的 action 是固定的，所以用 mode 参数让 /search 决定交给
     全文检索还是按块检索，而不是靠脚本改 action。
     """
-    mode_sel = ('<select name="mode" aria-label="匹配方式">'
-                '<option value="text" %s>按字符匹配</option>'
-                '<option value="blocks" %s>按块匹配</option></select>' %
-                ("selected" if mode == "text" else "", "selected" if mode == "blocks" else ""))
+    # 分段开关用 radio + label：无需 id（同页可能有多个搜索框）、无需脚本，
+    # 提交时照样带 mode=text|blocks，由 v_search 在服务端分流。
+    mode_pick = ('<span class="modepick" role="group" aria-label="匹配方式">'
+                 '<label><input type="radio" name="mode" value="text" %s><span>按字符匹配</span></label>'
+                 '<label><input type="radio" name="mode" value="blocks" %s><span>按块匹配</span></label>'
+                 '</span>' % ("checked" if mode == "text" else "",
+                              "checked" if mode == "blocks" else ""))
     scope_sel = ""
     if mode == "text":
         scope_sel = '<select name="scope" aria-label="检索范围">' + "".join(
@@ -1183,9 +1275,10 @@ def search_box(action, term="", mode="text", scope="all", placeholder="关键词
             for k, lab in (("all", "全部范围"), ("blocks", "只看上下文块"),
                            ("outputs", "只看模型输出"), ("turns", "只看提问"))) + '</select>'
     return ('<form class="searchbox" method="get" action="%s">'
-            '<input type="text" name="q" value="%s" placeholder="%s">%s%s'
-            '<button type="submit">%s</button></form>' %
-            (esc(action), esc(term), esc(placeholder), mode_sel, scope_sel,
+            '<span class="sb-tools">%s%s</span>'
+            '<span class="sb-main"><input type="text" name="q" value="%s" placeholder="%s">'
+            '<button type="submit">%s</button></span></form>' %
+            (esc(action), mode_pick, scope_sel, esc(term), esc(placeholder),
              "检索" if mode == "blocks" else "搜索"))
 
 
@@ -1309,8 +1402,9 @@ def activity_heatmap(ss, weeks=10):
 def index_overview(ss):
     """首页全库画像：按模型的输入 token 环 + 按时间的折线 + 工作区递归树。
 
-    三种图都只消费 STORE.sessions() 已缓存的会话索引字段（model / mtime / ws /
-    pin），不解析任何会话全文、不新增索引、不新增一次全库遍历。
+    三种图都只消费 STORE.sessions() 已缓存的会话索引字段（models / model /
+    mtime / ws / pin），不解析任何会话全文、不新增索引、不新增一次全库遍历。
+    模型名来自 jsonl 的 providerData，不依赖 workbuddy.db。
     """
     if not ss:
         return ""
@@ -1319,7 +1413,13 @@ def index_overview(ss):
     # 1) 按模型：输入 token 构成环
     by_model = Counter()
     for s in ss:
-        by_model[s["model"] or "未知模型"] += s["pin"]
+        # scan_all 已在同一次逐行遍历里按输入 token 分模型加权；老索引或
+        # 无 providerData 的会话退回到单值 model，口径仍与会话列表一致。
+        mm = s.get("models") or {}
+        if mm:
+            by_model.update(mm)
+        else:
+            by_model[s["model"] or "未知模型"] += s["pin"]
     models = sorted(by_model.items(), key=lambda x: -x[1])
     if len(models) > 5:
         models = models[:5] + [("其他 %d 个模型" % (len(by_model) - 5),
@@ -1387,15 +1487,15 @@ def index_overview(ss):
                         '<span class="wsn">%d</span></div>' %
                         (esc(cut(name, 20)), min(pin / total * 100, 100), n))
 
-    # 模型名来自 workbuddy.db；读不到时不画「未知模型 100%」这种无信息量的单色环。
-    if any(s.get("meta_ok", True) for s in ss):
+    # 模型名取自会话 jsonl 的 providerData，与 workbuddy.db 是否可读无关；
+    # 只有整库都没有模型名时才不画「未知模型 100%」这种无信息量的单色环。
+    if by_model and not (len(by_model) == 1 and "未知模型" in by_model):
         model_cell = ('<div class="donut-row"><div class="donut-wrap">%s'
                       '<div class="ctr"><b>%s</b><span>tok</span></div></div>'
                       '<div class="slice">%s</div></div>' %
                       (donut, kh(total), "".join(legend)))
     else:
-        model_cell = ('<div class="empty">模型名来自 workbuddy.db，当前不可读；'
-                      '此图暂不可用（见页面顶部提示）</div>')
+        model_cell = '<div class="empty">会话记录未写模型名，此图暂不可用</div>'
 
     return ('<div class="viz"><div class="viz-hd"><b>全库画像</b>'
             '<small>只读取已缓存的会话索引 · 输入 token 口径 · 无额外全库遍历</small></div>'
@@ -1540,7 +1640,7 @@ def block_row_html(d, i, sid, seq, j, st):
             '<span class="idx">#%d</span><span class="chip %s">%s</span>'
             '<span class="chip t">%s</span>'
             '<span class="grow"><b style="font-weight:500">%s</b>%s</span>'
-            '<span class="num">%s 字</span><span class="num" style="color:var(--accent)">全文 →</span></a>' %
+            '<span class="num">%s 字</span><span class="num" style="color:var(--link-h)">全文 →</span></a>' %
             (esc(sid), j, seq, j, st, G.CHIP[st], TYPES.get(b["k"], b["k"]),
              esc(b["l"]), G.cmd_html(b, 140), nfmt(b["n"])))
 
@@ -1583,7 +1683,7 @@ def call_row(d, c, sid, show_turn=True):
              ('<span class="chip t" style="margin-left:6px">轮 %d</span>' % c["turn"]) if show_turn and c["turn"] else "",
              nfmt(c["pin"]), nfmt(c["pin"] - c["hit"]), nfmt(c["pout"]), pct,
              c.get("credit") or 0,
-             '<span style="color:var(--accent)">详情 →</span>'))
+             '<span style="color:var(--link-h)">详情 →</span>'))
 
 
 def turn_row(d, t, sid):
@@ -1594,7 +1694,7 @@ def turn_row(d, t, sid):
             '<span class="num">%d 次</span><span class="num">in %s</span>'
             '<span class="num">命中 %s</span><span class="num">out %s</span>'
             '<span class="num credit">%.2f 分</span>'
-            '<span class="num" style="color:var(--accent)">展开 →</span></a>' %
+            '<span class="num" style="color:var(--link-h)">展开 →</span></a>' %
             (esc(sid), b["i"], b["i"], esc(b["q"] or "（只有系统注入）"),
              '<span class="chip cold" style="margin-left:6px">冷启动</span>' if b["cold"] else "",
              b["calls"], nfmt(b["pin"]), "%.1f%%" % (b["rate"] * 100),
@@ -1617,14 +1717,15 @@ def v_index(q):
 
     total_cr = sum(s["credit"] for s in ss)
     total_calls = sum(s["calls"] for s in ss)
-    body = kpi([("会话", nfmt(len(ss))), ("工作区", nfmt(len(set(s["ws"] for s in ss)))),
+    body = ('<div class="hero">' + kpi([
+                ("会话", nfmt(len(ss))), ("工作区", nfmt(len(set(s["ws"] for s in ss)))),
                 ("模型调用", nfmt(total_calls)), ("累计积分", "%.1f" % total_cr),
                 ("累计输入 tok", nfmt(sum(s["pin"] for s in ss))),
-                ("累计输出 tok", nfmt(sum(s["pout"] for s in ss)))])
-    body += index_overview(ss)
+                ("累计输出 tok", nfmt(sum(s["pout"] for s in ss)))]) +
+            index_overview(ss) + '</div>')
     if any(not s.get("meta_ok", True) for s in ss):
-        body += ('<div class="warn">workbuddy.db 未读到：会话标题、工作区与模型名已退回兜底值，'
-                 '详情见服务端终端输出。</div>')
+        body += ('<div class="warn">workbuddy.db 未读到：会话标题与工作区已退回路径兜底；'
+                 '模型名、token 与积分来自会话记录，不受影响。详情见服务端终端输出。</div>')
     body += search_box("/search", "", "text", "all",
                        "搜上下文块 / 输出 / 提问原文（跨全部会话）")
     body += ('<div class="tabs">'
@@ -1698,13 +1799,13 @@ def v_session(q, sid):
     body += search_box("/s/%s/search" % sid, "", "text", "all",
                        "只在这个会话里搜（含 58 万字的长块）")
     body += ('<div class="navgrid">'
-             '<a class="navcard" href="/s/%s/map"><b>上下文块地图</b>'
+             '<a class="navcard" style="--nc:var(--p0)" href="/s/%s/map"><i>↗</i><b>上下文块地图</b>'
              '<span>面积 ∝ 字数 · 点块看全文</span></a>'
-             '<a class="navcard" href="/s/%s/trend"><b>上下文趋势</b>'
+             '<a class="navcard" style="--nc:var(--p2)" href="/s/%s/trend"><i>↗</i><b>上下文趋势</b>'
              '<span>逐调用构成 / 净变化 / 命中率</span></a>'
-             '<a class="navcard" href="/s/%s/tools"><b>工具与命令</b>'
+             '<a class="navcard" style="--nc:var(--p1)" href="/s/%s/tools"><i>↗</i><b>工具与命令</b>'
              '<span>按工具看积分与调用频次</span></a>'
-             '<a class="navcard" href="/s/%s/compact"><b>压缩事件校验</b>'
+             '<a class="navcard" style="--nc:var(--accent)" href="/s/%s/compact"><i>↗</i><b>压缩事件校验</b>'
              '<span>真实账单与修正前后口径</span></a></div>' % ((esc(sid),) * 4))
     body += ('<div class="segrow"><span class="fine">浏览方式</span>'
              '<span class="seg"><a class="%s" href="/s/%s?view=turns">按轮浏览</a>'
@@ -1792,7 +1893,7 @@ def v_call(q, sid, seq):
                 ("未命中 tok", nfmt(c["pin"] - c["hit"])),
                 ("命中率", "%.1f%%" % (r * 100) if r is not None else "—"),
                 ("输出 tok", nfmt(c["pout"])), ("积分", "%.2f" % (c.get("credit") or 0)),
-                ("可见上下文", "%s 块 / %s 字" % (nfmt(o["n"]), nfmt(o["chars"]))),
+                ("可见上下文", "%s 块 / %s 字" % (nfmt(o["n"]), kh(o["chars"]))),
                 ("缓存边界", "#%s" % (o["boundary"] + 1) if o["boundary"] is not None else "—")])
     if o["compacted"]:
         body += ('<div class="warn">这次调用之前发生过<b>上下文压缩</b>：'
@@ -1801,8 +1902,8 @@ def v_call(q, sid, seq):
                  '<a href="/s/%s/compact">看本会话的压缩事件</a></div>' %
                  (nfmt(o["lo"]), esc(sid)))
     body += ('<div class="note">工具 <b>%s</b> · 模型 %s · %s<br>'
-             '下面列出这次请求<b>实际带上的全部 %s 个块</b>：蓝色=命中缓存的前缀，琥珀=本次未命中，'
-             '紫色块是跨边界的那一块。<b>连续命中块默认折叠成一行「#a–#b 块缓存命中」，'
+             '下面列出这次请求<b>实际带上的全部 %s 个块</b>，每行徽章标注命中 / 未命中 / 跨边界，'
+             '颜色只作辅助。<b>连续命中块默认折叠成一行「#a–#b 块缓存命中」，'
              '点一下再逐块展开</b>；点任意一行看该块不截断的全文。</div>' %
              (esc(c["tool"] or "最终回答"), esc(c["model"]),
               fmt_ts(c["ts"]),
@@ -1845,7 +1946,7 @@ def v_call(q, sid, seq):
         for k, seg in enumerate(c["out"]):
             body += ('<a class="row" href="/s/%s/o/%d?seg=%d" style="grid-template-columns:70px 1fr 100px 70px">'
                      '<span class="chip t">%s</span><span class="grow">%s</span>'
-                     '<span class="num">%s 字</span><span class="num" style="color:var(--accent)">全文 →</span></a>' %
+                     '<span class="num">%s 字</span><span class="num" style="color:var(--link-h)">全文 →</span></a>' %
                      (esc(sid), seq, k, esc(seg["kind"]), esc(seg["label"]),
                       nfmt(len(seg["text"]))))
     nav = ('<div class="tabs">'
@@ -2224,7 +2325,7 @@ def v_trend(q, sid):
                  ("冷启动断点", nfmt(len(d["cold"])))])
     body += ('<div class="note">每根柱是一次%s的<b>可见上下文</b>（≈ 字数为原文统计，'
              '不含系统提示与工具 schema，非官方 tokenizer）。'
-             '累计模式把 %d 类内容压成<b>一条色带</b>，净变化模式蓝色为增长、红色为回落；'
+             '累计模式把 %d 类内容压成<b>一条色带</b>，净变化模式墨青为增长、红色为回落；'
              '高度按本页最大值归一化（翻页时刻度随本页数据重标定，跨页比高低请看左侧刻度），'
              '左侧为刻度、背景横线为 25%% 网格。'
              '细折线是缓存命中率（顶 = 100%%）。悬停看数值，点柱或表格行直达该次调用的完整块清单。'
@@ -2403,7 +2504,7 @@ def v_stats(q):
     for x in st["top_blocks"]:
         body += ('<a class="row" href="/s/%s/b/%d" style="grid-template-columns:64px 1fr 110px 76px">'
                  '<span class="idx">#%d</span><span class="grow">%s · %s</span>'
-                 '<span class="num">%s 字</span><span class="num" style="color:var(--accent)">全文 →</span></a>' %
+                 '<span class="num">%s 字</span><span class="num" style="color:var(--link-h)">全文 →</span></a>' %
                  (esc(x["sid"]), x["idx"], x["idx"], TYPES.get(x["kind"], x["kind"]),
                   esc(x["label"]), nfmt(x["chars"])))
     body += '<h2>缓存冷启动断点 <small>共 %d 次；按当次输入量排序，列前 30</small></h2>' % len(st["cold"])

@@ -641,7 +641,8 @@ def scan_all():
             con.close()
     except Exception as e:
         meta_ok = False
-        print("token-trace: 读取 %s 失败：%s: %s（标题/工作区/模型已退回兜底值）"
+        print("token-trace: 读取 %s 失败：%s: %s（标题/工作区退回路径兜底；"
+              "模型名与统计来自 jsonl，不受影响）"
               % (db, type(e).__name__, e), file=sys.stderr)
 
     out = []
@@ -655,27 +656,38 @@ def scan_all():
         turns = calls = 0
         credit = pin = pout = 0
         ai = ""
+        model_tokens = {}
         skipped = {"skipped": 0}
         for d in iter_rows(f, skipped):
             t = d.get("type")
             if t == "message" and d.get("role") == "user":
                 turns += 1
             elif t == "function_call":
-                ru = (d.get("providerData") or {}).get("rawUsage") or {}
-                if not ru.get("prompt_tokens"):
+                pd = d.get("providerData") or {}
+                ru = pd.get("rawUsage") or {}
+                pt = ru.get("prompt_tokens", 0)
+                if not pt:
                     continue
                 calls += 1
-                pin += ru.get("prompt_tokens", 0)
+                pin += pt
                 pout += ru.get("completion_tokens", 0)
                 credit += ru.get("credit") or 0
+                # 模型名直接从会话记录取：db 只负责补标题/工作区，db 不可读或
+                # 会话中途换过模型时，仍能得到按输入 token 加权的真实构成。
+                m = pd.get("requestModelName") or pd.get("model") or ""
+                if m:
+                    model_tokens[m] = model_tokens.get(m, 0) + pt
             elif t == "ai-title" and not ai:
                 ai = d.get("aiTitle") or ""
         info = meta.get(sid, {})
+        primary_model = (max(model_tokens, key=model_tokens.get) if model_tokens
+                         else (info.get("model") or ""))
         out.append({
             "path": f, "id": sid,
             "ws": info.get("cwd") or os.path.basename(os.path.dirname(f)).replace("-", "/"),
             "title": info.get("title") or ai or "(无标题)",
-            "model": info.get("model") or "",
+            "model": primary_model,
+            "models": model_tokens,
             "mtime": os.path.getmtime(f),
             "turns": turns, "calls": calls, "credit": credit, "pin": pin, "pout": pout,
             "skipped": skipped["skipped"],
