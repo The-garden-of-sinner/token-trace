@@ -782,7 +782,7 @@ CSS = """
 --shadow:0 1px 2px #0000000a,0 2px 8px #00000008
 }
 *{box-sizing:border-box}
-body{margin:0;padding:0 0 50px;font:14px/1.65 system-ui,-apple-system,"Noto Sans CJK SC",sans-serif;color:var(--fg);background:var(--bg)}
+body{margin:0;padding:0 0 84px;font:14px/1.65 system-ui,-apple-system,"Noto Sans CJK SC",sans-serif;color:var(--fg);background:var(--bg)}
 .wrap{max-width:1120px;margin:0 auto;padding:0 26px}
 header{background:var(--panel);border-bottom:1px solid var(--line);padding:16px 0 13px;margin-bottom:20px}
 .crumb{font-size:11.5px;color:var(--faint);margin-bottom:5px}
@@ -864,7 +864,48 @@ details.grp .in{padding:8px 11px 3px}
 code{font:11.5px ui-monospace,monospace;background:var(--track);padding:1px 4px;border-radius:3px}
 .apirow{display:grid;grid-template-columns:minmax(260px,1fr) 2fr;gap:10px;padding:7px 10px;border-bottom:1px solid var(--line2);font-size:12px}
 .apirow code{background:none;padding:0;color:var(--accent-d)}
-@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+/* 跨文档视图过渡：同源跳转整页 cross-fade，纯 CSS 声明，不支持的浏览器直接忽略，
+   页面照常跳转。数字 / 卡片只动 opacity 与 transform，不触发重排。 */
+@view-transition{navigation:auto}
+::view-transition-old(root){animation:vt-out .16s cubic-bezier(.4,0,1,1) both}
+::view-transition-new(root){animation:vt-in .26s cubic-bezier(0,0,.2,1) both}
+@keyframes vt-out{to{opacity:0;transform:translateY(-5px)}}
+@keyframes vt-in{from{opacity:0;transform:translateY(8px)}}
+/* KPI 单独命名：跨页时数字区局部变形 + 聚焦淡入，而不是整页一起淡。
+   每个视图最多一个 .kpi，名字不会在同一文档里重复。 */
+.kpi{view-transition-name:trace-kpi}
+::view-transition-group(trace-kpi){animation-duration:.34s}
+::view-transition-old(trace-kpi){animation:vt-fade .16s ease both}
+::view-transition-new(trace-kpi){animation:vt-kpi .34s cubic-bezier(.2,.7,.2,1) both}
+@keyframes vt-fade{to{opacity:0}}
+@keyframes vt-kpi{from{opacity:0;transform:translateY(6px);filter:blur(2px)}to{opacity:1;transform:none;filter:none}}
+@keyframes tt-in{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+@keyframes tt-num{from{opacity:0;transform:translateY(5px);filter:blur(2.5px)}to{opacity:1;transform:none;filter:none}}
+.kpi>div,.viz{animation:tt-in .34s cubic-bezier(.2,.7,.2,1) both}
+.kpi b{animation:tt-num .42s cubic-bezier(.2,.7,.2,1) both}
+.kpi>div:nth-child(2){animation-delay:.03s}.kpi>div:nth-child(3){animation-delay:.06s}
+.kpi>div:nth-child(4){animation-delay:.09s}.kpi>div:nth-child(5){animation-delay:.12s}
+.kpi>div:nth-child(6){animation-delay:.15s}.kpi>div:nth-child(n+7){animation-delay:.18s}
+.row,.btn,button,.chip,footer a,.crumb a{transition:border-color .18s,background-color .18s,color .18s,transform .18s,opacity .18s}
+.btn:active,button:active{transform:translateY(1px)}
+@supports (interpolate-size:allow-keywords){
+ details.grp{interpolate-size:allow-keywords}
+ details.grp::details-content{block-size:0;overflow:hidden;transition:block-size .26s ease,content-visibility .26s ease allow-discrete}
+ details.grp[open]::details-content{block-size:auto}
+}
+/* 返回上一层：链接从面包屑倒数第二项自动推导，长内容页也始终可见 */
+.back{position:fixed;right:20px;bottom:20px;z-index:20;display:inline-flex;align-items:center;gap:8px;
+ padding:9px 16px;border-radius:999px;background:var(--fg);color:var(--bg);border:1px solid var(--line);
+ font-size:12px;font-weight:500;text-decoration:none;box-shadow:0 4px 16px #0000002e;opacity:.94;
+ transition:transform .18s,opacity .18s}
+.back:hover{opacity:1;transform:translateY(-2px)}
+.back:active{transform:translateY(0)}
+.back .ar{font-size:15px;line-height:1}
+@media print{.back{display:none}}
+@media(prefers-reduced-motion:reduce){
+ *{animation:none!important;transition:none!important}
+ ::view-transition-group(*),::view-transition-old(*),::view-transition-new(*){animation:none!important}
+}
 @media(prefers-color-scheme:dark){:root{
 --bg:#15171A;--fg:#E4E6E8;--panel:#1C1F23;--panel2:#202429;--track:#262A30;
 --line:#33383F;--line2:#2B3036;--border:#3A4048;--muted:#A7ACB3;--faint:#838B93;--dim:#666E77;
@@ -961,6 +1002,27 @@ def crumb(items):
     return '<div class="crumb">' + "".join(out) + "</div>"
 
 
+def back_link(crumbs, footer=False):
+    """父级 = 面包屑里从倒数第二项往前找的第一个带链接的层级；首页不渲染。
+
+    有些页面中间一级是没有链接的纯文字（例如不带 ref 的块全文页，
+    「调用 #N」无处可去），这时应继续往回退到会话概览，而不是整个返回入口消失。
+    所有视图都不用各自加「返回」按钮，也不用浏览器回退：悬浮胶囊在长内容页
+    始终可见，页脚再给一份纯文字链接作为无 fixed 定位时的兜底。
+    """
+    for label, href in reversed(crumbs[:-1]):
+        if not href:
+            continue
+        name = str(label)
+        text = "返回 " + cut(name, 12)
+        if footer:
+            return '<a href="%s">← %s</a>' % (esc(href), esc(text))
+        return ('<a class="back" href="%s" title="%s">'
+                '<span class="ar" aria-hidden="true">←</span><span>%s</span></a>' %
+                (esc(href), esc("返回上一层：" + name), esc(text)))
+    return ""
+
+
 def page(title, crumbs, body, sub="", extra_head=""):
     # 只注入本屏真正用到的图表样式；纯列表页保持原来的 CSS 体积量级。
     css = CSS
@@ -975,14 +1037,16 @@ def page(title, crumbs, body, sub="", extra_head=""):
     head = ('<!DOCTYPE html><html lang="zh-CN"><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
             '<title>%s · Token 轨迹</title><style>%s</style>' % (esc(title), css))
+    back = back_link(crumbs)
     return (head + '<header><div class="wrap">' + crumb(crumbs) +
             '<h1>%s<span class="badge">完整模式 · 零截断</span></h1>' % esc(title) +
             ('<div class="sub">%s</div>' % esc(sub) if sub else '') +
             '</div></header><div class="wrap">' + extra_head + body +
             '<footer><span>本页 HTML %.1f KB</span>' % (len(body.encode("utf-8")) / 1024.0) +
-            '<span>数据只读 · 全文由后端按需提供 · 无需 JavaScript</span>'
-            '<a href="/">索引</a><a href="/stats">全局统计</a><a href="/api">API</a></footer>'
-            '</div></html>')
+            '<span>数据只读 · 全文由后端按需提供 · 无需 JavaScript</span>' +
+            back_link(crumbs, footer=True) +
+            '<a href="/">索引</a><a href="/stats">全局统计</a><a href="/api">API</a></footer>' +
+            back + '</div></html>')
 
 
 def clamp_p(q, total, size):
