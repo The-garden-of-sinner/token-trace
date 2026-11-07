@@ -277,7 +277,7 @@ python3 scripts/make_checksums.py    # -> dist/SHA256SUMS
 
 | 版本 | 主要内容 |
 | --- | --- |
-| **v1.1.0** | 工具与命令聚合、逐调用上下文趋势与 Delta、声明式路由表 `ROUTE_SPEC` + 58 项固化自检、**压缩感知统计修复**（可见区间 `[vf, ctxN)`、压缩事件校验页、独立复核脚本）；文档补齐三部分单价与峰谷倍率口径 |
+| **v1.1.0** | 工具与命令聚合、逐调用上下文趋势与 Delta、声明式路由表 `ROUTE_SPEC` + 63 项固化自检、**压缩感知统计修复**（可见区间 `[vf, ctxN)`、压缩事件校验页、独立复核脚本）；文档补齐三部分单价与峰谷倍率口径 |
 | v1.0.1 | 块检索：按块聚合命中、给出命中分片并直跳高亮 |
 | v1.0.0 | 完整模式（零 JS 服务端按需渲染）、17 个 JSON 端点、双平台一键启动、deb 与自包含单文件 Windows bat |
 
@@ -587,7 +587,7 @@ python3 -B scripts/verify_compact.py 9367d786       # 只看某个会话
 都从它生成。新增端点只需加一行，不会再出现「页面能开但文档没写」或反过来。
 
 ```bash
-python3 -B scripts/selftest.py                    # 58 项检查
+python3 -B scripts/selftest.py                    # 63 项检查
 TRACE_TEST_PORT=8901 python3 -B scripts/selftest.py
 ```
 
@@ -599,7 +599,7 @@ TRACE_TEST_PORT=8901 python3 -B scripts/selftest.py
 运行期零写盘与 `write_files=false`。结束自动 `POST /shutdown` 退出，
 有失败返回 1。分页统一走 `clamp_p()`，与 `pager()` 同步夹取页码。
 
-实测本机一次跑完 **58 项全绿**，最大单页 52.9 KB（搜索结果页）。
+实测本机一次跑完 **63 项全绿**，最大单页 52.9 KB（搜索结果页）。
 其中「真实累计输入 tok」一项改为在主进程独立累加 `rawUsage` 原值后与 `build()` 结果比对：
 早期版本拿服务子进程与主进程的两次解析互比，遇到会话文件正在写入时会偶发误报，
 现在既不受数据漂移影响，也真正验证了「压缩修正没有改动真实账单」。
@@ -787,11 +787,13 @@ RSS 仍是 84.0 MB —— Python 不把 arena 归还 OS。它限制的是缓存�
 6. **`start.sh stop` 的 `pkill` 兜底**在 PID namespace 隔离的环境（如 WorkBuddy 的
    exec 沙箱）里看不到桌面进程，但优先走的 HTTP `/shutdown` 不受影响。
 7. **积分来自本地记录**，云端补扣或赠送的部分不在里面。
-8. **Windows 版尚未在真实 Windows 机器上验证**（改动在 Linux 沙箱内完成）。
-   `windows/` 三件套与自包含 `TokenTrace.bat` 都只做了静态检查，以及在本机
-   用 Linux Python 完整模拟过 bat 的内存加载与端到端请求；真机仍需确认四点：
-   `projects\` 的实际层级深度、中文或空格用户名下 WAL 模式 `workbuddy.db` 的只读打开、
-   控制台隐藏效果、含中文路径时的传参。
+8. **Windows 版已在真机试用，但覆盖面仍有限**：2026-11-07 在 Windows 上确认
+   索引与会话概览可用，并据此修掉一处跨平台 bug —— 调用详情把毫秒时间戳直接
+   传给 `time.localtime()`，Linux 静默显示 58375 年、Windows CRT 抛
+   `OSError(Errno 22)` 导致 500；现统一走 `fmt_ts()` 做量纲归一与越界保护。
+   `windows/` 三件套与自包含 `TokenTrace.bat` 仍只做了静态检查 + Linux Python
+   模拟；真机仍需确认四点：`projects\` 的实际层级深度、中文或空格用户名下
+   WAL 模式 `workbuddy.db` 的只读打开、控制台隐藏效果、含中文路径时的传参。
 9. `~/.workbuddy/projects/*.jsonl` 会随新对话增长，但那是 WorkBuddy 写的，本工具只读。
 10. **块检索结果按关键词缓存 60 秒**（最多 8 个词），期间新写入的会话不出现在旧结果里；
     点「强制重检」或加 `refresh=1`。单块命中位置封顶 500 处，列表页每块最多列 8 个片链接，

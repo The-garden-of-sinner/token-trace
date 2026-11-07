@@ -12,6 +12,7 @@
 import html
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -57,6 +58,20 @@ def main():
     check(all(callable(r["view"]) for r in html_items), "所有 view 可调用")
     check(len({r["sample"] for r in T.ROUTE_SPEC}) == len(T.ROUTE_SPEC),
           "sample 无重复（%d 项）" % len(T.ROUTE_SPEC))
+
+    print("== 时间戳跨平台（Windows CRT 越界保护）==")
+    check(T.fmt_ts(1780000000000).startswith("2026-"),
+          "毫秒时间戳归一为 2026 年（修复前 Windows 抛 Errno 22）")
+    check(T.fmt_ts(1780000000).startswith("2026-"),
+          "秒级时间戳按同一口径渲染")
+    check(all(T.fmt_ts(v) == "时间未知" for v in (0, -1, 1e15, 1.78e17, None, "x")),
+          "零值 / 负值 / 越界 / 非数字退回「时间未知」")
+    ts_sid = max(T.STORE.sessions(), key=lambda x: x["calls"])["id"]
+    ts_views = [T.v_call({}, ts_sid, 1), T.v_compact({}, ts_sid), T.v_stats({})]
+    check(all("58375" not in h for h in ts_views),
+          "调用详情 / 压缩页 / 全局统计均无荒谬年份")
+    check(bool(re.search(r"20\d{2}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", ts_views[0])),
+          "调用详情渲染真实本地时间戳")
 
     print("== 启动临时服务 ==")
     proc = subprocess.Popen(

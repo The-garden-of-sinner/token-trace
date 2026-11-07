@@ -66,6 +66,25 @@ def nfmt(n):
     return "{:,}".format(int(n or 0))
 
 
+def fmt_ts(v, fmt="%Y-%m-%d %H:%M:%S", empty="时间未知"):
+    """把 WorkBuddy 时间戳格式化成本地时间（毫秒 / 秒都接受）。
+
+    jsonl 里的 timestamp 是毫秒。Windows CRT 的 localtime 对 1970 之前、
+    3000 年之后的值会抛 OSError(Errno 22)，Linux 则静默给出 58375 年之类
+    的荒谬结果；这里统一做量纲归一 + 范围校验，异常值退回 empty。
+    """
+    try:
+        n = float(v)
+        if not (0 < n < 1e14):
+            return empty
+        sec = n / 1000.0 if n > 1e11 else n
+        if not (0 < sec < 32503680000):     # 1970-01-01 .. 3000-01-01
+            return empty
+        return time.strftime(fmt, time.localtime(sec))
+    except (OSError, ValueError, OverflowError, TypeError):
+        return empty
+
+
 def cut(s, n):
     s = s or ""
     return s if len(s) <= n else s[:n] + "…"
@@ -696,8 +715,7 @@ def tool_stats(sid=None):
         del t["sessions"]
         t["rate"] = t["hit"] / t["pin"] if t["pin"] else 0
         t["credit"] = round(t["credit"], 2)
-        t["last"] = (time.strftime("%m-%d %H:%M", time.localtime(t["last_ts"] / 1000))
-                     if t["last_ts"] else "")
+        t["last"] = fmt_ts(t["last_ts"], "%m-%d %H:%M", "")
     return {"tools": sorted(tools.values(), key=lambda x: -x["calls"]),
             "progs": sorted(progs.values(), key=lambda x: -x["runs"]),
             "sessions": len(targets), "total_calls": total_calls,
@@ -1001,7 +1019,7 @@ def v_index(q):
         items = groups[name]
         cards = []
         for s in items:
-            t = time.strftime("%m-%d %H:%M", time.localtime(s["mtime"]))
+            t = fmt_ts(s["mtime"], "%m-%d %H:%M", "")
             cards.append(
                 '<a class="row" href="/s/%s" style="grid-template-columns:1fr 96px 108px 92px 92px 82px 70px">'
                 '<span class="grow"><b style="font-weight:500">%s</b>'
@@ -1146,7 +1164,7 @@ def v_call(q, sid, seq):
              '下面列出这次请求<b>实际带上的全部 %s 个块</b>：蓝色=命中缓存的前缀，琥珀=本次未命中，'
              '紫色块是跨边界的那一块。<b>点任意一行看该块不截断的全文</b>。</div>' %
              (esc(c["tool"] or "最终回答"), esc(c["model"]),
-              time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(c["ts"])) if c["ts"] else "时间未知",
+              fmt_ts(c["ts"]),
               nfmt(o["n"])))
 
     filt = []
@@ -1459,8 +1477,7 @@ def v_tools(q, sid=None):
                      '<span class="num credit">%.2f 分</span><span class="num">%s</span></a>' %
                      (esc(r["href"]), r["seq"], esc(r["ws"]), r["turn"], nfmt(r["pin"]),
                       r["credit"],
-                      time.strftime("%m-%d %H:%M", time.localtime(r["ts"] / 1000))
-                      if r["ts"] else ""))
+                      fmt_ts(r["ts"], "%m-%d %H:%M", "")))
         body += pager(base, q, p, PAGE_CALLS, total, "次调用")
     else:
         body += '<div class="tabs">' + "".join(
@@ -1616,7 +1633,7 @@ def v_compact(q, sid):
               "" if not bad else "；不一致的第 %s 个事件需人工复核" % ",".join(map(str, bad))))
 
     for r in rows:
-        t = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r["ts"])) if r["ts"] else "时间未知"
+        t = fmt_ts(r["ts"])
         body += ('<h2>压缩 #%d <small>%s · %s · 摘要块 #%d / %s 字</small></h2>' %
                  (r["n"], esc(t), esc(r["kind"]), r["at_block"], nfmt(r["summary_chars"])))
         if r.get("superseded"):
@@ -1705,7 +1722,7 @@ def v_stats(q):
                   esc(x["label"]), nfmt(x["chars"])))
     body += '<h2>缓存冷启动断点 <small>共 %d 次；按当次输入量排序，列前 30</small></h2>' % len(st["cold"])
     for x in st["cold"][:30]:
-        ts = time.strftime("%m-%d %H:%M", time.localtime(x["ts"])) if x["ts"] else "?"
+        ts = fmt_ts(x["ts"], "%m-%d %H:%M", "?")
         body += ('<a class="row bad" href="/s/%s/c/%d" style="grid-template-columns:64px 1fr 104px 84px 84px 66px">'
                  '<span class="idx">#%d</span><span class="grow">%s · %s</span>'
                  '<span class="num">in %s</span><span class="num">命中 %.1f%%</span>'
