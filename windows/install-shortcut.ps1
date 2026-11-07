@@ -26,8 +26,15 @@ if (-not (Test-Path -LiteralPath $PSExe)) { $PSExe = (Get-Command powershell.exe
 # -WindowStyle Hidden 必须是 powershell.exe 自己的参数，放在 -File 之前
 $Arguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $Launcher
 $Description = '一键启动本地 Token 轨迹服务并在浏览器打开'
-$Icon = Join-Path $env:SystemRoot 'System32\shell32.dll'
-$IconIndex = 21
+# 优先用项目自带图标（仓库根 assets/TokenTrace.ico），缺失时退回系统图标
+$RepoIcon = Join-Path (Split-Path -Parent $ScriptDir) 'assets\TokenTrace.ico'
+if (Test-Path -LiteralPath $RepoIcon) {
+    $Icon = $RepoIcon
+    $IconIndex = 0
+} else {
+    $Icon = Join-Path $env:SystemRoot 'System32\shell32.dll'
+    $IconIndex = 21
+}
 
 $Desktop = [Environment]::GetFolderPath('Desktop')
 $Programs = Join-Path ([Environment]::GetFolderPath('Programs')) 'Token Trace'
@@ -49,7 +56,7 @@ foreach ($p in $Targets) {
     $lnk.Arguments = $Arguments
     $lnk.WorkingDirectory = $ScriptDir
     $lnk.Description = $Description
-    if (Test-Path -LiteralPath $Icon) { $lnk.IconLocation = "$Icon, $IconIndex" }
+    if (Test-Path -LiteralPath $Icon) { $lnk.IconLocation = "$Icon,$IconIndex" }
     $lnk.Save()
     Write-Host "快捷方式: $p"
 }

@@ -21,11 +21,15 @@ rm -rf "$ROOT/.build"
 mkdir -p "$STAGE/DEBIAN" \
          "$STAGE/usr/bin" \
          "$STAGE/usr/share/$PKG" \
-         "$STAGE/usr/share/applications"
+         "$STAGE/usr/share/applications" \
+         "$STAGE/usr/share/icons/hicolor/256x256/apps"
 
 # ---- 程序文件（只放运行必需的，不含 trace/ 页面与开发期产物）
 install -m 644 "$ROOT/trace_server.py" "$ROOT/gen_trace.py" "$STAGE/usr/share/$PKG/"
 install -m 644 "$ROOT/README.md" "$ROOT/LICENSE" "$STAGE/usr/share/$PKG/"
+# 应用菜单图标：desktop 里写图标名 token-trace，由 hicolor 主题解析
+install -m 644 "$ROOT/assets/token-trace.png" \
+         "$STAGE/usr/share/icons/hicolor/256x256/apps/token-trace.png"
 # README 用相对路径引用架构图，docs/ 必须一起打包，否则离线阅读会裂图
 mkdir -p "$STAGE/usr/share/$PKG/docs"
 install -m 644 "$ROOT/docs/"* "$STAGE/usr/share/$PKG/docs/"
@@ -101,7 +105,7 @@ GenericName=WorkBuddy Session Trace
 Comment=逐次调用回溯 WorkBuddy 会话的 token 与缓存命中
 Comment[en]=Trace per-call token usage and cache hits in WorkBuddy sessions
 Exec=token-trace
-Icon=utilities-system-monitor
+Icon=token-trace
 Terminal=false
 StartupNotify=true
 Categories=Development;
@@ -134,6 +138,9 @@ cat > "$STAGE/DEBIAN/postinst" <<'POSTINST'
 set -e
 if command -v update-desktop-database >/dev/null 2>&1; then
     update-desktop-database -q /usr/share/applications || true
+fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -q -t /usr/share/icons/hicolor || true
 fi
 exit 0
 POSTINST

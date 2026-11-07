@@ -16,6 +16,7 @@
   - [架构一览](#架构一览)
   - [功能总览](#功能总览)
 - [2 安装与发行](#2-安装与发行)
+  - [一键安装（推荐）](#一键安装推荐)
   - [前置条件](#前置条件)
   - [Linux：一键启动](#linux一键启动)
   - [Windows：一键启动](#windows一键启动)
@@ -111,6 +112,47 @@
 
 ## 2 安装与发行
 
+### 一键安装（推荐）
+
+从 [Releases 最新页](https://github.com/The-garden-of-sinner/token-trace/releases/latest)
+下载附件即可，**不用 clone 仓库、不用 pip install、不用构建**。
+
+**Linux（Debian / Ubuntu / 银河麒麟 / 统信 UOS / Deepin）**
+
+```bash
+V=1.1.0   # 换成 Release 页上的最新版本号
+curl -fLO "https://github.com/The-garden-of-sinner/token-trace/releases/download/v$V/token-trace_${V}_all.deb"
+sudo dpkg -i "token-trace_${V}_all.deb"
+token-trace                     # 起服务并自动打开浏览器
+```
+
+装好后也可以从应用菜单点「Token 轨迹」。只依赖系统自带的 `python3 (>= 3.8)`，
+`dpkg` 不会联网拉第三方包；`token-trace stop` 停止、`token-trace status` 查状态、
+`TRACE_PORT=9000 token-trace` 换端口。
+
+**Windows**
+
+下载 `TokenTrace.bat` 双击即可；单文件自包含，不需要同目录放任何 `.py`，
+也不需要管理员权限。或者一行命令下载并启动：
+
+```powershell
+Invoke-WebRequest "https://github.com/The-garden-of-sinner/token-trace/releases/latest/download/TokenTrace.bat" -OutFile TokenTrace.bat
+.\TokenTrace.bat
+.\TokenTrace.bat shortcut       # 首次：创建带图标的桌面 / 开始菜单快捷方式
+```
+
+Release 还附 `SHA256SUMS`。`.bat` 是纯文本，Windows 不支持对它做 Authenticode 签名，
+所以完整性靠哈希清单核对：
+
+```bash
+sha256sum -c SHA256SUMS
+```
+```powershell
+Get-FileHash .\TokenTrace.bat -Algorithm SHA256   # 与 SHA256SUMS 里的值比对
+```
+
+下面几节讲从源码运行与产物细节，只想用工具的话到这里就够了。
+
 ### 前置条件
 
 | 组件 | 说明 |
@@ -170,12 +212,14 @@ python3 gen_trace.py --all                    # 静态模式保留全部调用�
 
 ### 发行产物
 
-Release 里附两个开箱即用的包，**都不需要 clone 仓库**：
+Release 里附两个开箱即用的包和一份校验清单，**都不需要 clone 仓库**：
+下载入口见「一键安装（推荐）」。
 
 | 产物 | 平台 | 用法 |
 | --- | --- | --- |
 | `token-trace_<版本>_all.deb` | Debian / Ubuntu / 麒麟等 | `sudo dpkg -i ...`，应用菜单或终端 `token-trace` |
-| `TokenTrace.bat` | Windows | 双击，单文件自包含 |
+| `TokenTrace.bat` | Windows | 双击，单文件自包含；`shortcut` 建带图标的快捷方式 |
+| `SHA256SUMS` | 全平台 | `sha256sum -c SHA256SUMS` 核对附件完整性 |
 
 #### Linux：deb 包
 
@@ -194,26 +238,36 @@ TRACE_PORT=9000 token-trace  # 换端口
 
 #### Windows：单文件 bat
 
-`TokenTrace.bat` 是**自包含**的：`trace_server.py` 与 `gen_trace.py` 经 zlib + base64
-压缩后内嵌在文件尾部。双击时脚本自动寻找 Python 3.8+（`py -3` → PATH → 常见安装目录 →
-WorkBuddy 内置运行时），把一段纯 ASCII loader 释放到
-`%LOCALAPPDATA%\TokenTrace\launcher.py`，由它在内存里注册 `gen_trace` 并启动服务，
-等就绪后打开浏览器。
+`TokenTrace.bat` 是**自包含**的：`trace_server.py`、`gen_trace.py` 与
+`assets/TokenTrace.ico` 经 zlib + base64 压缩后内嵌在文件尾部。双击时脚本自动寻找
+Python 3.8+（`py -3` → PATH → 常见安装目录 → WorkBuddy 内置运行时），把一段纯 ASCII
+loader 释放到 `%LOCALAPPDATA%\TokenTrace\launcher.py`，由它在内存里注册 `gen_trace`
+并启动服务，等就绪后打开浏览器。
 
 - **不需要** clone 仓库、同目录放 `.py`、`pip install` 或管理员权限；
-- 只写一个 `launcher.py`（纯 ASCII），两个真实源码始终在内存里，避开中文 Windows
-  控制台的编码问题；bat 本身是纯 ASCII + CRLF、无 BOM，不写死任何路径；
-- 重复双击只开浏览器，不会多起进程；
-- `TokenTrace.bat stop` / `status` 停止 / 查看，`TRACE_PORT=9000` 换端口，
+- 正常启动只写 `launcher.py`（纯 ASCII），两个真实源码始终在内存里，避开中文 Windows
+  控制台的编码问题；图标只在 `shortcut` 子命令时释放为同目录 `TokenTrace.ico`。
+  bat 本身纯 ASCII + CRLF、无 BOM，不写死任何路径；
+- 重复双击只开浏览器，不会多起进程；启动横幅带版本号；
+- 子命令：`stop` / `status` / `shortcut`（建带图标的桌面与开始菜单快捷方式）/
+  `version` / `help`；`TRACE_PORT=9000` 换端口，
   `TRACE_PYTHON=C:\path\to\python.exe` 指定解释器；
+- 图标源是 `scripts/make_icon.py`（Pillow 生成 16–256 七档 ico），
+  Linux 侧同一份设计装进 hicolor 主题；`windows/install-shortcut.ps1` 也优先用它；
+- **bat 不能内嵌图标或做 Authenticode 签名**：批处理是纯文本，不是 PE 文件
+  （Windows 的图标与签名都针对 PE）。图标通过快捷方式实现，完整性由 Release 的
+  `SHA256SUMS` 保证；`windows/sign-release.ps1` 是给维护者用自有证书签 `.ps1`
+  的可选入口，仓库不附带任何证书。详见「已知限制」；
 - **尚未在真实 Windows 机器上验证**，见「已知限制」。
 
 #### 从源码重建
 
 ```bash
-python3 scripts/build_win_bat.py     # -> dist/TokenTrace.bat
+python3 scripts/make_icon.py         # -> assets/TokenTrace.ico / token-trace.png
+python3 scripts/build_win_bat.py     # -> dist/TokenTrace.bat（自动内嵌图标）
 ./scripts/build_deb.sh               # -> dist/token-trace_<VERSION>_all.deb
-./scripts/release.sh                 # tag 已推到远端后，建 Release 并上传两者
+python3 scripts/make_checksums.py    # -> dist/SHA256SUMS
+./scripts/release.sh                 # tag 已推到远端后，建 Release 并上传三者
 ```
 
 版本号统一放在 `scripts/VERSION`；`dist/` 与 `.build/` 不入库。
@@ -509,8 +563,9 @@ python3 -B scripts/verify_compact.py 9367d786       # 只看某个会话
 | `trace_server.py` | 完整模式：数据层 + 计算层 + HTML 渲染 + JSON API + HTTP 服务；运行期零写盘 |
 | `gen_trace.py` | 解析原语 + 静态模式生成器；`build(path, full=True)` 供服务复用 |
 | `start.sh` / `install-desktop.sh` / `token-trace.desktop` | Linux 一键启动、启动器安装与模板 |
-| `windows/` | Windows 版 `start.cmd` / `start.ps1` / `install-shortcut.ps1` |
-| `scripts/` | 发行构建（`build_win_bat.py`、`build_deb.sh`、`release.sh`、`VERSION`）、回归自检（`selftest.py`）、独立压缩校验（`verify_compact.py`）、演示数据生成（`make_demo.py`，虚构排查会话） |
+| `windows/` | Windows 版 `start.cmd` / `start.ps1` / `install-shortcut.ps1`，可选签名入口 `sign-release.ps1` |
+| `scripts/` | 发行构建（`build_win_bat.py`、`build_deb.sh`、`release.sh`、`VERSION`）、回归自检（`selftest.py`）、独立压缩校验（`verify_compact.py`）、演示数据生成（`make_demo.py`，虚构排查会话）、图标生成（`make_icon.py`）、校验清单（`make_checksums.py`） |
+| `assets/` | `TokenTrace.ico`（内嵌进单 bat、供快捷方式用）与 `token-trace.png`（Linux hicolor 图标） |
 | `docs/` | `architecture.svg` / `architecture.mmd` 架构图与图源、`demo.png` 界面截图（虚构数据） |
 | `REVIEW_CHANGES.md` | 安全与跨平台改造的分阶段变更记录 |
 | `.gitignore` | 排除含会话原文的静态页与运行时产物 |
@@ -753,6 +808,11 @@ RSS 仍是 84.0 MB —— Python 不把 arena 归还 OS。它限制的是缓存�
     数据来源本身有模型字段（见「数据来源与口径」）。
 14. **积分单价分 1× / 2× / 4× 三档**，且时段与策略会变；跨日比较单位成本前须先
     归一到同一档，`/stats` 的粗算单价不能当真实单价用（见「数据来源与口径」）。
+15. **`.bat` 无法内嵌图标或做 Authenticode 签名**：批处理是纯文本，Windows 的图标
+    与签名机制都针对 PE 文件。图标由 `TokenTrace.bat shortcut` 释放内嵌 ico 后
+    写进快捷方式实现；发布完整性用 `SHA256SUMS` 核对。要原生图标与签名需另出
+    `.exe` / `.msix` 载体并购买 OV / EV 代码签名证书；`windows/sign-release.ps1`
+    只是给维护者用自有证书签 `.ps1` 的可选入口，仓库不附带证书。
 
 ---
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 创建 GitHub Release 并上传两个产物：.deb 与自包含的单文件 Windows .bat
+# 创建 GitHub Release 并上传三个附件：.deb、自包含的单文件 Windows .bat、SHA256SUMS
 #
 #   ./scripts/release.sh            使用 scripts/VERSION
 #   ./scripts/release.sh <版本>      指定版本号（默认读 VERSION）
@@ -15,6 +15,7 @@ VERSION="${1:-$(cat "$DIR/VERSION")}"
 NOTES="${RELEASE_NOTES:-}"   # 可选：本次更新说明，插到 Release 正文「本次更新」一节
 DEB="$ROOT/dist/token-trace_${VERSION}_all.deb"
 BAT="$ROOT/dist/TokenTrace.bat"
+SUMS="$ROOT/dist/SHA256SUMS"
 
 [ -f "$DEB" ] || { echo "找不到 $DEB，先运行 ./scripts/build_deb.sh $VERSION"; exit 1; }
 
@@ -26,9 +27,13 @@ if ! git -C "$ROOT" ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/
     exit 1
 fi
 
-echo "用当前源码重建单文件 Windows 启动器 ..."
+echo "重建图标与单文件 Windows 启动器 ..."
+/usr/bin/python3 "$DIR/make_icon.py" >/dev/null
 /usr/bin/python3 "$DIR/build_win_bat.py" >/dev/null
 [ -f "$BAT" ] || { echo "生成 $BAT 失败"; exit 1; }
+echo "生成完整性清单 ..."
+/usr/bin/python3 "$DIR/make_checksums.py" >/dev/null
+[ -f "$SUMS" ] || { echo "生成 SHA256SUMS 失败"; exit 1; }
 
 TOKEN_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/github/token"
 [ -f "$TOKEN_FILE" ] || { echo "缺少 $TOKEN_FILE"; exit 1; }
@@ -38,6 +43,10 @@ BODY="$(/usr/bin/python3 - "$VERSION" "$NOTES" <<'PY'
 import json, sys
 v, notes = sys.argv[1], sys.argv[2]
 text = """## 安装
+
+从本页 **Assets** 下载附件即可，不用 clone 仓库。README 的
+[一键安装](https://github.com/The-garden-of-sinner/token-trace#2-安装与发行)
+有可直接复制的命令。
 
 **Linux（Debian / Ubuntu / 麒麟等）**
 
@@ -54,8 +63,21 @@ sudo dpkg -i token-trace_{v}_all.deb
 脚本自动寻找 Python 3.8+，把内置服务释放到 `%LOCALAPPDATA%\\TokenTrace\\`，
 等待就绪后打开 http://127.0.0.1:8765。重复双击只开浏览器，不会多起进程。
 
-命令行用法：`TokenTrace.bat stop` / `status`，`TRACE_PORT=9000` 换端口，
-`TRACE_PYTHON` 可指定 Python 路径。
+首次运行执行 `TokenTrace.bat shortcut` 可创建带图标的桌面 / 开始菜单快捷方式；
+`help` / `version` 查看用法与版本。命令行还支持 `stop` / `status`，
+`TRACE_PORT=9000` 换端口，`TRACE_PYTHON` 指定 Python 路径。
+
+## 完整性校验
+
+Release 附 `SHA256SUMS`。`.bat` 是纯文本脚本，Windows 不支持对它做
+Authenticode 签名，因此用哈希清单核对发布产物：
+
+```bash
+sha256sum -c SHA256SUMS
+```
+```powershell
+Get-FileHash .\\TokenTrace.bat -Algorithm SHA256
+```
 
 ## 说明
 
@@ -98,6 +120,7 @@ upload() {
 
 upload "$DEB" "application/vnd.debian.binary-package" "$(basename "$DEB")"
 upload "$BAT" "application/octet-stream" "$(basename "$BAT")"
+upload "$SUMS" "text/plain" "SHA256SUMS"
 
 echo
 echo "发布完成：https://github.com/$REPO/releases/tag/v$VERSION"
