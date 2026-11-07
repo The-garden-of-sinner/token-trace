@@ -120,7 +120,7 @@
 **Linux（Debian / Ubuntu / 银河麒麟 / 统信 UOS / Deepin）**
 
 ```bash
-V=1.1.0   # 换成 Release 页上的最新版本号
+V=1.1.1   # 换成 Release 页上的最新版本号
 curl -fLO "https://github.com/The-garden-of-sinner/token-trace/releases/download/v$V/token-trace_${V}_all.deb"
 sudo dpkg -i "token-trace_${V}_all.deb"
 token-trace                     # 起服务并自动打开浏览器
@@ -277,7 +277,8 @@ python3 scripts/make_checksums.py    # -> dist/SHA256SUMS
 
 | 版本 | 主要内容 |
 | --- | --- |
-| **v1.1.0** | 工具与命令聚合、逐调用上下文趋势与 Delta、声明式路由表 `ROUTE_SPEC` + 63 项固化自检、**压缩感知统计修复**（可见区间 `[vf, ctxN)`、压缩事件校验页、独立复核脚本）；文档补齐三部分单价与峰谷倍率口径 |
+| **v1.1.1** | 修复 Windows 调用详情页 500（毫秒时间戳未归一，统一 `fmt_ts()` 并加越界保护，自检增至 63 项）；新增引用 Release 的一键安装、项目图标与 `TokenTrace.bat shortcut` 带图标快捷方式、`SHA256SUMS` 完整性校验与可选签名入口 |
+| v1.1.0 | 工具与命令聚合、逐调用上下文趋势与 Delta、声明式路由表 `ROUTE_SPEC` + 58 项固化自检、**压缩感知统计修复**（可见区间 `[vf, ctxN)`、压缩事件校验页、独立复核脚本）；文档补齐三部分单价与峰谷倍率口径 |
 | v1.0.1 | 块检索：按块聚合命中、给出命中分片并直跳高亮 |
 | v1.0.0 | 完整模式（零 JS 服务端按需渲染）、17 个 JSON 端点、双平台一键启动、deb 与自包含单文件 Windows bat |
 
@@ -716,7 +717,7 @@ RSS 仍是 84.0 MB —— Python 不把 arena 归还 OS。它限制的是缓存�
 调用的模型（本机出现过 `deepseek-v4.1-flash`、`hy4-free`、`step-5-preview`、
 `hy4-preview-f`、`hy3`），`sessions` 表也有模型名。但**当前页面不显示模型类型，也不按
 模型分组统计**：所有视图都是会话内全模型合计，积分只对扣费模型非零；需要按模型拆分时
-得自行筛选 jsonl。这也是 v1.1.0 之后最值得补的一处展示。
+得自行筛选 jsonl。这也是后续最值得补的一处展示。
 
 `rawUsage` 用到 `prompt_tokens`、`prompt_cache_hit_tokens`、`completion_tokens`、`credit`。
 `providerData.isCompacted` / `compactType` / `isSummary` 用于识别上下文压缩，
