@@ -1,0 +1,153 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 620" width="1000" height="620" role="img" aria-label="Token 轨迹会话概览页演示图，全部为虚构 demo 数据">
+  <title>Token 轨迹 · 界面演示（demo 数据）</title>
+  <desc>仿真实会话概览页：面包屑、KPI 卡片、逐次调用清单与分页，所有内容均为虚构演示数据。</desc>
+  <style>
+    .t{font-family:system-ui,-apple-system,"Noto Sans CJK SC","Microsoft YaHei",sans-serif;fill:#2C2C2A}
+    .m{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    .g{fill:#888780}
+    .s{fill:#5F5E5A}
+    .b{fill:#185FA5}
+    .credit{fill:#854F0B}
+    .crumb{font-size:11.5px}
+    .h1{font-size:19px;font-weight:500}
+    .sub{font-size:11.5px}
+    .kv{font-size:18px;font-weight:500}
+    .kl{font-size:11px}
+    .h2{font-size:13px;font-weight:500;fill:#444441}
+    .th{font-size:11px}
+    .row{font-size:12px}
+    .mono{font-size:11.5px}
+    .num{font-size:11.5px}
+    .chip{font-size:10.5px}
+    .foot{font-size:11px}
+  </style>
+
+  <rect x="8" y="8" width="984" height="604" rx="10" fill="#ffffff" stroke="#E3E1D9" stroke-width="1"/>
+  <path d="M8 18 Q8 8 18 8 H982 Q992 8 992 18 V46 H8 Z" fill="#F7F6F2"/>
+  <path d="M8 46 H992" stroke="#E3E1D9" stroke-width="1"/>
+  <circle cx="28" cy="27" r="5" fill="#E24B4A"/>
+  <circle cx="45" cy="27" r="5" fill="#EF9F27"/>
+  <circle cx="62" cy="27" r="5" fill="#639922"/>
+  <rect x="92" y="17" width="580" height="20" rx="10" fill="#ffffff" stroke="#E3E1D9" stroke-width="1"/>
+  <text class="t s mono" x="104" y="31">127.0.0.1:8765/s/demo0001…?view=calls</text>
+
+  <rect x="8" y="46" width="984" height="90" fill="#F7F6F2"/>
+  <path d="M8 136 H992" stroke="#E3E1D9" stroke-width="1"/>
+  <text class="t crumb b" x="34" y="72">索引</text>
+  <text class="t crumb g" x="66" y="72">/</text>
+  <text class="t crumb g" x="80" y="72">demo-playground</text>
+  <text class="t crumb g" x="182" y="72">/</text>
+  <text class="t crumb g" x="196" y="72">演示：定位测试超时</text>
+  <text class="t h1" x="34" y="101">演示：定位测试超时</text>
+  <text class="t sub g" x="34" y="122">/home/demo/playground · DemoModel-1 · 2026-03-02 09:00 · 3 轮 / 7 次调用</text>
+
+  <g>
+    <rect x="34" y="152" width="180" height="60" rx="9" fill="#F1EFE8"/>
+    <text class="t kv" x="48" y="181">7</text>
+    <text class="t kl s" x="48" y="200">调用</text>
+    <rect x="222" y="152" width="180" height="60" rx="9" fill="#F1EFE8"/>
+    <text class="t kv" x="236" y="181">3</text>
+    <text class="t kl s" x="236" y="200">轮</text>
+    <rect x="410" y="152" width="180" height="60" rx="9" fill="#F1EFE8"/>
+    <text class="t kv" x="424" y="181">20</text>
+    <text class="t kl s" x="424" y="200">上下文块</text>
+    <rect x="598" y="152" width="180" height="60" rx="9" fill="#F1EFE8"/>
+    <text class="t kv" x="612" y="181">0.85</text>
+    <text class="t kl s" x="612" y="200">累计积分</text>
+    <rect x="786" y="152" width="180" height="60" rx="9" fill="#F1EFE8"/>
+    <text class="t kv" x="800" y="181">87.4%</text>
+    <text class="t kl s" x="800" y="200">缓存命中率</text>
+  </g>
+
+  <text class="t h2" x="34" y="240">调用清单</text>
+  <text class="t th g" x="120" y="240">按时间正序 · 点任一行看这次请求带上的全部上下文块</text>
+  <path d="M34 250 H966" stroke="#E3E1D9" stroke-width="1"/>
+
+  <text class="t th g" x="46" y="265">状态</text>
+  <text class="t th g" x="104" y="265">#</text>
+  <text class="t th g" x="140" y="265">工具</text>
+  <text class="t th g" x="212" y="265">命令 / 参数摘要</text>
+  <text class="t th g" x="700" y="265" text-anchor="end">输入 tok</text>
+  <text class="t th g" x="800" y="265" text-anchor="end">命中率</text>
+  <text class="t th g" x="888" y="265" text-anchor="end">积分</text>
+  <text class="t th g" x="958" y="265" text-anchor="end">时间</text>
+
+  <g class="t row">
+    <rect x="34" y="272" width="932" height="34" rx="7" fill="#ffffff" stroke="#E3E1D9" stroke-width="1"/>
+    <rect x="44" y="280" width="44" height="18" rx="9" fill="#E6F1FB"/>
+    <text class="chip" x="66" y="293" text-anchor="middle" fill="#185FA5">命中</text>
+    <text class="s" x="104" y="294">1</text>
+    <text x="140" y="294">Bash</text>
+    <text class="s m mono" x="212" y="294">python3 -m pytest -q tests/</text>
+    <text class="s num" x="700" y="294" text-anchor="end">10,400</text>
+    <text class="s num" x="800" y="294" text-anchor="end">86.5%</text>
+    <text class="credit num" x="888" y="294" text-anchor="end">0.11</text>
+    <text class="g num" x="958" y="294" text-anchor="end">09:00:02</text>
+
+    <rect x="34" y="310" width="932" height="34" rx="7" fill="#ffffff" stroke="#E3E1D9" stroke-width="1"/>
+    <rect x="44" y="318" width="44" height="18" rx="9" fill="#E6F1FB"/>
+    <text class="chip" x="66" y="331" text-anchor="middle" fill="#185FA5">命中</text>
+    <text class="s" x="104" y="332">2</text>
+    <text x="140" y="332">Read</text>
+    <text class="s m mono" x="212" y="332">config.yaml</text>
+    <text class="s num" x="700" y="332" text-anchor="end">12,800</text>
+    <text class="s num" x="800" y="332" text-anchor="end">89.1%</text>
+    <text class="credit num" x="888" y="332" text-anchor="end">0.14</text>
+    <text class="g num" x="958" y="332" text-anchor="end">09:00:09</text>
+
+    <rect x="34" y="348" width="932" height="34" rx="7" fill="#ffffff" stroke="#E3E1D9" stroke-width="1"/>
+    <rect x="44" y="356" width="44" height="18" rx="9" fill="#FAEEDA"/>
+    <text class="chip" x="66" y="369" text-anchor="middle" fill="#BA7517">未命中</text>
+    <text class="s" x="104" y="370">3</text>
+    <text x="140" y="370">Bash</text>
+    <text class="s m mono" x="212" y="370">grep -rn "timeout" src/</text>
+    <text class="s num" x="700" y="370" text-anchor="end">15,200</text>
+    <text class="s num" x="800" y="370" text-anchor="end">90.1%</text>
+    <text class="credit num" x="888" y="370" text-anchor="end">0.17</text>
+    <text class="g num" x="958" y="370" text-anchor="end">09:00:14</text>
+
+    <rect x="34" y="386" width="932" height="34" rx="7" fill="#ffffff" stroke="#E3E1D9" stroke-width="1"/>
+    <rect x="44" y="394" width="44" height="18" rx="9" fill="#E6F1FB"/>
+    <text class="chip" x="66" y="407" text-anchor="middle" fill="#185FA5">命中</text>
+    <text class="s" x="104" y="408">4</text>
+    <text x="140" y="408">Bash</text>
+    <text class="s m mono" x="212" y="408">python3 -m pytest -q tests/</text>
+    <text class="s num" x="700" y="408" text-anchor="end">17,600</text>
+    <text class="s num" x="800" y="408" text-anchor="end">91.5%</text>
+    <text class="credit num" x="888" y="408" text-anchor="end">0.20</text>
+    <text class="g num" x="958" y="408" text-anchor="end">09:00:22</text>
+
+    <rect x="34" y="424" width="932" height="34" rx="7" fill="#ffffff" stroke="#E3E1D9" stroke-width="1"/>
+    <rect x="44" y="432" width="44" height="18" rx="9" fill="#E6F1FB"/>
+    <text class="chip" x="66" y="445" text-anchor="middle" fill="#185FA5">命中</text>
+    <text class="s" x="104" y="446">5</text>
+    <text x="140" y="446">最终回答</text>
+    <text class="s m mono" x="212" y="446">演示回答：已确认输出，下一步按结果调整</text>
+    <text class="s num" x="700" y="446" text-anchor="end">19,000</text>
+    <text class="s num" x="800" y="446" text-anchor="end">93.0%</text>
+    <text class="credit num" x="888" y="446" text-anchor="end">0.06</text>
+    <text class="g num" x="958" y="446" text-anchor="end">09:00:25</text>
+
+    <rect x="34" y="462" width="932" height="34" rx="7" fill="#ffffff" stroke="#E3E1D9" stroke-width="1"/>
+    <rect x="44" y="470" width="44" height="18" rx="9" fill="#E6F1FB"/>
+    <text class="chip" x="66" y="483" text-anchor="middle" fill="#185FA5">命中</text>
+    <text class="s" x="104" y="484">6</text>
+    <text x="140" y="484">Read</text>
+    <text class="s m mono" x="212" y="484">src/fetch.py</text>
+    <text class="s num" x="700" y="484" text-anchor="end">20,400</text>
+    <text class="s num" x="800" y="484" text-anchor="end">93.8%</text>
+    <text class="credit num" x="888" y="484" text-anchor="end">0.23</text>
+    <text class="g num" x="958" y="484" text-anchor="end">09:00:31</text>
+  </g>
+
+  <rect x="34" y="516" width="70" height="24" rx="6" fill="#F1EFE8"/>
+  <text class="t s" x="69" y="532" text-anchor="middle">上一页</text>
+  <rect x="112" y="516" width="60" height="24" rx="6" fill="#2C2C2A"/>
+  <text x="142" y="532" text-anchor="middle" fill="#ffffff" font-family="system-ui,sans-serif" font-size="12">1 / 1</text>
+  <rect x="180" y="516" width="70" height="24" rx="6" fill="#ffffff" stroke="#E3E1D9" stroke-width="1"/>
+  <text class="t s" x="215" y="532" text-anchor="middle">下一页</text>
+  <text class="t th g" x="966" y="532" text-anchor="end">每页 40 条 · 共 7 次调用</text>
+
+  <path d="M34 558 H966" stroke="#E3E1D9" stroke-width="1"/>
+  <text class="t foot g" x="500" y="584" text-anchor="middle">界面演示 · 全部为虚构 demo 数据（scripts/make_demo.py 生成），不含任何真实会话内容</text>
+</svg>

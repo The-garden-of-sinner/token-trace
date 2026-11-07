@@ -1,33 +1,25 @@
 # Token 轨迹
 
-> **为 Linux 与国产操作系统而做的 WorkBuddy 会话 token 轨迹工具。**
-> 在**银河麒麟 V10 SP1（兆芯平台）**实测通过；面向 Debian / Ubuntu / 银河麒麟 /
-> 统信 UOS / Deepin / 中标麒麟等 `dpkg` 系发行版提供 `deb` 包与桌面图标，
-> **不要求 apt 安装任何第三方包** —— 信创环境里软件源锁死、无网络、权限受限，
-> 只要系统自带 Python 3.8+ 就能跑起来。Windows 另有自包含单文件启动器兜底。
+把 WorkBuddy 的会话记录还原成逐次调用的 token 轨迹：每一次调用花了多少积分、带上了哪些上下文、缓存命中到哪里，都能逐条回溯到原文；页面零 JavaScript、运行期零写盘，只依赖 Python 3.8+ 标准库。**在银河麒麟 V10 SP1（兆芯）实测通过**，适配银河麒麟 / 统信 UOS / Deepin 等国产 Linux，提供 `deb` 包与桌面图标、无需 apt 安装第三方依赖，Windows 另有单文件启动器。
 
-把 WorkBuddy 的会话记录还原成逐次调用的 token 轨迹：每一次调用花了多少积分、
-带上了哪些上下文、缓存命中到哪里，都能逐条回溯到原文。页面零 JavaScript、
-运行期零写盘，只依赖 Python 标准库。
+![界面演示](docs/demo.svg)
 
-**Linux 优先体现在细节里**：`deb` 装完即可从应用菜单打开；`start.sh` 一键启停且不依赖
-`pkill` 找 PID；`install-desktop.sh` 按当前目录生成 `.desktop`，不写死用户名或路径；
-探活与关停走 Python 标准库，不强依赖 `curl` / `xdg-open`。
+*界面演示（按真实页面绘制），数据为虚构 demo（`scripts/make_demo.py` 生成），不含任何真实会话内容。*
 
-![Python](https://img.shields.io/badge/python-3.8%2B-blue) ![Linux](https://img.shields.io/badge/Linux-Kylin%20%7C%20UOS%20%7C%20Deepin%20%7C%20Debian-blue) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey) ![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen) ![JavaScript](https://img.shields.io/badge/JavaScript-0-orange) ![License](https://img.shields.io/badge/license-MIT-green)
+![Python](https://img.shields.io/badge/python-3.8%2B-blue) ![Linux](https://img.shields.io/badge/Linux-Kylin%20%7C%20UOS%20%7C%20Deepin-blue) ![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen) ![License](https://img.shields.io/badge/license-MIT-green)
 
 ## 目录
 
 - [1 概览](#1-概览)
   - [亮点](#亮点)
   - [两种模式](#两种模式)
+  - [架构一览](#架构一览)
   - [功能总览](#功能总览)
 - [2 安装与发行](#2-安装与发行)
   - [前置条件](#前置条件)
   - [Linux：一键启动](#linux一键启动)
   - [Windows：一键启动](#windows一键启动)
   - [命令行](#命令行)
-  - [不需要的操作](#不需要的操作)
   - [发行产物](#发行产物)
   - [版本记录](#版本记录)
 - [3 使用指南](#3-使用指南)
@@ -39,8 +31,8 @@
   - [工具与命令聚合](#工具与命令聚合)
   - [上下文趋势](#上下文趋势)
   - [压缩感知：只算本次真正带上的块](#压缩感知只算本次真正带上的块)
-- [5 架构与实现](#5-架构与实现)
-  - [架构总览与四层职责](#架构总览与四层职责)
+- [5 实现与维护](#5-实现与维护)
+  - [实现要点](#实现要点)
   - [仓库内容](#仓库内容)
   - [维护：路由声明与自检](#维护路由声明与自检)
 - [6 实测与口径](#6-实测与口径)
@@ -48,7 +40,7 @@
   - [数据来源与口径](#数据来源与口径)
   - [这个工具能回答什么](#这个工具能回答什么)
 - [7 已知限制](#7-已知限制)
-
+- [License](#license)
 ---
 
 ## 1 概览
@@ -87,6 +79,20 @@
 才用静态模式生成一份 HTML。两者共用同一套解析原语，不会算出两套数字。
 
 
+### 架构一览
+
+![Token 轨迹 · 架构图](docs/architecture.svg)
+
+> 图源是 `docs/architecture.mmd`（Mermaid），README 引用 `docs/architecture.svg`，
+> 不依赖阅读器是否支持 Mermaid；浅色 / 深色主题都可读。
+
+| 层 | 职责 | 刻意不做 |
+| --- | --- | --- |
+| 数据源 | `projects/**/*.jsonl` + `workbuddy.db`，全程只读 | 不写回、不复制一份数据 |
+| 数据层 | `build(path, full=True)` 重建块序列，`Store` LRU 常驻 + 前缀和派生索引 | 不建倒排索引、不落盘 |
+| 计算层 | `call_state` / `call_outline` / `block_users` / `search` / `trend_rows` 等，O(1) 或二分 | 不把整段上下文展开到页面 |
+| 渲染 / API 层 | 每请求只产出一屏 HTML 或一条 `{ok,data,meta}` JSON | 不一次性注入大 JSON、不截断全文 |
+
 ### 功能总览
 
 - 按工作区分组的会话索引，可按时间 / 积分 / 调用数排序
@@ -111,8 +117,11 @@
 | --- | --- |
 | Python 3.8+ | 仅标准库；实测 3.8 与 3.13 均可 |
 | WorkBuddy 会话数据 | `~/.workbuddy/projects/**/*.jsonl` 与 `~/.workbuddy/workbuddy.db`，由客户端产生，本工具只读 |
-| 浏览器 | 任意；不需要 JS、不需要构建 |
+| 浏览器 | 任意；纯 HTML 页面，零脚本、无构建步骤 |
 | Windows：PowerShell 5.1+ | 系统自带，仅启动器用到；核心 Python 文件不依赖它 |
+
+全部依赖仅 Python 标准库与只读的会话文件；安装到用户目录即可，
+服务运行期保持对 WorkBuddy 数据零写入。
 
 ### Linux：一键启动
 
@@ -158,15 +167,6 @@ python3 gen_trace.py --all                    # 静态模式保留全部调用�
 
 `Ctrl+C` 停止服务。`--all` 只取消「最多 150 次调用」的裁剪，正文截断由静态模式自身的
 `MAX_TEXT` 控制，所以它不等于完整模式。
-
-### 不需要的操作
-
-- **不需要 `pip install`** —— 没有第三方依赖
-- **不需要建库 / 建倒排索引** —— 直接只读 jsonl 与 WorkBuddy 现成的 SQLite
-- **不需要前端构建、不需要联网** —— 页面由后端现渲染
-- **不需要 root / 管理员权限** —— 只读用户目录，启动器也装在用户目录
-- **不会改动 WorkBuddy 的任何文件** —— 服务运行期零写盘
-
 
 ### 发行产物
 
@@ -460,21 +460,9 @@ python3 -B scripts/verify_compact.py 9367d786       # 只看某个会话
 不复用 `build()` 的分块规则；方向和量级一致即可。）
 
 
-## 5 架构与实现
+## 5 实现与维护
 
-### 架构总览与四层职责
-
-![Token 轨迹 · 架构图](docs/architecture.svg)
-
-> 图源是 `docs/architecture.mmd`（Mermaid），README 引用 `docs/architecture.svg`，
-> 不依赖阅读器是否支持 Mermaid；浅色 / 深色主题都可读。
-
-| 层 | 职责 | 刻意不做 |
-| --- | --- | --- |
-| 数据源 | `projects/**/*.jsonl` + `workbuddy.db`，全程只读 | 不写回、不复制一份数据 |
-| 数据层 | `build(path, full=True)` 重建块序列，`Store` LRU 常驻 + 前缀和派生索引 | 不建倒排索引、不落盘 |
-| 计算层 | `call_state` / `call_outline` / `block_users` / `search` / `trend_rows` 等，O(1) 或二分 | 不把整段上下文展开到页面 |
-| 渲染 / API 层 | 每请求只产出一屏 HTML 或一条 `{ok,data,meta}` JSON | 不一次性注入大 JSON、不截断全文 |
+### 实现要点
 
 四层都在 `trace_server.py` 一个文件里；`gen_trace.py` 只提供解析原语（`build`、
 `scan_all`、`brief`、`cmd_html`、`seg_user`），两个模式共用同一套口径。
@@ -514,7 +502,6 @@ python3 -B scripts/verify_compact.py 9367d786       # 只看某个会话
 - `PYTHONUTF8=1` 避免 Windows 控制台中文乱码，两个 `.ps1` 以 UTF-8 BOM 保存，
   供 PowerShell 5.1 正确读取。
 
-
 ### 仓库内容
 
 | 文件 | 作用 |
@@ -523,7 +510,8 @@ python3 -B scripts/verify_compact.py 9367d786       # 只看某个会话
 | `gen_trace.py` | 解析原语 + 静态模式生成器；`build(path, full=True)` 供服务复用 |
 | `start.sh` / `install-desktop.sh` / `token-trace.desktop` | Linux 一键启动、启动器安装与模板 |
 | `windows/` | Windows 版 `start.cmd` / `start.ps1` / `install-shortcut.ps1` |
-| `scripts/` | 发行构建（`build_win_bat.py`、`build_deb.sh`、`release.sh`、`VERSION`）、回归自检（`selftest.py`）、独立压缩校验（`verify_compact.py`） |
+| `scripts/` | 发行构建（`build_win_bat.py`、`build_deb.sh`、`release.sh`、`VERSION`）、回归自检（`selftest.py`）、独立压缩校验（`verify_compact.py`）、演示数据生成（`make_demo.py`） |
+| `docs/` | `architecture.svg` / `architecture.mmd` 架构图与图源、`demo.svg` 界面演示图 |
 | `REVIEW_CHANGES.md` | 安全与跨平台改造的分阶段变更记录 |
 | `.gitignore` | 排除含会话原文的静态页与运行时产物 |
 | `trace/` | 静态模式产物（不入库），随时可由 `gen_trace.py` 重建 |
