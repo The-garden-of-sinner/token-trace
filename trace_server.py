@@ -838,11 +838,15 @@ h2 small{font-weight:400;color:var(--dim);font-size:11.5px;margin-left:8px}
 h3{font-size:12.5px;font-weight:500;margin:18px 0 7px;color:var(--fg)}
 /* KPI 是一条连续数字带：1px 网格间隙露出底色当分隔线，换行也自动对齐，
    不再是一排各自带阴影的小方块。首页 hero 再覆盖成无边界版本。 */
-.kpi{display:flex;flex-wrap:wrap;gap:1px;
+.kpi{display:grid;grid-template-columns:repeat(var(--kc,6),minmax(0,1fr));gap:1px;
  background:var(--line2);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:16px}
-.kpi div{flex:1 1 112px;background:var(--panel2);padding:10px 14px;min-width:0}
-.kpi b{display:block;font-size:18px;font-weight:550;line-height:1.35;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
-.kpi span{font-size:10.5px;letter-spacing:.04em;color:var(--muted)}
+.kpi div{background:var(--panel2);padding:10px 14px;min-width:0}
+.kpi b{display:block;font-size:18px;font-weight:550;line-height:1.35;letter-spacing:-.02em;
+ font-variant-numeric:tabular-nums;white-space:nowrap}
+.kpi span{font-size:10.5px;letter-spacing:.04em;color:var(--muted);display:block;
+ overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:980px){.kpi{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}}
+@media(max-width:640px){.kpi{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .compose{display:flex;height:19px;border-radius:5px;overflow:hidden;background:var(--track);margin-bottom:6px}
 .compose i{display:block;height:100%}
 .legend{font-size:11px;color:var(--muted);margin-bottom:12px;display:flex;gap:12px;flex-wrap:wrap}
@@ -1118,7 +1122,7 @@ CSS_INDEX = """
  border:1px solid var(--line);border-radius:14px;overflow:hidden;margin:0 0 18px;box-shadow:var(--shadow)}
 .hero:before{content:"";position:absolute;left:0;right:0;top:0;height:2px;
  background:linear-gradient(90deg,var(--p0),var(--p1),var(--p2),var(--p3),var(--p4));opacity:.55}
-.hero .kpi{display:grid;grid-template-columns:repeat(6,1fr);gap:0;margin:0;
+.hero .kpi{display:grid;grid-template-columns:repeat(var(--kc,6),minmax(0,1fr));gap:0;margin:0;
  background:transparent;border:0;border-bottom:1px solid var(--line);border-radius:0;
  padding:16px 4px 18px}
 .hero .kpi>div{background:transparent;border:0;border-right:1px solid var(--line2);
@@ -1153,6 +1157,21 @@ CSS_INDEX = """
 .wsbar i{display:block;height:100%;background:var(--accent);opacity:.72}
 .wsrow.top .wsbar i{opacity:1}
 .wsn{text-align:right;color:var(--faint);font-variant-numeric:tabular-nums}
+/* 递归关系默认收成一行摘要，展开才铺开；箭头旋转与 hover 沿用全站缓动 */
+.wsfold>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:8px;
+ padding:8px 11px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);
+ font-size:10.5px;color:var(--muted);
+ transition:border-color .28s var(--ease),background-color .28s var(--ease),color .28s var(--ease)}
+.wsfold>summary::-webkit-details-marker{display:none}
+.wsfold>summary:before{content:"";flex:none;width:0;height:0;border-left:5px solid var(--faint);
+ border-top:4px solid transparent;border-bottom:4px solid transparent;transition:transform .28s var(--ease)}
+.wsfold[open]>summary:before{transform:rotate(90deg)}
+.wsfold>summary:hover{border-color:var(--accent);color:var(--fg)}
+.wsfold-h{margin-left:auto;color:var(--faint);font-size:10px}
+.wsfold[open] .wsfold-h{font-size:0}
+.wsfold[open] .wsfold-h:after{content:"收起";font-size:10px}
+.wsfold .in{padding-top:9px}
+.wsrow.more{color:var(--faint);padding-left:9px;font-size:10px}
 /* 首页工具条：文字导航（细分隔）+ 右侧排序分段控件 + 元信息，一条横带三个分区。
    取代原先两行大小不一的 pill 按钮堆，与下方会话列表用一条细线分开。 */
 .toolbar{display:flex;align-items:center;gap:16px;flex-wrap:wrap;
@@ -1223,20 +1242,6 @@ CSS_NAV = """
 """
 
 # 首页「会话 · 子代理关系」：只有存在子代理会话时才注入。
-CSS_REL = """
-.relrow{display:flex;align-items:baseline;gap:10px;margin:10px 0 4px}
-.relmain{font-size:12px;font-weight:600;color:var(--link);text-decoration:none}
-.relmain:hover{color:var(--link-h);text-decoration:underline;text-decoration-color:var(--rule)}
-.relarrow{font-size:10.5px;color:var(--faint)}
-.relsub{display:grid;grid-template-columns:minmax(150px,1fr) 100px 72px;gap:10px;
- align-items:center;margin:4px 0 4px 20px;padding-left:12px;
- border-left:1px solid var(--line);font-size:11px}
-.relsub a{color:var(--muted);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.relsub a:hover{color:var(--link-h)}
-.relbar{height:6px;background:var(--track);border-radius:3px;overflow:hidden}
-.relbar i{display:block;height:100%;background:var(--p3);opacity:.8}
-.relnum{text-align:right;color:var(--faint);font-variant-numeric:tabular-nums}
-"""
 
 
 def crumb(items):
@@ -1272,7 +1277,7 @@ def back_link(crumbs, footer=False):
 
 def page(title, crumbs, body, sub="", extra_head="", need=()):
     """need 显式声明本页需要的图表样式片段（"viz"/"hm"/"map"/"chart"/
-    "fold"/"nav"/"index"/"rel"），与 body 探测取并集。
+    "fold"/"nav"/"index"），与 body 探测取并集。
 
     探测靠扫 body 里的 class 子串，只在「图形一定有输出」时可靠：空库时
     index_overview() 返回空串，.ovgrid 不出现，而 .hero / .toolbar 照常渲染，
@@ -1280,7 +1285,7 @@ def page(title, crumbs, body, sub="", extra_head="", need=()):
     """
     need = set(need or ())
     css = CSS
-    if need.intersection(("viz", "rel")) or 'class="viz' in body:   # 含 class="viz relmap"
+    if "viz" in need or 'class="viz' in body:
         css += CSS_VIZ
     if "hm" in need or 'class="hm"' in body:
         css += CSS_HM
@@ -1294,8 +1299,6 @@ def page(title, crumbs, body, sub="", extra_head="", need=()):
         css += CSS_NAV
     if "index" in need or 'class="ovgrid"' in body:
         css += CSS_INDEX
-    if "rel" in need or 'class="viz relmap"' in body:
-        css += CSS_REL
     head = ('<!DOCTYPE html><html lang="zh-CN"><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
             '<title>%s · Token 轨迹</title><style>%s</style>' % (esc(title), css))
@@ -1358,9 +1361,27 @@ def qstr(q, key, default=""):
     return (q.get(key) or [default])[0]
 
 
+def kpi_cols(n):
+    """数字带的列数：优先让每行填满，避免最后一行只剩一两格、右边空一片。
+
+    6 列 ≈ 178 px / 7 列 ≈ 152 px（1120 容器内），足够容纳 9 位带千分位的数字
+    加单位；8 项拆成 4×2 而不是挤成一行 8 格。
+    """
+    if n <= 7:
+        return max(1, n)
+    if n % 7 == 0:
+        return 7
+    if n % 6 == 0:
+        return 6
+    if n % 4 == 0:
+        return 4
+    return min(6, n)
+
+
 def kpi(items):
-    return '<div class="kpi">' + "".join(
-        '<div><b>%s</b><span>%s</span></div>' % (esc(v), esc(k)) for k, v in items) + '</div>'
+    n = len(items)
+    return ('<div class="kpi" style="--kc:%d">' % kpi_cols(n) + "".join(
+        '<div><b>%s</b><span>%s</span></div>' % (esc(v), esc(k)) for k, v in items) + '</div>')
 
 
 # ---------------------------------------------------------------- 可视化原语
@@ -1540,47 +1561,6 @@ def subagent_relations(ss):
     return rel, unmatched
 
 
-def relation_panel(ss, rel=None, unmatched=None):
-    """首页「会话 · 子代理关系」：主会话 → 子代理会话，面积条为输入 token。"""
-    subs = [s for s in ss if s.get("is_sub")]
-    if not subs:
-        return ""
-    if rel is None:
-        rel, unmatched = subagent_relations(ss)
-    unmatched = unmatched or []
-    by_id = {s["id"]: s for s in ss}
-    mx = max((s["pin"] for s in subs), default=1) or 1
-    rows = []
-    for mid, kids in rel.items():
-        m = by_id.get(mid)
-        if not m:
-            continue
-        rows.append('<div class="relrow"><a class="relmain" href="/s/%s">%s</a>'
-                    '<span class="relarrow">派生 %d 个子代理</span></div>' %
-                    (esc(mid), esc(cut(m["title"], 34)), len(kids)))
-        for k in sorted(kids, key=lambda x: -x["pin"]):
-            rows.append('<div class="relsub"><a href="/s/%s" title="%s">↳ %s · %s</a>'
-                        '<span class="relbar"><i style="width:%.1f%%"></i></span>'
-                        '<span class="relnum">in %s</span></div>' %
-                        (esc(k["id"]), esc(k["id"]), esc(k["agent"] or "子代理"),
-                         esc(k["id"][:8]), k["pin"] / mx * 100, kh(k["pin"])))
-    for k in unmatched:
-        rows.append('<div class="relsub"><a href="/s/%s" title="%s">↳ %s · %s（未匹配到主会话）</a>'
-                    '<span class="relbar"><i style="width:%.1f%%"></i></span>'
-                    '<span class="relnum">in %s</span></div>' %
-                    (esc(k["id"]), esc(k["id"]), esc(k["agent"] or "子代理"),
-                     esc(k["id"][:8]), k["pin"] / mx * 100, kh(k["pin"])))
-    return ('<div class="viz relmap"><div class="viz-hd"><b>会话 · 子代理关系</b>'
-            '<small>%d 个子代理会话 · 输入 token 合计 %s · 独立于主会话统计</small></div>'
-            '%s<div class="fine" style="margin-top:10px">子代理是独立的 '
-            '<code>agent-*</code> 会话文件（<code>providerData.isSubAgent</code> / '
-            '<code>agent</code>）。记录里<b>没有父会话 id</b>，这里按主会话 '
-            '<code>Agent</code> 调用与子会话首条消息的时间就近推断（%d 秒窗口），'
-            '属推断而非官方关联；共享 <code>rootRequestId</code> 的子代理视为同一次并行派生。'
-            '</div></div>' %
-            (len(subs), kh(sum(s["pin"] for s in subs)), "".join(rows),
-             SUBAGENT_WINDOW_MS // 1000))
-
 
 def index_overview(ss):
     """首页全库画像：按模型的输入 token 环 + 按时间的折线 + 工作区递归树。
@@ -1665,18 +1645,30 @@ def index_overview(ss):
     for parent, name, pin, n in sorted(leaf.values(), key=lambda x: -x[2]):
         parents.setdefault(parent, []).append((name, pin, n))
     tree = []
-    for parent, kids in list(parents.items())[:3]:
+    shown_leaf = 0
+    for parent, kids in list(parents.items())[:8]:
         ppin = sum(k[1] for k in kids)
         tree.append('<div class="wsrow top"><span class="wsname">%s</span>'
                     '<span class="wsbar"><i style="width:%.1f%%"></i></span>'
                     '<span class="wsn">%d</span></div>' %
                     (esc(cut(parent, 18)), min(ppin / total * 100, 100),
                      sum(k[2] for k in kids)))
-        for name, pin, n in kids[:3]:
+        for name, pin, n in kids[:4]:
             tree.append('<div class="wsrow sub"><span class="wsname">└ %s</span>'
                         '<span class="wsbar"><i style="width:%.1f%%"></i></span>'
                         '<span class="wsn">%d</span></div>' %
                         (esc(cut(name, 20)), min(pin / total * 100, 100), n))
+        shown_leaf += min(len(kids), 4)
+        if len(kids) > 4:
+            tree.append('<div class="wsrow sub more">└ 其余 %d 个…</div>' % (len(kids) - 4))
+    if len(parents) > 8:
+        tree.append('<div class="wsrow more">另有 %d 个父目录…</div>' % (len(parents) - 8))
+    # 递归关系收进展开卡片：默认只留一行摘要，避免把整列拉得比另外两列长一截
+    ws_cell = ('<details class="wsfold"><summary>'
+               '<span class="wsfold-t">%d 个父目录 · %d 个工作区</span>'
+               '<span class="wsfold-h">展开</span></summary>'
+               '<div class="in">%s</div></details>' %
+               (len(parents), len(leaf), "".join(tree)))
 
     # 模型名取自会话 jsonl 的 providerData，与 workbuddy.db 是否可读无关；
     # 只有整库都没有模型名时才不画「未知模型 100%」这种无信息量的单色环。
@@ -1698,7 +1690,7 @@ def index_overview(ss):
             '<div class="ovcell"><div class="ovt">工作区 · 递归关系</div>%s'
             '<div class="fine ovnote">父目录 → 工作区；右侧数字为会话数</div></div>'
             '</div></div>' %
-            (model_cell, line, axis, "".join(tree)))
+            (model_cell, line, axis, ws_cell))
 
 
 def _tile(items, x, y, w, h, out, depth=0):
@@ -1934,12 +1926,14 @@ def v_index(q):
                 ("累计输入 tok", nfmt(sum(s["pin"] for s in ss))),
                 ("累计输出 tok", nfmt(sum(s["pout"] for s in ss)))]) +
             index_overview(ss) + '</div>')
-    rel, unmatched = subagent_relations(ss)
+    # 子代理不再单独占用一块高度：关系已在下方会话列表里以「子代理 · Explore」
+    # /「N 个子代理」标签体现，避免把列表挤到首屏之外。
+    rel, _unmatched = subagent_relations(ss)
     sub_count = {k: len(v) for k, v in rel.items()}
-    body += relation_panel(ss, rel, unmatched)
+    meta_warn = ""
     if any(not s.get("meta_ok", True) for s in ss):
-        body += ('<div class="warn">workbuddy.db 未读到：会话标题与工作区已退回路径兜底；'
-                 '模型名、token 与积分来自会话记录，不受影响。详情见服务端终端输出。</div>')
+        meta_warn = ('<div class="warn">workbuddy.db 未读到：会话标题与工作区已退回路径兜底；'
+                     '模型名、token 与积分来自会话记录，不受影响。详情见服务端终端输出。</div>')
     body += search_box("/search", "", "text", "all",
                        "搜上下文块 / 输出 / 提问原文（跨全部会话）")
     # 一条分区工具条：左侧文字导航（细分隔线）、右侧排序分段控件，
@@ -2000,6 +1994,8 @@ def v_index(q):
                  (esc(name), len(items), sum(s["credit"] for s in items), "".join(cards)))
     if total_shown > PAGE_SESSIONS:
         body += pager("/", q, pg, PAGE_SESSIONS, total_shown, "个会话")
+    # 元数据降级提示放在列表之后：它不影响会话列表本身，不该抢占首屏
+    body += meta_warn
     return page("会话索引", [("索引", "")], body,
                 sub="%d 个会话 · 点任一会话进入全量轨迹（不裁调用、不裁文本）" % total_shown,
                 need=("index",))
