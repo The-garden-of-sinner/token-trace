@@ -325,12 +325,31 @@ def call_brief(c):
             "outputs": len(c["out"])}
 
 
+# role=user 消息的来源分类，与 gen_trace.USER_KIND_LABEL 一致。
+# WorkBuddy 把后台任务通知 / 压缩摘要 / 系统提醒也写成 user 消息，
+# 所以「一轮」不等于「你发的一条消息」。
+TURN_KIND = OrderedDict([
+    ("user", ("你发的", "ku", "你输入的提问或指令")),
+    ("task", ("后台任务", "kt", "后台任务状态通知，不是你输入的")),
+    ("compact", ("压缩摘要", "kc", "上下文压缩产生的历史摘要，不是你输入的")),
+    ("injected", ("系统注入", "ki", "只有系统提醒，没有你的正文")),
+    ("other", ("内部消息", "ko", "其他内部消息")),
+])
+
+
+def turn_chip(kind):
+    label, cls, why = TURN_KIND.get(kind, TURN_KIND["other"])
+    return '<span class="chip %s" title="%s">%s</span>' % (cls, esc(why), esc(label))
+
+
 def turn_brief(d, t):
     cs = [d["calls"][i] for i in d["by_turn"].get(t["i"], [])]
     pin = sum(c["pin"] for c in cs)
     hit = sum(c["hit"] for c in cs)
     first = next((c for c in cs if c["pin"]), None)
-    return {"i": t["i"], "q": t["q"], "calls": len(cs), "pin": pin, "hit": hit,
+    return {"i": t["i"], "q": t["q"],
+            "disp": t.get("disp") or t["q"], "kind": t.get("kind") or "other",
+            "calls": len(cs), "pin": pin, "hit": hit,
             "rate": (hit / pin) if pin else 0,
             "pout": sum(c["pout"] for c in cs),
             "credit": sum(c["credit"] for c in cs),
@@ -869,6 +888,17 @@ a:focus-visible,button:focus-visible,summary:focus-visible{outline:2px solid var
 .chip.part{background:var(--part-bg);color:var(--part-fg)}.chip.none{background:var(--track);color:var(--faint)}
 .chip.cold{background:var(--neg-bg);color:var(--neg)}
 .chip.t{background:var(--track);color:var(--muted)}
+/* 轮来源标签：真人输入用实心主色，其余按来源淡底区分 */
+.chip.ku{background:var(--accent);color:var(--bg);font-weight:600}
+.chip.kt{background:var(--warn-bg);color:var(--warn-fg)}
+.chip.kc{background:var(--part-bg);color:var(--part-fg)}
+.chip.ki,.chip.ko{background:var(--track);color:var(--muted)}
+/* 会话列表：子代理会话与其派生主会话 */
+.chip.ks{background:var(--part-bg);color:var(--part-fg)}
+.chip.km{background:var(--accent-bg);color:var(--accent-fg)}
+.row.subagent{border-left:2px solid var(--p3)}
+.row .grow>.chip{margin-right:7px;vertical-align:1px}
+.note .chip{margin-right:9px;vertical-align:1px}
 .cmd{display:block;font:11px/1.5 ui-monospace,"Noto Sans Mono CJK SC",monospace;color:var(--muted);word-break:break-all;margin-top:3px}
 .pager{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:16px 0 6px;font-size:12px;color:var(--muted)}
 .pager .info{margin:0 8px;font-variant-numeric:tabular-nums}
@@ -1159,6 +1189,13 @@ CSS_NAV = """
 .navcard i{position:absolute;right:14px;top:12px;font-style:normal;font-size:13px;
  color:var(--faint);opacity:.5;transition:transform .3s var(--ease),opacity .3s var(--ease),color .3s var(--ease)}
 .navcard:hover i{transform:translate(2px,-2px);opacity:1;color:var(--link-h)}
+/* 轮来源筛选：胶囊链接组，只在会话页按轮浏览出现 */
+.tkfilter{display:flex;gap:6px;flex-wrap:wrap;margin:14px 0 8px}
+.tkfilter a{padding:4px 12px;border-radius:999px;font-size:11px;color:var(--muted);
+ text-decoration:none;background:var(--track);
+ transition:background-color .28s var(--ease),color .28s var(--ease)}
+.tkfilter a:hover{color:var(--link-h)}
+.tkfilter a.on{background:var(--accent);color:var(--bg);font-weight:600}
 .segrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0 4px;padding-bottom:10px;border-bottom:1px solid var(--line2)}
 .seg{display:inline-flex;background:var(--track);border-radius:999px;padding:3px}
 .seg a{padding:5px 15px;border-radius:999px;font-size:11.5px; color:var(--muted);text-decoration:none;
@@ -1168,6 +1205,22 @@ CSS_NAV = """
 .seglink{margin-left:auto;font-size:11px;color:var(--faint);text-decoration:none}
 .seglink:hover{color:var(--link-h)}
 @media(max-width:820px){.navgrid{grid-template-columns:repeat(2,1fr)}}
+"""
+
+# 首页「会话 · 子代理关系」：只有存在子代理会话时才注入。
+CSS_REL = """
+.relrow{display:flex;align-items:baseline;gap:10px;margin:10px 0 4px}
+.relmain{font-size:12px;font-weight:600;color:var(--link);text-decoration:none}
+.relmain:hover{color:var(--link-h);text-decoration:underline;text-decoration-color:var(--rule)}
+.relarrow{font-size:10.5px;color:var(--faint)}
+.relsub{display:grid;grid-template-columns:minmax(150px,1fr) 100px 72px;gap:10px;
+ align-items:center;margin:4px 0 4px 20px;padding-left:12px;
+ border-left:1px solid var(--line);font-size:11px}
+.relsub a{color:var(--muted);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.relsub a:hover{color:var(--link-h)}
+.relbar{height:6px;background:var(--track);border-radius:3px;overflow:hidden}
+.relbar i{display:block;height:100%;background:var(--p3);opacity:.8}
+.relnum{text-align:right;color:var(--faint);font-variant-numeric:tabular-nums}
 """
 
 
@@ -1205,7 +1258,7 @@ def back_link(crumbs, footer=False):
 def page(title, crumbs, body, sub="", extra_head=""):
     # 只注入本屏真正用到的图表样式；纯列表页保持原来的 CSS 体积量级。
     css = CSS
-    if 'class="viz"' in body:
+    if 'class="viz' in body:          # 同时匹配 class="viz" 与 class="viz relmap"
         css += CSS_VIZ
     if 'class="hm"' in body:
         css += CSS_HM
@@ -1219,6 +1272,8 @@ def page(title, crumbs, body, sub="", extra_head=""):
         css += CSS_NAV
     if 'class="ovgrid"' in body:
         css += CSS_INDEX
+    if 'class="viz relmap"' in body:
+        css += CSS_REL
     head = ('<!DOCTYPE html><html lang="zh-CN"><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
             '<title>%s · Token 轨迹</title><style>%s</style>' % (esc(title), css))
@@ -1426,6 +1481,73 @@ def activity_heatmap(ss, weeks=10):
             '<i class="l2"></i><i class="l3"></i><i class="l4"></i> 多'
             '<span style="margin-left:auto">%d 天有活动</span></div></div>' %
             (weeks, "".join(cells), len(agg)))
+
+
+# 子代理会话是独立的 agent-* jsonl；父会话 id 没有写进记录，只能按
+# 主会话 Agent 工具调用与子会话首条消息的时间就近推断（毫秒窗口）。
+SUBAGENT_WINDOW_MS = 5000
+
+
+def subagent_relations(ss):
+    """返回 (主会话 id -> [子代理会话], 未匹配的子代理)。O(子代理数 × Agent 调用数)。"""
+    subs = [s for s in ss if s.get("is_sub")]
+    mains = [s for s in ss if not s.get("is_sub") and s.get("agent_calls")]
+    rel, unmatched = OrderedDict(), []
+    for sub in subs:
+        ts = sub.get("first_ts") or 0
+        best, delta = None, None
+        for m in mains:
+            for at in m["agent_calls"]:
+                d = abs(ts - at)
+                if d <= SUBAGENT_WINDOW_MS and (delta is None or d < delta):
+                    best, delta = m, d
+        if best is None:
+            unmatched.append(sub)
+        else:
+            rel.setdefault(best["id"], []).append(sub)
+    return rel, unmatched
+
+
+def relation_panel(ss, rel=None, unmatched=None):
+    """首页「会话 · 子代理关系」：主会话 → 子代理会话，面积条为输入 token。"""
+    subs = [s for s in ss if s.get("is_sub")]
+    if not subs:
+        return ""
+    if rel is None:
+        rel, unmatched = subagent_relations(ss)
+    unmatched = unmatched or []
+    by_id = {s["id"]: s for s in ss}
+    mx = max((s["pin"] for s in subs), default=1) or 1
+    rows = []
+    for mid, kids in rel.items():
+        m = by_id.get(mid)
+        if not m:
+            continue
+        rows.append('<div class="relrow"><a class="relmain" href="/s/%s">%s</a>'
+                    '<span class="relarrow">派生 %d 个子代理</span></div>' %
+                    (esc(mid), esc(cut(m["title"], 34)), len(kids)))
+        for k in sorted(kids, key=lambda x: -x["pin"]):
+            rows.append('<div class="relsub"><a href="/s/%s" title="%s">↳ %s · %s</a>'
+                        '<span class="relbar"><i style="width:%.1f%%"></i></span>'
+                        '<span class="relnum">in %s</span></div>' %
+                        (esc(k["id"]), esc(k["id"]), esc(k["agent"] or "子代理"),
+                         esc(k["id"][:8]), k["pin"] / mx * 100, kh(k["pin"])))
+    for k in unmatched:
+        rows.append('<div class="relsub"><a href="/s/%s" title="%s">↳ %s · %s（未匹配到主会话）</a>'
+                    '<span class="relbar"><i style="width:%.1f%%"></i></span>'
+                    '<span class="relnum">in %s</span></div>' %
+                    (esc(k["id"]), esc(k["id"]), esc(k["agent"] or "子代理"),
+                     esc(k["id"][:8]), k["pin"] / mx * 100, kh(k["pin"])))
+    return ('<div class="viz relmap"><div class="viz-hd"><b>会话 · 子代理关系</b>'
+            '<small>%d 个子代理会话 · 输入 token 合计 %s · 独立于主会话统计</small></div>'
+            '%s<div class="fine" style="margin-top:10px">子代理是独立的 '
+            '<code>agent-*</code> 会话文件（<code>providerData.isSubAgent</code> / '
+            '<code>agent</code>）。记录里<b>没有父会话 id</b>，这里按主会话 '
+            '<code>Agent</code> 调用与子会话首条消息的时间就近推断（%d 秒窗口），'
+            '属推断而非官方关联；共享 <code>rootRequestId</code> 的子代理视为同一次并行派生。'
+            '</div></div>' %
+            (len(subs), kh(sum(s["pin"] for s in subs)), "".join(rows),
+             SUBAGENT_WINDOW_MS // 1000))
 
 
 def index_overview(ss):
@@ -1719,12 +1841,13 @@ def turn_row(d, t, sid):
     b = turn_brief(d, t)
     return ('<a class="row" href="/s/%s/t/%d" style="grid-template-columns:52px 1fr 68px 92px 72px 90px 74px 62px">'
             '<span class="idx">轮 %d</span>'
-            '<span class="grow"><b style="font-weight:500">%s</b>%s</span>'
+            '<span class="grow">%s<b style="font-weight:500">%s</b>%s</span>'
             '<span class="num">%d 次</span><span class="num">in %s</span>'
             '<span class="num">命中 %s</span><span class="num">out %s</span>'
             '<span class="num credit">%.2f 分</span>'
             '<span class="num" style="color:var(--link-h)">展开 →</span></a>' %
-            (esc(sid), b["i"], b["i"], esc(b["q"] or "（只有系统注入）"),
+            (esc(sid), b["i"], b["i"], turn_chip(b["kind"]),
+             esc(b["disp"] or "（只有系统注入）"),
              '<span class="chip cold" style="margin-left:6px">冷启动</span>' if b["cold"] else "",
              b["calls"], nfmt(b["pin"]), "%.1f%%" % (b["rate"] * 100),
              nfmt(b["pout"]), b["credit"]))
@@ -1752,6 +1875,9 @@ def v_index(q):
                 ("累计输入 tok", nfmt(sum(s["pin"] for s in ss))),
                 ("累计输出 tok", nfmt(sum(s["pout"] for s in ss)))]) +
             index_overview(ss) + '</div>')
+    rel, unmatched = subagent_relations(ss)
+    sub_count = {k: len(v) for k, v in rel.items()}
+    body += relation_panel(ss, rel, unmatched)
     if any(not s.get("meta_ok", True) for s in ss):
         body += ('<div class="warn">workbuddy.db 未读到：会话标题与工作区已退回路径兜底；'
                  '模型名、token 与积分来自会话记录，不受影响。详情见服务端终端输出。</div>')
@@ -1783,15 +1909,27 @@ def v_index(q):
         cards = []
         for s in items:
             t = fmt_ts(s["mtime"], "%m-%d %H:%M", "")
+            if s.get("is_sub"):
+                tag = ('<span class="chip ks" title="子代理会话 · %s">子代理 · %s</span>' %
+                       (esc(s["agent"]), esc(s["agent"])))
+                rowcls = "row subagent"
+            elif sub_count.get(s["id"]):
+                n = sub_count[s["id"]]
+                tag = ('<span class="chip km" title="派生了 %d 个子代理会话">%d 个子代理</span>' %
+                       (n, n))
+                rowcls = "row"
+            else:
+                tag, rowcls = "", "row"
             cards.append(
-                '<a class="row" href="/s/%s" style="grid-template-columns:1fr 96px 108px 92px 92px 82px 70px">'
-                '<span class="grow"><b style="font-weight:500">%s</b>'
+                '<a class="%s" href="/s/%s" style="grid-template-columns:1fr 96px 108px 92px 92px 82px 70px">'
+                '<span class="grow">%s<b style="font-weight:500">%s</b>'
                 '<span class="fine" style="display:block">%s · %s</span></span>'
                 '<span class="num">%d 轮</span><span class="num">%d 次调用</span>'
                 '<span class="num">in %s</span><span class="num">out %s</span>'
                 '<span class="num credit">%.1f 分</span>'
                 '<span class="num">%s</span></a>' %
-                (esc(s["id"]), esc(s["title"][:70]), esc(s["id"][:8]), esc(s["model"] or "?"),
+                (rowcls, esc(s["id"]), tag, esc(s["title"][:70]),
+                 esc(s["id"][:8]), esc(s["model"] or "?"),
                  s["turns"], s["calls"], "%.1fM" % (s["pin"] / 1e6),
                  "%.0fk" % (s["pout"] / 1000), s["credit"], t))
         body += ('<details class="grp" open><summary>%s<small>%d 个会话 · %.1f 分</small></summary>'
@@ -1861,11 +1999,32 @@ def v_session(q, sid):
         pq["view"] = ["calls"]
         body += pager("/s/%s" % sid, pq, p, PAGE_CALLS, total, "次调用")
     else:
-        total = len(d["turns"])
+        # 按来源筛选：session 里一条 role=user 消息就是一轮，其中混着后台任务通知、
+        # 压缩摘要与系统提醒。默认全看，可只看「你发的」。
+        kind = qstr(q, "kind", "all")
+        if kind != "all" and kind not in TURN_KIND:
+            kind = "all"
+        all_turns = d["turns"]
+        counts = Counter(t.get("kind") or "other" for t in all_turns)
+        flt = ['<a class="%s" href="/s/%s?kind=all">全部 %s</a>' %
+               ("on" if kind == "all" else "", esc(sid), nfmt(len(all_turns)))]
+        for k, (lab, _, why) in TURN_KIND.items():
+            if counts.get(k):
+                flt.append('<a class="%s" href="/s/%s?kind=%s" title="%s">%s %d</a>' %
+                           ("on" if kind == k else "", esc(sid), k, esc(why), esc(lab), counts[k]))
+        body += '<div class="tkfilter">' + "".join(flt) + '</div>'
+        body += ('<div class="fine" style="margin:0 0 12px">只有「你发的」是你输入的内容；'
+                 '后台任务通知、压缩摘要与系统提醒由客户端写入，也各占一轮。</div>')
+        shown_turns = all_turns if kind == "all" else [
+            t for t in all_turns if (t.get("kind") or "other") == kind]
+        total = len(shown_turns)
         p = clamp_p(q, total, PAGE_TURNS)
         lo = p * PAGE_TURNS
-        body += '<h2>全部 %s 轮 <small>每页 %d 轮</small></h2>' % (nfmt(total), PAGE_TURNS)
-        for t in d["turns"][lo:lo + PAGE_TURNS]:
+        title = ("全部 %s 轮" % nfmt(total) if kind == "all" else
+                 "「%s」%s 轮" % (TURN_KIND[kind][0], nfmt(total)))
+        body += '<h2>%s <small>每页 %d 轮%s</small></h2>' % (
+            title, PAGE_TURNS, " · 已筛选" if kind != "all" else "")
+        for t in shown_turns[lo:lo + PAGE_TURNS]:
             body += turn_row(d, t, sid)
         body += pager("/s/%s" % sid, q, p, PAGE_TURNS, total, "轮")
         if d["cold"]:
@@ -1896,7 +2055,18 @@ def v_turn(q, sid, turn):
         body += kpi([("调用次数", nfmt(tb["calls"])), ("输入 tok", nfmt(tb["pin"])),
                      ("命中率", "%.1f%%" % (tb["rate"] * 100)), ("输出 tok", nfmt(tb["pout"])),
                      ("积分", "%.2f" % tb["credit"]), ("系统注入", nfmt(tb["inj"]) + " 字")])
-        body += ('<div class="note"><b>你这一轮问的是：</b>%s</div>' % esc(tb["q"] or "（只有系统注入）"))
+        kind = tb["kind"]
+        heads = {"user": "你这一轮问的是：",
+                 "task": "后台任务通知（不是你输入的）：",
+                 "compact": "上下文压缩摘要（不是你输入的）：",
+                 "injected": "系统注入（不是你输入的）：",
+                 "other": "内部消息（不是你输入的）："}
+        body += ('<div class="note">%s<b>%s</b> %s</div>' %
+                 (turn_chip(kind), heads.get(kind, heads["other"]), esc(tb["disp"])))
+        if kind != "user":
+            body += ('<div class="fine" style="margin:-8px 0 16px">WorkBuddy 会把后台任务通知、'
+                     '压缩摘要与系统提醒也以 user 消息写入会话记录，所以它们各占一轮；'
+                     '带「你发的」标签的才是你输入的内容。</div>')
         if tb["cold"]:
             body += '<div class="warn">这一轮首次调用命中率 &lt;50%，是缓存冷启动：整段历史按全价重算。</div>'
     # 一轮可能含几百次调用：不分页会把单页撑过 80 KB 硬闸（长会话实测 89 KB）。

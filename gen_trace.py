@@ -106,6 +106,57 @@ def seg_user(text):
     return SR.sub("", text).strip(), injected
 
 
+# role=user 的消息并不都是真人输入：WorkBuddy 会把后台任务通知、压缩摘要与
+# 系统提醒也以 user 消息写进 jsonl，它们在轮列表里和真人提问混在一起。
+# 判定只依赖解析时已在手的字段，不新增遍历、不读额外文件。
+USER_KIND_LABEL = {
+    "user": "你发的", "task": "后台任务", "compact": "压缩摘要",
+    "injected": "系统注入", "other": "内部消息",
+}
+
+
+def user_kind(text, prov, plain, inj):
+    """给一条 role=user 消息归类，返回 USER_KIND_LABEL 的键。
+
+    顺序有意义：压缩摘要与后台任务通知同时也带 isMeta，必须先判。
+    """
+    if prov.get("isCompacted") or prov.get("isSummary") or "<cb_summary" in text:
+        return "compact"
+    if "<task-notification" in text or "<task-id>" in text:
+        return "task"
+    if prov.get("isMeta"):
+        return "injected"
+    if prov.get("startsNewUserRequest") or "<user_query" in text:
+        return "user"
+    if not plain and inj:
+        return "injected"
+    return "other"
+
+
+def user_disp(kind, text, plain):
+    """列表里显示的一句可读摘要；q 保留原文（含 XML）供全文检索，不动口径。"""
+    if kind == "task":
+        tid = re.search(r"<task-id>\s*([^<]+?)\s*</task-id>", text)
+        status = re.search(r"<status>\s*([^<]+?)\s*</status>", text)
+        summary = re.search(r"<summary>\s*(.*?)\s*</summary>", text, re.S)
+        bits = ["后台任务通知"]
+        if tid:
+            bits.append(tid.group(1).strip())
+        if status:
+            bits.append(status.group(1).strip())
+        out = " · ".join(bits)
+        if summary:
+            # 原始通知里含 &quot; 之类实体，先还原再交给页面 esc，避免显示成字面量
+            txt = re.sub(r"\s+", " ", html.unescape(summary.group(1))).strip()
+            out += " · " + txt[:48]
+        return out
+    if kind == "compact":
+        return "上下文压缩摘要 · 历史被替换为摘要（约 %s 字）" % format(len(plain), ",")
+    if kind == "injected":
+        return "系统注入（本轮没有用户输入正文）"
+    return re.sub(r"</?user_query>", "", plain or "").replace("\n", " ").strip()[:120]
+
+
 def text_of(msg):
     out = []
     for k in ("content", "rawContent"):
@@ -235,7 +286,8 @@ def build(path, full=False):
             cmd = call_cmd.get(d.get("callId") or "", "")
             push("tool_result", f"工具结果 · {d.get('name') or ''}".strip(), text_of(d), cmd)
         elif t == "message" and d.get("role") == "user":
-            plain, inj = seg_user(text_of(d))
+            raw = text_of(d)
+            plain, inj = seg_user(raw)
             prov = d.get("providerData") or {}
             if prov.get("isCompacted"):
                 # 压缩：历史被这条 <cb_summary> 摘要整体替换。旧块仍保留在 ctx 里
@@ -250,9 +302,11 @@ def build(path, full=False):
                     "ts": d.get("timestamp") or 0,
                     "before_seq": len(calls),   # 压缩前最后一次调用序号
                 })
+            kind = user_kind(raw, prov, plain, inj)
             cur = {"i": len(turns) + 1,
                    "q": re.sub(r"</?user_query>", "", plain or "（只有系统注入）").replace("\n", " ").strip()[:120],
-                   "n": 0, "inj": sum(len(x) for x in inj)}
+                   "n": 0, "inj": sum(len(x) for x in inj),
+                   "kind": kind, "disp": user_disp(kind, raw, plain)}
             turns.append(cur)
             if plain:
                 push("user", "压缩摘要" if prov.get("isCompacted") else "你的输入", plain)
@@ -462,7 +516,8 @@ def render(ctx, calls, meta, turns, src, back="", trimmed=0):
 <details class="turn">
   <summary>
     <span class="tno">轮 {t['i']}</span>
-    <span class="tq">{html.escape(t['q'])}</span>
+    <span class="tk tk-{t.get('kind', 'other')}">{USER_KIND_LABEL.get(t.get('kind', 'other'), '内部消息')}</span>
+    <span class="tq">{html.escape(t.get('disp') or t['q'])}</span>
     <span class="tn">{t['n']} 次调用</span>
     {f'<span class="cold">缓存冷启动</span>' if cold else ''}
     <span class="num out">out {pout:,}</span>
@@ -514,6 +569,10 @@ h4.sec small{{font-weight:400;color:#B4B2A9;margin-left:6px}}
 .turn>summary{{display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer;list-style:none;flex-wrap:wrap}}
 .turn>summary::-webkit-details-marker{{display:none}}
 .tno{{background:#2C2C2A;color:#fff;font-size:11px;padding:1px 9px;border-radius:10px;white-space:nowrap}}
+.tk{{font-size:10.5px;padding:1px 8px;border-radius:9px;white-space:nowrap;background:#F1EFE8;color:#5F5E5A}}
+.tk-user{{background:#1D9E75;color:#fff;font-weight:600}}
+.tk-task{{background:#FAEEDA;color:#854F0B}}
+.tk-compact{{background:#EEEDFE;color:#534AB7}}
 .tq{{flex:1;font-size:13px;color:#2C2C2A;min-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
 .tn{{font-size:11.5px;color:#5F5E5A;background:#F1EFE8;padding:1px 9px;border-radius:10px;white-space:nowrap}}
 .cold{{font-size:11px;color:#A32D2D;background:#FCEBEB;padding:1px 9px;border-radius:10px;white-space:nowrap}}
@@ -657,13 +716,31 @@ def scan_all():
         credit = pin = pout = 0
         ai = ""
         model_tokens = {}
+        agent_votes = {}
+        # 子代理是独立的 agent-* 会话文件，行内另有 providerData.isSubAgent 标记。
+        # first_ts / rootRequestId / 主会话的 Agent 调用时间用于首页做关系推断。
+        is_sub = sid.startswith("agent-")
+        root = ""
+        first_ts = 0
+        agent_calls = []
         skipped = {"skipped": 0}
         for d in iter_rows(f, skipped):
+            pd = d.get("providerData") or {}
             t = d.get("type")
+            if not first_ts:
+                first_ts = d.get("timestamp") or 0
+            a = pd.get("agent")
+            if a:
+                agent_votes[a] = agent_votes.get(a, 0) + 1
+            if pd.get("isSubAgent"):
+                is_sub = True
+            if not root and pd.get("rootRequestId"):
+                root = str(pd["rootRequestId"])
+            if t == "function_call" and d.get("name") == "Agent":
+                agent_calls.append(d.get("timestamp") or 0)
             if t == "message" and d.get("role") == "user":
                 turns += 1
             elif t == "function_call":
-                pd = d.get("providerData") or {}
                 ru = pd.get("rawUsage") or {}
                 pt = ru.get("prompt_tokens", 0)
                 if not pt:
@@ -688,6 +765,11 @@ def scan_all():
             "title": info.get("title") or ai or "(无标题)",
             "model": primary_model,
             "models": model_tokens,
+            "agent": max(agent_votes, key=agent_votes.get) if agent_votes else "cli",
+            "is_sub": is_sub,
+            "root": root,
+            "first_ts": first_ts,
+            "agent_calls": agent_calls,
             "mtime": os.path.getmtime(f),
             "turns": turns, "calls": calls, "credit": credit, "pin": pin, "pout": pout,
             "skipped": skipped["skipped"],

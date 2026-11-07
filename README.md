@@ -109,6 +109,8 @@
 - **过渡与返回**：跨文档淡入（淡出 240ms / 淡入 460ms）、KPI 数字区局部 morph（540ms）、卡片 / 数字入场渐变（500 / 600ms，50ms 错峰）、`<details>` 展开高度渐变（400ms），全站共用 `--ease` 缓动曲线；悬浮「返回上一层」胶囊 + 页脚同名链接，父级从面包屑自动推导，长内容页不用浏览器回退
 - **首页工具条**：导航、排序、元信息合成一条分区横带，取代原先两行 pill 按钮；排序为分段控件，窄屏自动折行
 - **命中块折叠**：调用详情里连续命中块默认折成一枚紧凑胶囊「#a–#b 块缓存命中」，展开时才铺成全宽标题条并拉出逐块清单；「按调用浏览」每行也带同样的折叠摘要；主动选「只看命中」时全部展开
+- **轮来源标签**：`role=user` 的消息并不都是你输入的。每轮标为「你发的 / 后台任务 / 压缩摘要 / 系统注入 / 内部消息」，非真人输入显示可读摘要而不是整段 XML；会话页可按类别筛选，单轮详情也按来源改标题
+- **会话 · 子代理关系**：子代理是独立的 `agent-*` 会话文件，首页用主会话 → 子代理的关系面板呈现（输入 token 占比条、可点直达），会话列表给子代理与其派生主会话打标签；父会话 id 未写入记录，关联按 `Agent` 调用时间就近推断并明确标注
 - **首页全库画像**：按模型的输入 token 环（模型名取自 jsonl 的 `providerData`，不依赖 db）、按时间的输入 token 折线、工作区路径递归树（两级 + 占比条），只消费已缓存的会话索引
 - **统一检索入口**：搜索框内用零脚本分段开关切换「按字符匹配 / 按块匹配」，由服务端分流；会话页入口改为无边框渐变卡片（分类色侧条）+ 分段浏览控件，次要链接降级
 - 缓存命中率统一显示到小数点后一位
@@ -128,7 +130,7 @@
 **Linux（Debian / Ubuntu / 银河麒麟 / 统信 UOS / Deepin）**
 
 ```bash
-V=1.1.2   # 换成 Release 页上的最新版本号
+V=1.1.3   # 换成 Release 页上的最新版本号
 curl -fLO "https://github.com/The-garden-of-sinner/token-trace/releases/download/v$V/token-trace_${V}_all.deb"
 sudo dpkg -i "token-trace_${V}_all.deb"
 token-trace                     # 起服务并自动打开浏览器
@@ -273,19 +275,25 @@ loader 释放到 `%LOCALAPPDATA%\TokenTrace\launcher.py`，由它在内存里注
 ```bash
 python3 scripts/make_icon.py         # -> assets/TokenTrace.ico / token-trace.png
 python3 scripts/build_win_bat.py     # -> dist/TokenTrace.bat（自动内嵌图标）
-./scripts/build_deb.sh               # -> dist/token-trace_<VERSION>_all.deb
+./scripts/build_deb.sh               # -> dist/token-trace_<VERSION>_all.deb（需 dpkg-deb）
+python3 scripts/build_deb.py         # 无 dpkg-deb 时（如 Windows）的等价构建，纯标准库
 python3 scripts/make_checksums.py    # -> dist/SHA256SUMS
 ./scripts/release.sh                 # tag 已推到远端后，建 Release 并上传三者
 ```
 
 版本号统一放在 `scripts/VERSION`；`dist/` 与 `.build/` 不入库。
+`build_deb.py` 直接读取 `build_deb.sh` 的 heredoc 作为唯一内容来源，再用标准库写出
+ar + `control.tar.gz` + `data.tar.gz` 容器，因此与 `dpkg-deb` 产物同构、不会两处维护漂移；
+它只用于「本机没有 `dpkg-deb`」的场景，Linux 发版仍以 `build_deb.sh` 为准。
+校验：`dpkg-deb -c dist/token-trace_<VERSION>_all.deb`。
 
 
 ### 版本记录
 
 | 版本 | 主要内容 |
 | --- | --- |
-| **v1.1.2** | 前端可视化升级：设计令牌 + 深浅色、SVG 构成环 / 日历热力图 / 块地图、渐变色带趋势柱、按需 CSS 注入；跨文档过渡动效与「返回上一层」；连续命中块折叠、命中率一位小数、首页全库画像、检索与菜单重构；模型名改从 jsonl 的 `providerData` 按输入 token 聚合（不再依赖 `workbuddy.db`），链接配色与首页 / 菜单 / 折叠视觉统一，工具条重排与过渡节奏放缓；修复单轮详情无分页撑破 80 KB 硬闸。自检 64 项 |
+| **v1.1.3** | 轮来源标签（你发的 / 后台任务 / 压缩摘要 / 系统注入 / 内部消息）与 `?kind=` 筛选，非真人输入改显可读摘要；首页「会话 · 子代理关系」面板与会话列表子代理标签；新增 `scripts/build_deb.py`（无 `dpkg-deb` 时用纯标准库构建等价 deb）；Release 补齐 bat / deb / SHA256SUMS 附件。自检 64 项 |
+| v1.1.2 | 前端可视化升级：设计令牌 + 深浅色、SVG 构成环 / 日历热力图 / 块地图、渐变色带趋势柱、按需 CSS 注入；跨文档过渡动效与「返回上一层」；连续命中块折叠、命中率一位小数、首页全库画像、检索与菜单重构；模型名改从 jsonl 的 `providerData` 按输入 token 聚合（不再依赖 `workbuddy.db`），链接配色与首页 / 菜单 / 折叠视觉统一，工具条重排与过渡节奏放缓；修复单轮详情无分页撑破 80 KB 硬闸。自检 64 项 |
 | v1.1.1 | 修复 Windows 调用详情页 500（毫秒时间戳未归一，统一 `fmt_ts()` 并加越界保护，自检增至 63 项）；新增引用 Release 的一键安装、项目图标与 `TokenTrace.bat shortcut` 带图标快捷方式、`SHA256SUMS` 完整性校验与可选签名入口 |
 | v1.1.0 | 工具与命令聚合、逐调用上下文趋势与 Delta、声明式路由表 `ROUTE_SPEC` + 58 项固化自检、**压缩感知统计修复**（可见区间 `[vf, ctxN)`、压缩事件校验页、独立复核脚本）；文档补齐三部分单价与峰谷倍率口径 |
 | v1.0.1 | 块检索：按块聚合命中、给出命中分片并直跳高亮 |
@@ -311,7 +319,7 @@ python3 scripts/make_checksums.py    # -> dist/SHA256SUMS
 | `/s/<sid>/trend?g=&mode=&p=` | **上下文趋势**；`g=call\|turn` 粒度，`mode=total\|delta` 累计组成 / 净变化 |
 | `/s/<sid>/map?k=&n=` | **上下文块地图**；`k=` 按块类型聚焦（`user` / `injected` / `tool_result` / `tool_call` / `assistant`），`n=4..48` 控制铺砖数，默认 24 |
 | `/s/<sid>/compact` | **压缩事件校验**：真实账单与修正前 / 后统计逐条并列 |
-| `/s/<sid>?view=turns\|calls&p=` | 会话概览，按轮或按调用分页 |
+| `/s/<sid>?view=turns\|calls&p=&kind=` | 会话概览，按轮或按调用分页；按轮时 `kind=all\|user\|task\|compact\|injected\|other` 按来源筛选 |
 | `/s/<sid>/t/<n>?p=` | 单轮的全部调用，每页 40 条（一轮几百次调用也不会撑破单页上限） |
 | `/s/<sid>/c/<seq>?state=&p=` | 单次调用的上下文块清单；`state=all\|hit\|miss\|part` |
 | `/s/<sid>/b/<idx>?part=&q=&ref=` | 块全文分片；`raw=1` 纯文本，`q=` 高亮命中并列出命中片 |
@@ -570,6 +578,9 @@ token（`providerData.requestModelName`）。db 不可读时只影响标题 / �
 | 过渡 | `@view-transition{navigation:auto}` 跨文档淡入、`.kpi` 单独 `view-transition-name` 做数字区 morph、`@keyframes` 入场、`::details-content` 展开高度渐变；全站共用 `--ease: cubic-bezier(.22,.68,.24,1)`，淡出 240ms / 淡入 460ms / 入场 500–600ms / 展开 400ms，淡出短于淡入避免拖影 | 纯 CSS，服务端零开销；`prefers-reduced-motion` 一并关闭 |
 | 返回上一层 | `back_link()` 从面包屑倒数第二项**往前找第一个带链接的层级**（不带 `ref` 的块全文页中间一级无链接，会回退到会话概览），输出固定胶囊 + 页脚文字链接 | 一处推导覆盖全部视图，每页多一个 `<a>` |
 | 命中块折叠 | `cache_hit_span()` 用前缀和 + `bisect` 求命中前缀 `[lo, hi]`，`hit_fold_html()` 输出原生 `<details>`；折叠态为紧凑胶囊、展开态铺全宽，箭头旋转 + 高度渐变 | O(log B) / 次，不逐块遍历 |
+| 轮来源标签 | `gen_trace.user_kind()` 按 `isCompacted` / `isSummary` / `<cb_summary`、`<task-notification` / `<task-id>`、`isMeta`、`startsNewUserRequest` / `<user_query` 依次判定；`user_disp()` 给非真人输入一句可读摘要，`q` 原文保留供全文检索；`turn_chip()` 输出标签，`v_session` 按 `?kind=` 筛选 | 复用解析时已在手的字段，零额外遍历、零新增索引 |
+| 静态模式同步 | `gen_trace.render()` 的每轮概要同样显示类别标签与可读摘要 | 离线兜底口径一致 |
+| 会话 · 子代理关系 | `scan_all()` 在同一次逐行遍历里记 `isSubAgent` / `agent` / `rootRequestId` / 首条时间戳 / 主会话的 `Agent` 调用时间；`subagent_relations()` 做 5 秒窗口就近匹配，`relation_panel()` 输出层级条与占比条；`CSS_REL` 只在存在子代理会话时注入 | 零额外全库遍历；无子代理时不渲染、不注入样式 |
 | 首页全库画像 | `index_overview()` 只聚合 `STORE.sessions()` 的 `models / model / mtime / ws / pin`，输出模型环、时间折线、工作区两级树；`models` 由 `scan_all()` 在原有逐行遍历里按输入 token 加权得出 | 零额外全库遍历、零新增索引、不依赖 `workbuddy.db` |
 | 统一检索 | `search_box()` 用 `radio + label` 分段开关（无 `id`、无脚本、同页可复用），固定 form action，`v_search()` 按 `mode` 分流到 `v_find()` | 零 JS、零新增路由；分页仍直连 `/find` |
 | 按需 CSS（续） | `CSS_FOLD` / `CSS_NAV` / `CSS_INDEX` 分别按 `hitfold` / `navgrid` / `ovgrid` 注入 | 只有用到的页面才带对应图表样式 |
@@ -599,7 +610,7 @@ token（`providerData.requestModelName`）。db 不可读时只影响标题 / �
 | `gen_trace.py` | 解析原语 + 静态模式生成器；`build(path, full=True)` 供服务复用 |
 | `start.sh` / `install-desktop.sh` / `token-trace.desktop` | Linux 一键启动、启动器安装与模板 |
 | `windows/` | Windows 版 `start.cmd` / `start.ps1` / `install-shortcut.ps1`，可选签名入口 `sign-release.ps1` |
-| `scripts/` | 发行构建（`build_win_bat.py`、`build_deb.sh`、`release.sh`、`VERSION`）、回归自检（`selftest.py`）、独立压缩校验（`verify_compact.py`）、演示数据生成（`make_demo.py`，虚构排查会话）、图标生成（`make_icon.py`）、校验清单（`make_checksums.py`） |
+| `scripts/` | 发行构建（`build_win_bat.py`、`build_deb.sh`、`build_deb.py`、`release.sh`、`VERSION`）、回归自检（`selftest.py`）、独立压缩校验（`verify_compact.py`）、演示数据生成（`make_demo.py`，虚构排查会话）、图标生成（`make_icon.py`）、校验清单（`make_checksums.py`） |
 | `assets/` | `TokenTrace.ico`（内嵌进单 bat、供快捷方式用）与 `token-trace.png`（Linux hicolor 图标） |
 | `docs/` | `architecture.svg` / `architecture.mmd` 架构图与图源、`demo.png` 界面截图（虚构数据） |
 | `REVIEW_CHANGES.md` | 安全与跨平台改造的分阶段变更记录 |
@@ -755,6 +766,22 @@ RSS 仍是 84.0 MB —— Python 不把 arena 归还 OS。它限制的是缓存�
 模型名只作为整段会话都没有 `providerData` 时的兜底，因此 db 不可读不影响模型环。
 口径提示：该环按**输入 token** 归因，不是按积分或调用次数；积分只对扣费模型非零。
 
+**一轮不等于一条真人提问**：`build()` 把每条 `type=message, role=user` 记为一轮，
+而客户端会把后台任务通知（`<task-notification>`）、上下文压缩摘要（`<cb_summary>` /
+`isCompacted`）与系统提醒也写成 user 消息。`user_kind()` 依据 `providerData` 的
+`isCompacted` / `isSummary` / `isMeta` / `startsNewUserRequest` 与正文里的 XML 标签
+依次判定五类；`t["q"]` 始终保留原文供 `scope=turns` 全文检索，新增的 `t["disp"]`
+只负责列表展示（非真人输入给一句可读摘要，不铺整段 XML）。本机一个 351 次调用的
+会话实测 15 轮 = 7 条真人输入 + 6 条后台任务通知 + 1 条压缩摘要 + 1 条纯系统注入。
+
+**子代理是独立会话**：`Explore` 等子代理运行在 `agent-*` 前缀的独立 jsonl 里，行内有
+`providerData.isSubAgent` 与 `agent` 标记，token / 积分单独计费，不会并进主会话的统计。
+`scan_all()` 给每个会话记 `is_sub` / `agent` / `root` / `first_ts`，主会话另记 `Agent`
+工具调用的时间戳。**记录里没有父会话 id**，首页的「主会话 → 子代理」是按时间戳就近
+匹配（5 秒窗口）得到的推断；共享 `rootRequestId` 的子代理视为同一次并行派生。
+本机实测：1 个主会话的 2 次 `Agent` 调用对应 2 个 `Explore` 子会话（相差 16–33 ms），
+两者共享同一个 `rootRequestId`。
+
 `rawUsage` 用到 `prompt_tokens`、`prompt_cache_hit_tokens`、`completion_tokens`、`credit`。
 `providerData.isCompacted` / `compactType` / `isSummary` 用于识别上下文压缩，
 决定每次调用的可见区间起点 `vf`（详见「压缩感知」）。
@@ -878,6 +905,16 @@ RSS 仍是 84.0 MB —— Python 不把 arena 归还 OS。它限制的是缓存�
     撑过 80 KB 硬闸（长会话实测修复前 89.4 KB、修复后回到 56 KB 量级）。
     首页「按模型」环的模型名来自 jsonl 的 `providerData`，与 `workbuddy.db` 是否
     可读无关；只有整库都没有模型名时才显示空态，不画「未知模型 100%」的单色环。
+19. **轮来源分类依赖客户端写入的字段**：判定用的是 `providerData.isCompacted` /
+    `isMeta` / `startsNewUserRequest` 与 `<task-notification>` / `<cb_summary>` 标签。
+    若客户端改了这些字段名或通知格式，未被识别的消息会落到「内部消息」或「你发的」，
+    不会丢轮、也不会影响调用与 token 统计；此时需同步 `gen_trace.user_kind()`。
+    分类是**基于写入侧标记的推断**，不是客户端提供的官方「消息来源」枚举。
+20. **子代理与父会话的关联是推断**：jsonl 没有写父会话 id，首页关系面板用主会话
+    `Agent` 调用与子会话首条消息的时间就近匹配（5 秒窗口）。同一时刻并行派生多个
+    子代理、或日志时间戳缺失时可能匹配不准；匹配不上的子代理会单独列出并标注
+    「未匹配到主会话」。子代理会话本身、token 与调用统计是**事实**，只有归属是推断。
+    另外子代理的 token / 积分在独立会话里统计，不会自动汇总到主会话。
 
 ---
 
