@@ -340,9 +340,9 @@ def call_brief(c):
 
 # role=user 消息的来源分类，与 gen_trace.USER_KIND_LABEL 一致。
 # WorkBuddy 把后台任务通知 / 压缩摘要 / 系统提醒也写成 user 消息，
-# 所以「一轮」不等于「你发的一条消息」。
+# 所以「一轮」不等于「用户发的一条消息」。
 TURN_KIND = OrderedDict([
-    ("user", ("你发的", "ku", "你输入的提问或指令")),
+    ("user", ("用户消息", "ku", "你输入的提问或指令")),
     ("task", ("后台任务", "kt", "后台任务状态通知，不是你输入的")),
     ("compact", ("压缩摘要", "kc", "上下文压缩产生的历史摘要，不是你输入的")),
     ("injected", ("系统注入", "ki", "只有系统提醒，没有你的正文")),
@@ -831,7 +831,11 @@ header{background:var(--panel);border-bottom:1px solid var(--line);padding:16px 
 .crumb a:hover{color:var(--link-h);text-decoration:underline;text-decoration-color:var(--rule)}
 .crumb .sep{color:var(--dim);margin:0 6px}
 h1{font-size:19px;font-weight:500;margin:0 0 3px}
-.sub{color:var(--muted);font-size:12px}
+/* 标题与小字同一行：小字靠右，省掉一行高度；窄屏自动折回标题下方 */
+.hdrow{display:flex;align-items:baseline;gap:16px;flex-wrap:wrap}
+.hdrow h1{margin:0}
+.sub{color:var(--muted);font-size:12px;margin-left:auto;text-align:right;max-width:62%}
+@media(max-width:720px){.sub{margin-left:0;text-align:left;max-width:none}}
 .badge{display:inline-block;font-size:10.5px;color:var(--ok-fg);background:var(--ok-bg);border-radius:9px;padding:0 8px;line-height:17px;margin-left:8px;vertical-align:2px}
 h2{font-size:13px;font-weight:500;margin:24px 0 9px;padding-bottom:6px;border-bottom:1px solid var(--line);color:var(--fg)}
 h2 small{font-weight:400;color:var(--dim);font-size:11.5px;margin-left:8px}
@@ -856,10 +860,12 @@ h3{font-size:12.5px;font-weight:500;margin:18px 0 7px;color:var(--fg)}
 .note{background:var(--accent-bg);border-left:2px solid var(--accent);padding:9px 13px;border-radius:0 7px 7px 0;font-size:12px;color:var(--accent-fg);margin-bottom:16px}
 .warn{background:var(--warn-bg);border-left:2px solid var(--warn);padding:9px 13px;border-radius:0 7px 7px 0;font-size:12px;color:var(--credit);margin-bottom:16px}
 .fine{color:var(--faint);font-size:11px}
-/* 检索区：无外框，上排是轻控制条、下排是柔和凹槽输入，避免白色文本框的呆板感。 */
-form.searchbox{display:flex;flex-direction:column;gap:10px;background:transparent;border:0;padding:0;margin:0 0 18px}
-.sb-tools{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
-.sb-main{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+/* 检索区：无外框、单行——匹配方式 / 范围在左，输入框吃掉剩余宽度，按钮贴右。
+   窄屏放不下时 sb-main 整体折到下一行，不会把输入框压成一条缝。 */
+form.searchbox{display:flex;flex-direction:row;align-items:center;gap:10px;
+ flex-wrap:wrap;background:transparent;border:0;padding:0;margin:0 0 18px}
+.sb-tools{display:flex;align-items:center;gap:9px;flex-wrap:wrap;flex:none}
+.sb-main{display:flex;gap:8px;align-items:center;flex:1 1 340px;min-width:0;flex-wrap:nowrap}
 form.searchbox input[type=text]{flex:1;min-width:220px;padding:11px 16px;
  border:1px solid transparent;border-radius:11px;font:13px inherit;
  background:var(--track);color:var(--fg);box-shadow:inset 0 1px 2px #0000000a;
@@ -960,8 +966,10 @@ code{font:11.5px ui-monospace,monospace;background:var(--track);padding:1px 4px;
 ::view-transition-new(trace-kpi){animation:vt-kpi .54s var(--ease) both}
 @keyframes vt-fade{to{opacity:0}}
 @keyframes vt-kpi{from{opacity:.4;transform:translateY(6px);filter:blur(1.5px)}to{opacity:1;transform:none;filter:none}}
-@keyframes tt-in{from{opacity:.3;transform:translateY(7px)}to{opacity:1;transform:none}}
-@keyframes tt-num{from{opacity:.45;transform:translateY(5px);filter:blur(1.5px)}to{opacity:1;transform:none;filter:none}}
+/* 入场动画的起始透明度抬到接近实色：动效主要靠位移与轻微模糊表达。
+   慢设备、打印或 headless 快照如果没跑完动画，内容也不会看起来是空白的。 */
+@keyframes tt-in{from{opacity:.88;transform:translateY(7px)}to{opacity:1;transform:none}}
+@keyframes tt-num{from{opacity:.92;transform:translateY(5px);filter:blur(1.2px)}to{opacity:1;transform:none;filter:none}}
 .kpi>div,.viz{animation:tt-in .5s var(--ease) both}
 .kpi b{animation:tt-num .6s var(--ease) both}
 .kpi>div:nth-child(2){animation-delay:.05s}.kpi>div:nth-child(3){animation-delay:.1s}
@@ -1304,8 +1312,8 @@ def page(title, crumbs, body, sub="", extra_head="", need=()):
             '<title>%s · Token 轨迹</title><style>%s</style>' % (esc(title), css))
     back = back_link(crumbs)
     doc = (head + '<header><div class="wrap">' + crumb(crumbs) +
-           '<h1>%s<span class="badge">完整模式 · 零截断</span></h1>' % esc(title) +
-           ('<div class="sub">%s</div>' % esc(sub) if sub else '') +
+           '<div class="hdrow"><h1>%s<span class="badge">完整模式 · 零截断</span></h1>' % esc(title) +
+           ('<div class="sub">%s</div>' % esc(sub) if sub else '') + '</div>' +
            '</div></header><div class="wrap">' + extra_head + body +
            '<footer><span>本页 HTML @@KB@@ KB</span>' +
            '<span>数据只读 · 全文由后端按需提供 · 无需 JavaScript</span>' +
@@ -1950,9 +1958,9 @@ def v_index(q):
         src_bytes = 0
     body += ('<div class="toolbar"><nav class="tb-nav">'
              '<a href="/tools">工具与命令</a>'
-             '<a href="/stats">全局统计与冷启动断点</a>'
-             '<a href="/api">后端 API 契约</a>'
-             '<a href="/?refresh=1">重新扫描源文件</a></nav>'
+             '<a href="/stats">全局统计</a>'
+             '<a href="/api">API 文档</a>'
+             '<a href="/?refresh=1">刷新</a></nav>'
              '<div class="tb-sort"><span class="tb-lab">排序</span>'
              '<span class="tb-seg">%s</span>%s</div>'
              '<span class="tb-meta">源文件 %s · 只读</span></div>' %
@@ -2064,7 +2072,7 @@ def v_session(q, sid):
         body += pager("/s/%s" % sid, pq, p, PAGE_CALLS, total, "次调用")
     else:
         # 按来源筛选：session 里一条 role=user 消息就是一轮，其中混着后台任务通知、
-        # 压缩摘要与系统提醒。默认全看，可只看「你发的」。
+        # 压缩摘要与系统提醒。默认全看，可只看「用户消息」。
         kind = qstr(q, "kind", "all")
         if kind != "all" and kind not in TURN_KIND:
             kind = "all"
@@ -2077,7 +2085,7 @@ def v_session(q, sid):
                 flt.append('<a class="%s" href="/s/%s?kind=%s" title="%s">%s %d</a>' %
                            ("on" if kind == k else "", esc(sid), k, esc(why), esc(lab), counts[k]))
         body += '<div class="tkfilter">' + "".join(flt) + '</div>'
-        body += ('<div class="fine" style="margin:0 0 12px">只有「你发的」是你输入的内容；'
+        body += ('<div class="fine" style="margin:0 0 12px">只有「用户消息」是你输入的内容；'
                  '后台任务通知、压缩摘要与系统提醒由客户端写入，也各占一轮。</div>')
         shown_turns = all_turns if kind == "all" else [
             t for t in all_turns if (t.get("kind") or "other") == kind]
@@ -2130,7 +2138,7 @@ def v_turn(q, sid, turn):
         if kind != "user":
             body += ('<div class="fine" style="margin:-8px 0 16px">WorkBuddy 会把后台任务通知、'
                      '压缩摘要与系统提醒也以 user 消息写入会话记录，所以它们各占一轮；'
-                     '带「你发的」标签的才是你输入的内容。</div>')
+                     '带「用户消息」标签的才是你输入的内容。</div>')
         if tb["cold"]:
             body += '<div class="warn">这一轮首次调用命中率 &lt;50%，是缓存冷启动：整段历史按全价重算。</div>'
     # 一轮可能含几百次调用：不分页会把单页撑过 80 KB 硬闸（长会话实测 89 KB）。
@@ -2829,7 +2837,7 @@ def v_api_doc(q):
     body += ('<div class="note">以上两张表、HTML 路由分发与 '
              '<code>scripts/selftest.py</code> 共用同一份 <code>ROUTE_SPEC</code> 声明；'
              '新增端点只需在声明里加一行。</div>')
-    return page("后端 API", [("索引", "/"), ("API", "")], body,
+    return page("API 文档", [("索引", "/"), ("API", "")], body,
                 sub="零 JavaScript 的前端，本身就建立在这套按需查询之上")
 
 
@@ -3101,7 +3109,7 @@ def A(route, doc, sample):
 ROUTE_SPEC = [
     H(r"^/$", lambda q, m: v_index(q), "GET /", "会话索引，按工作区分组", "/"),
     H(r"^/stats$", lambda q, m: v_stats(q), "GET /stats", "跨会话全量聚合、最贵调用与最大块", "/stats"),
-    H(r"^/api$", lambda q, m: v_api_doc(q), "GET /api", "后端 API 契约说明", "/api"),
+    H(r"^/api$", lambda q, m: v_api_doc(q), "GET /api", "API 文档", "/api"),
     H(r"^/search$", lambda q, m: v_search(q), "GET /search?q=&scope=", "全文搜索（跨会话）", "/search?q=token"),
     H(r"^/find$", lambda q, m: v_find(q), "GET /find?q=&p=", "按块精确检索（跨会话）", "/find?q=token"),
     H(r"^/tools$", lambda q, m: v_tools(q), "GET /tools?tool=&view=&q=&p=", "工具与命令聚合（跨会话）", "/tools"),

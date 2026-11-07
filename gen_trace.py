@@ -110,7 +110,7 @@ def seg_user(text):
 # 系统提醒也以 user 消息写进 jsonl，它们在轮列表里和真人提问混在一起。
 # 判定只依赖解析时已在手的字段，不新增遍历、不读额外文件。
 USER_KIND_LABEL = {
-    "user": "你发的", "task": "后台任务", "compact": "压缩摘要",
+    "user": "用户消息", "task": "后台任务", "compact": "压缩摘要",
     "injected": "系统注入", "other": "内部消息",
 }
 
