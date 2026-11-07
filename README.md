@@ -106,7 +106,8 @@
 - **上下文趋势**：逐调用渐变色带柱看五类内容的累计组成与净变化（25% 网格、左侧刻度、命中率折线、压缩 / 冷启动旗标），按调用 / 按轮切换，点柱直达调用详情
 - **上下文块地图**：面积 ∝ 字数的 SVG treemap，按类型着色、同色深浅二次编码；`?k=` 按类型聚焦，点任意块直跳不截断全文
 - **轻量视觉系统**：低饱和墨青主色 + 近墨灰文字链接（全局 `a` 兜底，不再落回浏览器默认亮蓝）、CSS 设计令牌 + 深浅色自适应、构成环、归档 / 退役斜纹条、可见字数走势、会话活动日历热力图；KPI 统一为连续数字带，首页数字条与三张图合成一块概览面板；图表样式按页面按需注入
-- **过渡与返回**：跨文档淡入、KPI 数字区局部 morph、卡片 / 数字入场渐变、`<details>` 展开高度渐变；悬浮「返回上一层」胶囊 + 页脚同名链接，父级从面包屑自动推导，长内容页不用浏览器回退
+- **过渡与返回**：跨文档淡入（淡出 240ms / 淡入 460ms）、KPI 数字区局部 morph（540ms）、卡片 / 数字入场渐变（500 / 600ms，50ms 错峰）、`<details>` 展开高度渐变（400ms），全站共用 `--ease` 缓动曲线；悬浮「返回上一层」胶囊 + 页脚同名链接，父级从面包屑自动推导，长内容页不用浏览器回退
+- **首页工具条**：导航、排序、元信息合成一条分区横带，取代原先两行 pill 按钮；排序为分段控件，窄屏自动折行
 - **命中块折叠**：调用详情里连续命中块默认折成一枚紧凑胶囊「#a–#b 块缓存命中」，展开时才铺成全宽标题条并拉出逐块清单；「按调用浏览」每行也带同样的折叠摘要；主动选「只看命中」时全部展开
 - **首页全库画像**：按模型的输入 token 环（模型名取自 jsonl 的 `providerData`，不依赖 db）、按时间的输入 token 折线、工作区路径递归树（两级 + 占比条），只消费已缓存的会话索引
 - **统一检索入口**：搜索框内用零脚本分段开关切换「按字符匹配 / 按块匹配」，由服务端分流；会话页入口改为无边框渐变卡片（分类色侧条）+ 分段浏览控件，次要链接降级
@@ -127,7 +128,7 @@
 **Linux（Debian / Ubuntu / 银河麒麟 / 统信 UOS / Deepin）**
 
 ```bash
-V=1.1.1   # 换成 Release 页上的最新版本号
+V=1.1.2   # 换成 Release 页上的最新版本号
 curl -fLO "https://github.com/The-garden-of-sinner/token-trace/releases/download/v$V/token-trace_${V}_all.deb"
 sudo dpkg -i "token-trace_${V}_all.deb"
 token-trace                     # 起服务并自动打开浏览器
@@ -284,7 +285,8 @@ python3 scripts/make_checksums.py    # -> dist/SHA256SUMS
 
 | 版本 | 主要内容 |
 | --- | --- |
-| **v1.1.1** | 修复 Windows 调用详情页 500（毫秒时间戳未归一，统一 `fmt_ts()` 并加越界保护，自检增至 63 项）；新增引用 Release 的一键安装、项目图标与 `TokenTrace.bat shortcut` 带图标快捷方式、`SHA256SUMS` 完整性校验与可选签名入口 |
+| **v1.1.2** | 前端可视化升级：设计令牌 + 深浅色、SVG 构成环 / 日历热力图 / 块地图、渐变色带趋势柱、按需 CSS 注入；跨文档过渡动效与「返回上一层」；连续命中块折叠、命中率一位小数、首页全库画像、检索与菜单重构；模型名改从 jsonl 的 `providerData` 按输入 token 聚合（不再依赖 `workbuddy.db`），链接配色与首页 / 菜单 / 折叠视觉统一，工具条重排与过渡节奏放缓；修复单轮详情无分页撑破 80 KB 硬闸。自检 64 项 |
+| v1.1.1 | 修复 Windows 调用详情页 500（毫秒时间戳未归一，统一 `fmt_ts()` 并加越界保护，自检增至 63 项）；新增引用 Release 的一键安装、项目图标与 `TokenTrace.bat shortcut` 带图标快捷方式、`SHA256SUMS` 完整性校验与可选签名入口 |
 | v1.1.0 | 工具与命令聚合、逐调用上下文趋势与 Delta、声明式路由表 `ROUTE_SPEC` + 58 项固化自检、**压缩感知统计修复**（可见区间 `[vf, ctxN)`、压缩事件校验页、独立复核脚本）；文档补齐三部分单价与峰谷倍率口径 |
 | v1.0.1 | 块检索：按块聚合命中、给出命中分片并直跳高亮 |
 | v1.0.0 | 完整模式（零 JS 服务端按需渲染）、17 个 JSON 端点、双平台一键启动、deb 与自包含单文件 Windows bat |
@@ -565,7 +567,7 @@ token（`providerData.requestModelName`）。db 不可读时只影响标题 / �
 | 渐变色带柱 | `gradient_segments()` 只输出 5 个累计百分比 `--s0..--s4`，渐变本体写在 `.trend a i` 一条规则里 | 40 根柱从约 200 个 DOM 降到 40 个，趋势页反而更小 |
 | 热力图 / 块地图 / 走势线 | `activity_heatmap()` 复用已缓存的会话索引；`block_treemap()` 只在 `/map` 页排序一次块列表；`visible_series()` 直接读 `_derive()` 的前缀和 | 不新增索引、不缓存大对象 |
 | 按需 CSS | `page()` 按 body 是否出现 `class="viz"` / `hm` / `map` / `chart` 决定拼哪几段样式 | 检索 / 全文页不带图表 CSS |
-| 过渡 | `@view-transition{navigation:auto}` 跨文档淡入、`.kpi` 单独 `view-transition-name` 做数字区 morph、`@keyframes` 入场、`::details-content` 展开高度渐变 | 纯 CSS，服务端零开销；`prefers-reduced-motion` 一并关闭 |
+| 过渡 | `@view-transition{navigation:auto}` 跨文档淡入、`.kpi` 单独 `view-transition-name` 做数字区 morph、`@keyframes` 入场、`::details-content` 展开高度渐变；全站共用 `--ease: cubic-bezier(.22,.68,.24,1)`，淡出 240ms / 淡入 460ms / 入场 500–600ms / 展开 400ms，淡出短于淡入避免拖影 | 纯 CSS，服务端零开销；`prefers-reduced-motion` 一并关闭 |
 | 返回上一层 | `back_link()` 从面包屑倒数第二项**往前找第一个带链接的层级**（不带 `ref` 的块全文页中间一级无链接，会回退到会话概览），输出固定胶囊 + 页脚文字链接 | 一处推导覆盖全部视图，每页多一个 `<a>` |
 | 命中块折叠 | `cache_hit_span()` 用前缀和 + `bisect` 求命中前缀 `[lo, hi]`，`hit_fold_html()` 输出原生 `<details>`；折叠态为紧凑胶囊、展开态铺全宽，箭头旋转 + 高度渐变 | O(log B) / 次，不逐块遍历 |
 | 首页全库画像 | `index_overview()` 只聚合 `STORE.sessions()` 的 `models / model / mtime / ws / pin`，输出模型环、时间折线、工作区两级树；`models` 由 `scan_all()` 在原有逐行遍历里按输入 token 加权得出 | 零额外全库遍历、零新增索引、不依赖 `workbuddy.db` |

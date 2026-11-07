@@ -782,7 +782,9 @@ CSS = """
 --part-bg:#ECEEF2;--part-fg:#59627A;--mark:#F2DFA0;
 --p0:#1FA39A;--p1:#EF9F27;--p2:#3B82D6;
 --p3:#8A63D2;--p4:#D26A9B;
---shadow:0 1px 2px #0000000a,0 2px 8px #00000008
+--shadow:0 1px 2px #0000000a,0 2px 8px #00000008;
+/* 全局缓动：起步利落、收尾缓，所有过渡共用一条曲线 */
+--ease:cubic-bezier(.22,.68,.24,1)
 }
 *{box-sizing:border-box}
 body{margin:0;padding:0 0 84px;font:14px/1.65 system-ui,-apple-system,"Noto Sans CJK SC",sans-serif;color:var(--fg);background:var(--bg)}
@@ -825,7 +827,7 @@ form.searchbox{display:flex;flex-direction:column;gap:10px;background:transparen
 form.searchbox input[type=text]{flex:1;min-width:220px;padding:11px 16px;
  border:1px solid transparent;border-radius:11px;font:13px inherit;
  background:var(--track);color:var(--fg);box-shadow:inset 0 1px 2px #0000000a;
- transition:border-color .18s,background-color .18s}
+ transition:border-color .28s var(--ease),background-color .28s var(--ease)}
 form.searchbox input[type=text]::placeholder{color:var(--faint)}
 form.searchbox input[type=text]:focus{outline:none;border-color:var(--accent);background:var(--bg)}
 form.searchbox select{padding:6px 11px;border:1px solid transparent;border-radius:999px;
@@ -835,7 +837,7 @@ form.searchbox select:hover{border-color:var(--line)}
 .modepick label{position:relative;cursor:pointer}
 .modepick input{position:absolute;opacity:0;width:0;height:0}
 .modepick label>span{display:block;padding:5px 14px;border-radius:999px;font-size:11px;
- color:var(--muted);transition:background-color .2s,color .2s,box-shadow .2s}
+ color:var(--muted);transition:background-color .28s var(--ease),color .28s var(--ease),box-shadow .28s var(--ease)}
 .modepick input:checked + span{background:var(--bg);color:var(--fg);font-weight:600;box-shadow:var(--shadow)}
 .modepick input:focus-visible + span{outline:2px solid var(--accent);outline-offset:2px}
 form.searchbox button{background:var(--accent);color:var(--bg);border:1px solid var(--accent);
@@ -897,37 +899,40 @@ code{font:11.5px ui-monospace,monospace;background:var(--track);padding:1px 4px;
 /* 跨文档视图过渡：同源跳转整页 cross-fade，纯 CSS 声明，不支持的浏览器直接忽略，
    页面照常跳转。数字 / 卡片只动 opacity 与 transform，不触发重排。 */
 @view-transition{navigation:auto}
-::view-transition-old(root){animation:vt-out .16s cubic-bezier(.4,0,1,1) both}
-::view-transition-new(root){animation:vt-in .26s cubic-bezier(0,0,.2,1) both}
-@keyframes vt-out{to{opacity:0;transform:translateY(-5px)}}
-@keyframes vt-in{from{opacity:.35;transform:translateY(8px)}}
+/* 统一缓动 --ease：起步利落、收尾缓，避免「啪」一下硬切。
+   淡出短于淡入，两层不叠出拖影；入场错峰拉到 50ms 一档。 */
+::view-transition-old(root){animation:vt-out .24s cubic-bezier(.4,0,.8,.6) both}
+::view-transition-new(root){animation:vt-in .46s var(--ease) both}
+@keyframes vt-out{to{opacity:0;transform:translateY(-4px)}}
+@keyframes vt-in{from{opacity:.32;transform:translateY(7px)}}
 /* KPI 单独命名：跨页时数字区局部变形 + 聚焦淡入，而不是整页一起淡。
    每个视图最多一个 .kpi，名字不会在同一文档里重复。 */
 .kpi{view-transition-name:trace-kpi}
-::view-transition-group(trace-kpi){animation-duration:.34s}
-::view-transition-old(trace-kpi){animation:vt-fade .16s ease both}
-::view-transition-new(trace-kpi){animation:vt-kpi .34s cubic-bezier(.2,.7,.2,1) both}
+::view-transition-group(trace-kpi){animation-duration:.54s}
+::view-transition-old(trace-kpi){animation:vt-fade .24s ease both}
+::view-transition-new(trace-kpi){animation:vt-kpi .54s var(--ease) both}
 @keyframes vt-fade{to{opacity:0}}
-@keyframes vt-kpi{from{opacity:.4;transform:translateY(6px);filter:blur(1px)}to{opacity:1;transform:none;filter:none}}
+@keyframes vt-kpi{from{opacity:.4;transform:translateY(6px);filter:blur(1.5px)}to{opacity:1;transform:none;filter:none}}
 @keyframes tt-in{from{opacity:.3;transform:translateY(7px)}to{opacity:1;transform:none}}
-@keyframes tt-num{from{opacity:.45;transform:translateY(5px);filter:blur(1px)}to{opacity:1;transform:none;filter:none}}
-.kpi>div,.viz{animation:tt-in .34s cubic-bezier(.2,.7,.2,1) both}
-.kpi b{animation:tt-num .42s cubic-bezier(.2,.7,.2,1) both}
-.kpi>div:nth-child(2){animation-delay:.03s}.kpi>div:nth-child(3){animation-delay:.06s}
-.kpi>div:nth-child(4){animation-delay:.09s}.kpi>div:nth-child(5){animation-delay:.12s}
-.kpi>div:nth-child(6){animation-delay:.15s}.kpi>div:nth-child(n+7){animation-delay:.18s}
-.row,.btn,button,.chip,footer a,.crumb a{transition:border-color .18s,background-color .18s,color .18s,transform .18s,opacity .18s}
+@keyframes tt-num{from{opacity:.45;transform:translateY(5px);filter:blur(1.5px)}to{opacity:1;transform:none;filter:none}}
+.kpi>div,.viz{animation:tt-in .5s var(--ease) both}
+.kpi b{animation:tt-num .6s var(--ease) both}
+.kpi>div:nth-child(2){animation-delay:.05s}.kpi>div:nth-child(3){animation-delay:.1s}
+.kpi>div:nth-child(4){animation-delay:.15s}.kpi>div:nth-child(5){animation-delay:.2s}
+.kpi>div:nth-child(6){animation-delay:.25s}.kpi>div:nth-child(n+7){animation-delay:.3s}
+.row,.btn,button,.chip,footer a,.crumb a{transition-property:border-color,background-color,color,transform,opacity;
+ transition-duration:.28s;transition-timing-function:var(--ease)}
 .btn:active,button:active{transform:translateY(1px)}
 @supports (interpolate-size:allow-keywords){
  details.grp{interpolate-size:allow-keywords}
- details.grp::details-content{block-size:0;overflow:hidden;transition:block-size .26s ease,content-visibility .26s ease allow-discrete}
+ details.grp::details-content{block-size:0;overflow:hidden;transition:block-size .4s var(--ease),content-visibility .4s var(--ease) allow-discrete}
  details.grp[open]::details-content{block-size:auto}
 }
 /* 返回上一层：链接从面包屑倒数第二项自动推导，长内容页也始终可见 */
 .back{position:fixed;right:20px;bottom:20px;z-index:20;display:inline-flex;align-items:center;gap:8px;
  padding:9px 16px;border-radius:999px;background:var(--fg);color:var(--bg);border:1px solid var(--line);
  font-size:12px;font-weight:500;text-decoration:none;box-shadow:0 4px 16px #0000002e;opacity:.94;
- transition:transform .18s,opacity .18s}
+ transition:transform .28s var(--ease),opacity .28s var(--ease)}
 .back:hover{opacity:1;transform:translateY(-2px);color:var(--bg)}
 .back:active{transform:translateY(0)}
 .back .ar{font-size:15px;line-height:1}
@@ -1011,7 +1016,7 @@ CSS_TREND = """
 .trend{position:relative;display:flex;align-items:flex-end;gap:2px;height:172px;border-bottom:1px solid var(--line);
  background:repeating-linear-gradient(to top,transparent 0,transparent 24.6%,var(--line2) 24.6%,var(--line2) 25%)}
 .trend a{flex:1;min-width:3px;height:100%;display:flex;flex-direction:column-reverse;justify-content:flex-start;
- text-decoration:none;position:relative;transform-origin:bottom;animation:tt-rise .3s cubic-bezier(.4,0,.2,1) backwards}
+ text-decoration:none;position:relative;transform-origin:bottom;animation:tt-rise .55s var(--ease) backwards}
 .trend a i{display:block;width:100%;min-height:0;border-radius:2px 2px 0 0;background:var(--track);
  background:linear-gradient(to top,var(--p0) 0,var(--p0) var(--s0),var(--p1) var(--s0),var(--p1) var(--s1),var(--p2) var(--s1),var(--p2) var(--s2),var(--p3) var(--s2),var(--p3) var(--s3),var(--p4) var(--s3),var(--p4) var(--s4))}
 .trend a:hover,.trend a:focus-visible{outline:1px solid var(--accent);outline-offset:1px}
@@ -1030,11 +1035,11 @@ CSS_FOLD = """
 .hitfold>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:10px;
  width:auto;padding:7px 15px;font-size:11.5px;border:1px solid var(--line);border-radius:999px;
  background:var(--panel2);color:var(--muted);
- transition:background-color .2s,border-color .2s,color .2s,box-shadow .2s,border-radius .2s}
+ transition:background-color .3s var(--ease),border-color .3s var(--ease),color .3s var(--ease),box-shadow .3s var(--ease),border-radius .3s var(--ease)}
 .hitfold>summary::-webkit-details-marker{display:none}
 .hitfold>summary:before{content:"";width:0;height:0;flex:none;
  border-left:5px solid var(--accent);border-top:4px solid transparent;border-bottom:4px solid transparent;
- transition:transform .22s}
+ transition:transform .34s var(--ease)}
 .hitfold[open]>summary:before{transform:rotate(90deg)}
 .hitfold>summary .hf-dot{display:none}
 .hitfold>summary b{font-weight:600;color:var(--fg)}
@@ -1057,7 +1062,7 @@ CSS_FOLD = """
 @supports (interpolate-size:allow-keywords){
  .hitfold{interpolate-size:allow-keywords}
  .hitfold::details-content{block-size:0;overflow:hidden;
-  transition:block-size .24s ease,content-visibility .24s ease allow-discrete}
+  transition:block-size .4s var(--ease),content-visibility .4s var(--ease) allow-discrete}
  .hitfold[open]::details-content{block-size:auto}
 }
 """
@@ -1103,6 +1108,29 @@ CSS_INDEX = """
 .wsbar i{display:block;height:100%;background:var(--accent);opacity:.72}
 .wsrow.top .wsbar i{opacity:1}
 .wsn{text-align:right;color:var(--faint);font-variant-numeric:tabular-nums}
+/* 首页工具条：文字导航（细分隔）+ 右侧排序分段控件 + 元信息，一条横带三个分区。
+   取代原先两行大小不一的 pill 按钮堆，与下方会话列表用一条细线分开。 */
+.toolbar{display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+ padding:2px 2px 12px;margin:0 0 14px;border-bottom:1px solid var(--line2)}
+.tb-nav{display:flex;align-items:center;flex-wrap:wrap}
+.tb-nav a{position:relative;padding:5px 13px;font-size:11.5px;color:var(--muted);
+ text-decoration:none;border-radius:6px;
+ transition:color .28s var(--ease),background-color .28s var(--ease)}
+.tb-nav a:first-child{padding-left:2px}
+.tb-nav a + a:before{content:"";position:absolute;left:0;top:50%;transform:translateY(-50%);
+ width:1px;height:11px;background:var(--line)}
+.tb-nav a:hover{color:var(--link-h);background:var(--accent-bg)}
+.tb-sort{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-left:auto}
+.tb-lab{font-size:10.5px;letter-spacing:.06em;color:var(--faint)}
+.tb-seg{display:inline-flex;background:var(--track);border-radius:999px;padding:2px}
+.tb-seg a{padding:4px 13px;border-radius:999px;font-size:11px;color:var(--muted);
+ text-decoration:none;transition:background-color .28s var(--ease),color .28s var(--ease)}
+.tb-seg a:hover{color:var(--link-h)}
+.tb-seg a.on{background:var(--bg);color:var(--fg);font-weight:600;box-shadow:var(--shadow)}
+.tb-clear{font-size:11px;color:var(--muted);text-decoration:none;padding:4px 11px;
+ border:1px solid var(--line);border-radius:999px}
+.tb-clear:hover{color:var(--link-h);border-color:var(--accent)}
+.tb-meta{font-size:10.5px;color:var(--faint);white-space:nowrap}
 @media(max-width:900px){
  .hero .kpi{grid-template-columns:repeat(3,1fr)}
  .hero .kpi>div:nth-child(3){border-right:0}
@@ -1110,6 +1138,7 @@ CSS_INDEX = """
  .ovgrid{grid-template-columns:1fr}
  .ovcell{border-right:0;border-top:1px solid var(--line2);padding:14px 0 0;margin-top:14px}
  .ovcell:first-child{border-top:0;margin-top:0;padding-top:0}
+ .tb-sort{margin-left:0}.tb-meta{display:none}
 }
 """
 
@@ -1120,20 +1149,20 @@ CSS_NAV = """
 .navcard{position:relative;display:flex;flex-direction:column;gap:4px;padding:14px 16px 13px;
  border:0;border-radius:12px;background:linear-gradient(150deg,var(--panel),var(--panel2));
  text-decoration:none;color:var(--fg);overflow:hidden;
- transition:transform .2s,box-shadow .2s}
+ transition:transform .3s var(--ease),box-shadow .3s var(--ease)}
 .navcard:before{content:"";position:absolute;left:0;top:16px;bottom:16px;width:2px;border-radius:2px;
- background:var(--nc,var(--accent));opacity:.85;transition:top .22s,bottom .22s,opacity .22s}
+ background:var(--nc,var(--accent));opacity:.85;transition:top .34s var(--ease),bottom .34s var(--ease),opacity .34s var(--ease)}
 .navcard:hover{transform:translateY(-2px);box-shadow:var(--shadow)}
 .navcard:hover:before{top:0;bottom:0;opacity:1}
 .navcard b{font-size:12px;font-weight:600;letter-spacing:.01em}
 .navcard span{font-size:10.5px;color:var(--muted);line-height:1.45}
 .navcard i{position:absolute;right:14px;top:12px;font-style:normal;font-size:13px;
- color:var(--faint);opacity:.5;transition:transform .2s,opacity .2s,color .2s}
+ color:var(--faint);opacity:.5;transition:transform .3s var(--ease),opacity .3s var(--ease),color .3s var(--ease)}
 .navcard:hover i{transform:translate(2px,-2px);opacity:1;color:var(--link-h)}
 .segrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0 4px;padding-bottom:10px;border-bottom:1px solid var(--line2)}
 .seg{display:inline-flex;background:var(--track);border-radius:999px;padding:3px}
-.seg a{padding:5px 15px;border-radius:999px;font-size:11.5px;color:var(--muted);text-decoration:none;
- transition:background-color .2s,color .2s}
+.seg a{padding:5px 15px;border-radius:999px;font-size:11.5px; color:var(--muted);text-decoration:none;
+ transition:background-color .28s var(--ease),color .28s var(--ease)}
 .seg a:hover{color:var(--link-h)}
 .seg a.on{background:var(--bg);color:var(--fg);font-weight:600;box-shadow:var(--shadow)}
 .seglink{margin-left:auto;font-size:11px;color:var(--faint);text-decoration:none}
@@ -1728,17 +1757,23 @@ def v_index(q):
                  '模型名、token 与积分来自会话记录，不受影响。详情见服务端终端输出。</div>')
     body += search_box("/search", "", "text", "all",
                        "搜上下文块 / 输出 / 提问原文（跨全部会话）")
-    body += ('<div class="tabs">'
-             '<a class="btn" href="/tools">工具与命令</a>'
-             '<a class="btn" href="/stats">全局统计与冷启动断点</a>'
-             '<a class="btn" href="/api">后端 API 契约</a>'
-             '<a class="btn" href="/?refresh=1">重新扫描源文件</a>'
-             '<span class="fine" style="align-self:center;margin-left:6px">源文件 68 MB · 只读</span></div>')
-    body += ('<div class="tabs"><span class="fine" style="align-self:center">排序</span>'
-             '<a class="btn %s" href="/?sort=mtime">最近修改</a>' % ("on" if sort == "mtime" else "") +
-             '<a class="btn %s" href="/?sort=credit">积分</a>' % ("on" if sort == "credit" else "") +
-             '<a class="btn %s" href="/?sort=calls">调用数</a>' % ("on" if sort == "calls" else "") +
-             (('<a class="btn" href="/">清除工作区筛选：%s ✕</a>' % esc(ws)) if ws else '') + '</div>')
+    # 一条分区工具条：左侧文字导航（细分隔线）、右侧排序分段控件，
+    # 取代原先两行大小不一的 pill 按钮堆。窄屏时分区自动折行。
+    sort_links = "".join(
+        '<a class="%s" href="/?sort=%s">%s</a>' %
+        ("on" if sort == k else "", k, lab)
+        for k, lab in (("mtime", "最近修改"), ("credit", "积分"), ("calls", "调用数")))
+    clear_ws = (('<a class="tb-clear" href="/">清除工作区筛选：%s ✕</a>' % esc(ws))
+                if ws else "")
+    body += ('<div class="toolbar"><nav class="tb-nav">'
+             '<a href="/tools">工具与命令</a>'
+             '<a href="/stats">全局统计与冷启动断点</a>'
+             '<a href="/api">后端 API 契约</a>'
+             '<a href="/?refresh=1">重新扫描源文件</a></nav>'
+             '<div class="tb-sort"><span class="tb-lab">排序</span>'
+             '<span class="tb-seg">%s</span>%s</div>'
+             '<span class="tb-meta">源文件 68 MB · 只读</span></div>' %
+             (sort_links, clear_ws))
 
     groups = OrderedDict()
     for s in shown:
