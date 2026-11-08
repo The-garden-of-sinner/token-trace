@@ -16,6 +16,7 @@ import bisect
 import datetime
 import hmac
 import html
+import http.client
 import json
 import os
 import re
@@ -51,6 +52,10 @@ CACHE_MIN = 32         # 自适应下限
 CACHE_MAX = 256        # 自适应上限：单会话约 1.5 MB，256 个约 380 MB；超出部分走 LRU
 API_MAX_LIMIT = 500    # /api/ 单次返回条数上限
 MAX_CHARS = 10_000_000  # 块/输出全文的字符 offset 上限，与 limit 同一量级
+# 同机 WorkBuddy 用量监视（workbuddy-token-monitor --web）的地址。
+# 不去猜它装在哪，只在 /api/ping 有应答时给一个跳转入口，避免页面上出现死链。
+MONITOR_URL = (os.environ.get("TRACE_MONITOR_URL") or "http://127.0.0.1:8791/").strip()
+MONITOR_TTL = 15       # 探测结果缓存秒数：成功失败都缓存，翻页不会每页连一次
 
 TYPES = {"user": "你的输入", "injected": "系统注入", "tool_result": "工具结果",
          "tool_call": "工具调用参数", "assistant": "助手回答"}
@@ -1219,6 +1224,9 @@ CSS_INDEX = """
 .tb-nav a + a:before{content:"";position:absolute;left:0;top:50%;transform:translateY(-50%);
  width:1px;height:11px;background:var(--line)}
 .tb-nav a:hover{color:var(--link-h);background:var(--accent-bg)}
+/* 外链（同机用量监视）：只在对端探测通过时才出现，颜色比站内导航轻一点 */
+.tb-nav a.tb-ext{color:var(--link)}
+.tb-ext:hover{color:var(--link-h)}
 .tb-sort{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-left:auto}
 .tb-lab{font-size:10.5px;letter-spacing:.06em;color:var(--faint)}
 .tb-seg{display:inline-flex;background:var(--track);border-radius:999px;padding:2px}
@@ -1310,6 +1318,51 @@ def back_link(crumbs, footer=False):
     return ""
 
 
+# ---------------------------------------------------------------- 同机工具互链
+#
+# 零脚本页面没法由浏览器判断「对面那个服务还在不在」，死链又比没有入口更烦。
+# 所以由服务端探一次 loopback：只连本机、不走 http_proxy、150 ms 超时，
+# 结果缓存 MONITOR_TTL 秒（成功失败都缓存），翻页时不会每页都去连一次。
+_MON = {"at": 0.0, "ok": False, "url": ""}
+_MON_LOCK = threading.Lock()
+
+
+def monitor_url():
+    """返回可点击的用量监视地址；没在跑就返回空串（调用方据此不渲染入口）。"""
+    if not MONITOR_URL:
+        return ""
+    now = time.time()
+    with _MON_LOCK:
+        if _MON["url"] == MONITOR_URL and now - _MON["at"] < MONITOR_TTL:
+            return MONITOR_URL if _MON["ok"] else ""
+    ok = False
+    try:
+        u = urlsplit(MONITOR_URL)
+        conn = http.client.HTTPConnection(u.hostname or "127.0.0.1",
+                                          u.port or 80, timeout=0.15)
+        try:
+            conn.request("GET", "/api/ping")
+            resp = conn.getresponse()
+            ok = resp.status == 200 and b'"ok"' in resp.read(160)
+        finally:
+            conn.close()
+    except (OSError, http.client.HTTPException, ValueError):
+        ok = False
+    with _MON_LOCK:
+        _MON.update(at=now, ok=ok, url=MONITOR_URL)
+    return MONITOR_URL if ok else ""
+
+
+def monitor_link(cls="tb-ext"):
+    """工具条 / 页脚里的外链。只有探测到对方在跑才返回 HTML。"""
+    url = monitor_url()
+    if not url:
+        return ""
+    return ('<a class="%s" href="%s" target="_blank" rel="noopener" '
+            'title="打开 WorkBuddy 用量监视：今日消耗、生成速度、缓存命中率">'
+            '实时用量 ↗</a>' % (cls, esc(url)))
+
+
 def page(title, crumbs, body, sub="", extra_head="", need=()):
     """need 显式声明本页需要的图表样式片段（"viz"/"hm"/"map"/"chart"/
     "fold"/"nav"/"index"），与 body 探测取并集。
@@ -1345,7 +1398,8 @@ def page(title, crumbs, body, sub="", extra_head="", need=()):
            '<footer><span>本页 HTML @@KB@@ KB</span>' +
            '<span>数据只读 · 全文由后端按需提供 · 无需 JavaScript</span>' +
            back_link(crumbs, footer=True) +
-           '<a href="/">索引</a><a href="/stats">全局统计</a><a href="/api">API</a></footer>' +
+           '<a href="/">索引</a><a href="/stats">全局统计</a><a href="/api">API</a>' +
+           monitor_link("ext") + '</footer>' +
            back + '</div></html>')
     # 页脚口径与 80 KB 硬闸对齐：算整页响应字节（含内联 CSS 与 header），
     # 不是只算 body。替换会改变长度（"99.9" 与 "100.0" 差 2 字节），迭代到
@@ -2059,11 +2113,12 @@ def v_index(q):
              '<a href="/tools">工具与命令</a>'
              '<a href="/stats">全局统计</a>'
              '<a href="/api">API 文档</a>'
-             '<a href="/?refresh=1">刷新</a></nav>'
+             '<a href="/?refresh=1">刷新</a>%s</nav>'
              '<div class="tb-sort"><span class="tb-lab">排序</span>'
              '<span class="tb-seg">%s</span>%s</div>'
              '<span class="tb-meta">源文件 %s · 只读</span></div>' %
-             (sort_links, clear_ws, human_size(src_bytes) if src_bytes else "体积未知"))
+             (monitor_link(), sort_links, clear_ws,
+              human_size(src_bytes) if src_bytes else "体积未知"))
 
     groups = OrderedDict()
     for s in page_items:
@@ -2981,6 +3036,8 @@ def api_route(path, q):
             "write_files_basis": ("源码无写文件调用；sys.dont_write_bytecode=%s（非 OS 级探测）"
                                   % sys.dont_write_bytecode),
             "python": sys.version.split()[0],
+            "monitor": ("up" if monitor_url() else "down") if MONITOR_URL else "disabled",
+            "monitor_url": MONITOR_URL,
         }))
     if path == "/api/sessions":
         return json_bytes(env([dict(s) for s in STORE.sessions()], total=len(STORE.sessions())))
@@ -3247,7 +3304,7 @@ ROUTE_SPEC = [
     H(r"^/s/([0-9A-Za-z_-]+)$", lambda q, m: v_session(q, m.group(1)),
       "GET /s/<sid>?view=turns|calls&p=", "会话概览（按轮 / 按调用分页）", "/s/{sid}"),
 
-    A("/api/health", "状态、pid、rss_mb、会话数、缓存数、write_files", "/api/health"),
+    A("/api/health", "状态、pid、rss_mb、会话数、缓存数、write_files、monitor", "/api/health"),
     A("/api/sessions", "全部会话摘要", "/api/sessions"),
     A("/api/stats", "跨会话全量聚合", "/api/stats"),
     A("/api/s/<sid>", "单会话全量统计 + 每一轮摘要", "/api/s/{sid}"),

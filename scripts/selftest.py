@@ -111,9 +111,13 @@ def main():
             path = r["sample"].replace("{sid}", sid)
             st, body = get(path)
             sc = body.count(b"<script")
-            ev = len(RE_EVENT.findall(body))
-            ext = len(RE_EXT.findall(body)) + len(RE_LINK.findall(body))
-            jsu = body.lower().count(b"javascript:")
+            # 同机工具互链是 127.0.0.1 的外链，不属于「依赖外部资源」；
+            # 只把 scheme 后面的主机抹掉再扫，避免把 loopback 误判成 CDN。
+            scan = body.replace(b"http://127.0.0.1", b"loopback") \
+                       .replace(b"http://localhost", b"loopback")
+            ev = len(RE_EVENT.findall(scan))
+            ext = len(RE_EXT.findall(scan)) + len(RE_LINK.findall(scan))
+            jsu = scan.lower().count(b"javascript:")
             m = re.search(rb"HTML ([\d.]+) KB", body)
             kb_ok = bool(m) and abs(float(m.group(1)) - len(body) / 1024.0) <= 0.15
             check(st == 200 and sc == 0 and ev == 0 and ext == 0 and jsu == 0
@@ -358,6 +362,26 @@ def main():
                   % (first, len(sessions), again))
         finally:
             T.G.build = orig_build
+
+        print("== 同机工具互链（用量监视）==")
+        st, body = get("/api/health")
+        hd = json.loads(body)["data"]
+        check(hd.get("monitor") in ("up", "down", "disabled") and "monitor_url" in hd,
+              "/api/health 自报 monitor=%s（%s）" % (hd.get("monitor"), hd.get("monitor_url")))
+        orig_mon = T.monitor_url
+        try:
+            T.monitor_url = lambda: "http://127.0.0.1:8791/"
+            h = T.v_index({})
+            check('href="http://127.0.0.1:8791/"' in h and "实时用量" in h
+                  and 'rel="noopener"' in h,
+                  "监视器在跑时：首页工具条出现「实时用量」外链（noopener）")
+            deep = T.v_stats({})
+            check("实时用量" in deep, "深页页脚也有同一入口（不必回首页）")
+            T.monitor_url = lambda: ""
+            h = T.v_index({})
+            check("实时用量" not in h, "监视器没在跑时不渲染死链")
+        finally:
+            T.monitor_url = orig_mon
 
         print("== 轮来源筛选：非法值 / 分页 / 转义 ==")
         st, body = get("/s/%s?kind=%%3Cscript%%3Ealert(1)%%3C%%2Fscript%%3E" % sid)

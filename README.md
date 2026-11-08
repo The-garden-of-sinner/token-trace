@@ -112,6 +112,7 @@
 - **轮来源标签**：`role=user` 的消息并不都是你输入的。每轮标为「用户消息 / 后台任务 / 压缩摘要 / 系统注入 / 内部消息」，非真人输入显示可读摘要而不是整段 XML；会话页可按类别筛选，单轮详情也按来源改标题
 - **子代理标注**：子代理是独立的 `agent-*` 会话文件，会话列表直接给子代理与其派生主会话打标签（「子代理 · Explore」/「N 个子代理」），不再单独占一块关系面板，避免把列表挤到首屏之外；父子关系优先用子会话的 `rootRequestId` 精确匹配派发它的 `Agent` 调用，字段缺失时才退回 5 秒时间窗兜底
 - **首页全库画像**：按模型的输入 token 环（模型名取自 jsonl 的 `providerData`，不依赖 db）、按时间的输入 token 折线、工作区路径递归树（两级 + 占比条），只消费已缓存的会话索引
+- **同机互链**：服务端用一次 loopback `/api/ping`（150 ms 超时、结果缓存 15 s）判断同机的 WorkBuddy 用量监视是否在跑，在跑才在工具条与页脚放「实时用量 ↗」，没跑就不渲染——页面上不会出现死链；地址可用 `TRACE_MONITOR_URL` 改
 - **统一检索入口**：单行搜索区，左侧用零脚本分段开关切换「按字符匹配 / 按块匹配」并由服务端分流，输入框吃掉剩余宽度、按钮贴右；会话页入口改为无边框渐变卡片（分类色侧条）+ 分段浏览控件，次要链接降级
 - 缓存命中率统一显示到小数点后一位
 - **压缩感知**：识别上下文压缩，只统计本次请求真正带上的块；压缩事件页把真实账单与修正前后口径并列，可人工核对
@@ -130,7 +131,7 @@
 **Linux（Debian / Ubuntu / 银河麒麟 / 统信 UOS / Deepin）**
 
 ```bash
-V=1.1.6   # 换成 Release 页上的最新版本号
+V=1.1.7   # 换成 Release 页上的最新版本号
 curl -fLO "https://github.com/The-garden-of-sinner/token-trace/releases/download/v$V/token-trace_${V}_all.deb"
 sudo dpkg -i "token-trace_${V}_all.deb"
 token-trace                     # 起服务并自动打开浏览器
@@ -293,7 +294,8 @@ tar 成员与 gzip 容器头的 `mtime` 都固定为 0（`GzipFile(..., mtime=0)
 
 | 版本 | 主要内容 |
 | --- | --- |
-| **v1.1.6** | 第二轮复测修复：① 首页 500 —— `subagent_relations()` 对字符串时间戳直接做减法，`first_ts` 统一用 `_ms()` 归一，0 值不再参与就近匹配；② 分页后分组标题用本页切片计数、与分页条口径冲突，改为按该工作区全量统计并在被切开时标「本页 N」；③ `rootRequestId` 采而未用，改为父子关系首选的精确键（`agent_reqs`），时间窗降级为兜底，嵌套子代理可挂到直接父级；④ `build_deb.py` 的 gzip 容器头写墙钟时间，改用 `GzipFile(mtime=0)`，构建真正可复现。README 补「渲染性能」实测（兆芯集显帧率与测量方法）；另修 `src_bytes` 单文件失效即整页失真、页脚 KB 迭代轮数；自检补 12 项（子代理边界 / 脏时间戳渲染 / 分组计数 / 残差桶 / `/stats` 解析次数 / `?kind=` 非法值与转义 / `build_deb` 版本号校验）增至 85 项 |
+| **v1.1.7** | 同机互链：探测到 WorkBuddy 用量监视（`workbuddy-token-monitor --web`，默认 `127.0.0.1:8791`）在运行时，工具条与页脚出现「实时用量 ↗」；`/api/health` 自报 `monitor=up/down/disabled`；地址可用 `TRACE_MONITOR_URL` 覆盖，置空即关闭探测。自检 89 项 |
+| v1.1.6 | 第二轮复测修复：① 首页 500 —— `subagent_relations()` 对字符串时间戳直接做减法，`first_ts` 统一用 `_ms()` 归一，0 值不再参与就近匹配；② 分页后分组标题用本页切片计数、与分页条口径冲突，改为按该工作区全量统计并在被切开时标「本页 N」；③ `rootRequestId` 采而未用，改为父子关系首选的精确键（`agent_reqs`），时间窗降级为兜底，嵌套子代理可挂到直接父级；④ `build_deb.py` 的 gzip 容器头写墙钟时间，改用 `GzipFile(mtime=0)`，构建真正可复现。README 补「渲染性能」实测（兆芯集显帧率与测量方法）；另修 `src_bytes` 单文件失效即整页失真、页脚 KB 迭代轮数；自检补 12 项（子代理边界 / 脏时间戳渲染 / 分组计数 / 残差桶 / `/stats` 解析次数 / `?kind=` 非法值与转义 / `build_deb` 版本号校验）增至 85 项 |
 | v1.1.5 | 视觉收尾：KPI 数字带列宽改为**按内容分配**（`kpi_weights()` 估算每格文字宽度并输出 `fr` 表，两位数的「会话」不再和九位 token 等宽，12 项两行仍按列对齐）；工具条 / 检索区 / 分段控件 / 入口卡 / 会话分组 / 图表卡补齐入场错峰；构成环各段按起始角度错峰生长、概览与走势折线用 `clip-path` 从左往右揭开、渐变色带柱 `scaleY` 拉起；README 替换为最新界面截图（会话索引 + 会话概览）。自检 73 项 |
 | v1.1.4 | 社区复测反馈修复：`--cache` 默认改为按会话数自适应（cap < 会话数会让 `/stats` 每轮全部重解析，33 会话 / cap 32 实测约 5 s）；首页会话列表分页（此前 132 个会话时 94.8 KB 会顶破 80 KB 硬闸）；`page(need=...)` 显式声明样式，空库不再丢 `.hero` / `.toolbar`；页脚体积改算整页响应；源文件体积 / 长块字数改为运行时计算；修面包屑双重转义、模型环残差与 DST 分桶。自检增至 73 项 |
 | v1.1.3 | 轮来源标签（你发的 / 后台任务 / 压缩摘要 / 系统注入 / 内部消息）与 `?kind=` 筛选，非真人输入改显可读摘要；首页「会话 · 子代理关系」面板与会话列表子代理标签；新增 `scripts/build_deb.py`（无 `dpkg-deb` 时用纯标准库构建等价 deb）；Release 补齐 bat / deb / SHA256SUMS 附件。自检 64 项 |
@@ -386,6 +388,7 @@ curl -s "http://127.0.0.1:8765/api/s/<sid>/compact"
 | `--warm` | — | 关 | 启动时预解析全部会话（约 3–7 s，换更快的首次搜索） |
 | 不开浏览器 | `TRACE_NO_BROWSER=1` | — | 无头 / 自动化场景 |
 | 数据目录 | `WORKBUDDY_HOME` | `~/.workbuddy` | Windows 启动器也支持 `-WorkBuddyHome` |
+| 用量监视地址 | `TRACE_MONITOR_URL` | `http://127.0.0.1:8791/` | 同机监视器的地址；置空则关闭互链探测（不再尝试连接） |
 
 Windows 的 `start.ps1` 对应参数是 `-Port` / `-NoBrowser` / `-Token`（别名 `-ShutdownToken`）/
 `-WorkBuddyHome`，动作支持 `start | stop | restart | status`。
@@ -593,6 +596,7 @@ token（`providerData.requestModelName`）。db 不可读时只影响标题 / �
 | 静态模式同步 | `gen_trace.render()` 的每轮概要同样显示类别标签与可读摘要 | 离线兜底口径一致 |
 | 子代理标注 | `scan_all()` 在同一次逐行遍历里记 `isSubAgent` / `agent` / `rootRequestId` / 首条时间戳 / `Agent` 调用的时间与 `conversationRequestId`（`agent_reqs`）；`subagent_relations()` 先用 `rootRequestId` 精确匹配，匹配不到再退回 5 秒时间窗，会话列表按结果打「子代理」/「N 个子代理」标签 | 零额外全库遍历；精确匹配 O(子代理数)，只有未命中的才走时间窗；无子代理时无标签，页面不多一块高度 |
 | 首页全库画像 | `index_overview()` 只聚合 `STORE.sessions()` 的 `models / model / mtime / ws / pin`，输出模型环、时间折线、工作区两级树；`models` 由 `scan_all()` 在原有逐行遍历里按输入 token 加权得出 | 零额外全库遍历、零新增索引、不依赖 `workbuddy.db` |
+| 同机互链 | `monitor_url()` 用 `http.client` 直连 loopback 的 `/api/ping`（不走 `http_proxy`、150 ms 超时），成功与失败都按 `MONITOR_TTL` 缓存；`monitor_link()` 只在探测通过时输出 `<a target="_blank" rel="noopener">` | 每 15 s 最多一次本地连接；不通时输出 0 字节，页面不留死链 |
 | 统一检索 | `search_box()` 用 `radio + label` 分段开关（无 `id`、无脚本、同页可复用），固定 form action，`v_search()` 按 `mode` 分流到 `v_find()` | 零 JS、零新增路由；分页仍直连 `/find` |
 | 按需 CSS（续） | `CSS_FOLD` / `CSS_NAV` / `CSS_INDEX` 分别按 `hitfold` / `navgrid` / `ovgrid` 注入 | 只有用到的页面才带对应图表样式 |
 | 降级 | 渐变色标不被老浏览器识别时回落纯色轨道（柱高与链接不变）；`prefers-reduced-motion` 关动效；数据不足显示统一空态 | 信息不丢，静态预览仍可读 |
@@ -644,7 +648,7 @@ token（`providerData.requestModelName`）。db 不可读时只影响标题 / �
 都从它生成。新增端点只需加一行，不会再出现「页面能开但文档没写」或反过来。
 
 ```bash
-python3 -B scripts/selftest.py                    # 85 项检查
+python3 -B scripts/selftest.py                    # 89 项检查
 TRACE_TEST_PORT=8901 python3 -B scripts/selftest.py
 ```
 
@@ -978,7 +982,8 @@ p95 回落到 16.8 ms；run1 的 P/S 低帧是脚本在冷加载末尾强制 `ca
     匹配不准。匹配不上的子代理会单独列出并标注「未匹配到主会话」。子代理会话本身、
     token 与调用统计是**事实**，只有归属在兜底路径下才是推断。
     另外子代理的 token / 积分在独立会话里统计，不会自动汇总到主会话。
-21. **缓存容量自适应有上限**：默认 `cap = max(32, 会话数 + 8)`，最多 256 个会话（约 380 MB RSS）。
+21. **同机互链依赖监视器的 Web 模式**：`workbuddy-token-monitor` 的 Qt 桌面窗口是进程内聚合，不开 HTTP 服务，因此只有 `--web` 模式（默认 8791）才会被探测到；Windows 侧监视器本就只有 web 形态，链路天然可用。探测只连本机、150 ms 超时，**不会**因此访问外网。
+22. **缓存容量自适应有上限**：默认 `cap = max(32, 会话数 + 8)`，最多 256 个会话（约 380 MB RSS）。
     低内存容器可用 `--cache` 显式压低，代价是遍历全部会话的路径会重复解析。
     超过 256 个会话时超出部分仍走 LRU，`/stats` 每次请求会重新解析它们（单次约
     0.1–0.7 s/会话，线性而非二次退化）；此时可用 `--cache` 显式调大，代价是内存
