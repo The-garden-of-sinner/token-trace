@@ -1348,9 +1348,10 @@ def page(title, crumbs, body, sub="", extra_head="", need=()):
            '<a href="/">索引</a><a href="/stats">全局统计</a><a href="/api">API</a></footer>' +
            back + '</div></html>')
     # 页脚口径与 80 KB 硬闸对齐：算整页响应字节（含内联 CSS 与 header），
-    # 不是只算 body。替换会改变长度，迭代到数字稳定为止（最多 3 轮）。
+    # 不是只算 body。替换会改变长度（"99.9" 与 "100.0" 差 2 字节），迭代到
+    # 数字稳定；6 轮足够覆盖位数变化的边界，真出现来回跳时最多少报 0.1 KB。
     kb = "0.0"
-    for _ in range(3):
+    for _ in range(6):
         out = doc.replace("@@KB@@", kb)
         nxt = "%.1f" % (len(out.encode("utf-8")) / 1024.0)
         if nxt == kb:
@@ -2048,10 +2049,12 @@ def v_index(q):
         for k, lab in (("mtime", "最近修改"), ("credit", "积分"), ("calls", "调用数")))
     clear_ws = (('<a class="tb-clear" href="/">清除工作区筛选：%s ✕</a>' % esc(ws))
                 if ws else "")
-    try:
-        src_bytes = sum(os.path.getsize(s["path"]) for s in ss)
-    except OSError:
-        src_bytes = 0
+    src_bytes = 0
+    for s in ss:
+        try:
+            src_bytes += os.path.getsize(s["path"])
+        except OSError:
+            pass            # 单个文件被清理/占用时只少算它，不让整页退回「体积未知」
     body += ('<div class="toolbar"><nav class="tb-nav">'
              '<a href="/tools">工具与命令</a>'
              '<a href="/stats">全局统计</a>'

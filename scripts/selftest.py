@@ -59,6 +59,13 @@ def main():
     check(len({r["sample"] for r in T.ROUTE_SPEC}) == len(T.ROUTE_SPEC),
           "sample 无重复（%d 项）" % len(T.ROUTE_SPEC))
 
+    print("== 发行脚本：版本号校验 ==")
+    bad = subprocess.run([sys.executable, "-B", "scripts/build_deb.py", "../evil"],
+                         cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                         timeout=60)
+    check(bad.returncode != 0,
+          "build_deb.py 拒绝带路径的版本号，不会写出 dist/（exit=%d）" % bad.returncode)
+
     print("== 时间戳跨平台（Windows CRT 越界保护）==")
     check(T.fmt_ts(1780000000000).startswith("2026-"),
           "毫秒时间戳归一为 2026 年（修复前 Windows 抛 Errno 22）")

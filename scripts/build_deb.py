@@ -21,6 +21,10 @@ DIST = os.path.join(BASE, "dist")
 SH = os.path.join(BASE, "scripts", "build_deb.sh")
 VERSION = (sys.argv[1] if len(sys.argv) > 1 else
            open(os.path.join(BASE, "scripts", "VERSION"), encoding="utf-8").read().strip())
+# 版本号会直接拼进输出文件名；不校验的话 `-- ../x` 之类可以把产物写出 dist/。
+# deb 的 Version 字段本来也只允许这些字符。
+if not re.match(r"^[0-9][0-9A-Za-z.+~-]*$", VERSION):
+    raise SystemExit("非法版本号 %r：只允许数字、字母与 . + ~ -（且以数字开头）" % VERSION)
 PKG = "token-trace"
 ARCH = "all"
 MAINTAINER = "The-garden-of-sinner <50914620+The-garden-of-sinner@users.noreply.github.com>"
