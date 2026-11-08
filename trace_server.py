@@ -732,7 +732,7 @@ def tool_stats(sid=None):
             t["hit"] += c["hit"]
             t["pout"] += c["pout"]
             t["sessions"].add(s["id"])
-            t["last_ts"] = max(t["last_ts"], c.get("ts") or 0)
+            t["last_ts"] = max(t["last_ts"], _ms(c.get("ts")))
             total_calls += 1
             total_credit += c.get("credit") or 0
         for b in d["ctx"]:
@@ -1606,24 +1606,57 @@ def activity_heatmap(ss, weeks=10):
             (weeks, "".join(cells), len(agg)))
 
 
-# 子代理会话是独立的 agent-* jsonl；父会话 id 没有写进记录，只能按
-# 主会话 Agent 工具调用与子会话首条消息的时间就近推断（毫秒窗口）。
+# 子代理会话是独立的 agent-* jsonl。首选的父子关系键是子会话记录里的
+# rootRequestId —— 它等于派发该子代理的那次 Agent 调用的 conversationRequestId，
+# scan_all 已按会话收集成 agent_reqs。字段缺失（老记录、跨项目根）时再退回
+# 「子会话首条时间 ↔ 父会话 Agent 调用时间」的 5 秒就近窗口。
 SUBAGENT_WINDOW_MS = 5000
 
 
+def _ms(v):
+    """时间戳归一：jsonl 里 timestamp 可能是 int / float / 字符串 / None。
+
+    统一成 float 毫秒，解析不了或非正值一律返回 0 —— 0 表示「没有可用时间」，
+    不参与任何就近匹配（否则 first_ts=0 会被挂到同样是 0 的调用上）。
+    """
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return 0.0
+    return x if x > 0 else 0.0
+
+
 def subagent_relations(ss):
-    """返回 (主会话 id -> [子代理会话], 未匹配的子代理)。O(子代理数 × Agent 调用数)。"""
+    """返回 (父会话 id -> [子代理会话], 未匹配的子代理)。
+
+    先用 rootRequestId 精确匹配（O(子代理数)），匹配不到再做时间窗兜底
+    （O(子代理数 × 未命中父会话的 Agent 调用数)）。父会话也可以是子代理，
+    嵌套派发因此能挂到最近的一层，而不是全部拍平到主会话上。
+    """
     subs = [s for s in ss if s.get("is_sub")]
-    mains = [s for s in ss if not s.get("is_sub") and s.get("agent_calls")]
+    mains = [s for s in ss if not s.get("is_sub")]
+    by_req = {}
+    for m in ss:
+        for rid in m.get("agent_reqs") or ():
+            by_req.setdefault(rid, m)
+    timed = [m for m in mains if m.get("agent_calls")]
     rel, unmatched = OrderedDict(), []
     for sub in subs:
-        ts = sub.get("first_ts") or 0
-        best, delta = None, None
-        for m in mains:
-            for at in m["agent_calls"]:
-                d = abs(ts - at)
-                if d <= SUBAGENT_WINDOW_MS and (delta is None or d < delta):
-                    best, delta = m, d
+        best = by_req.get(sub.get("root") or "")
+        if best is not None and best["id"] == sub["id"]:
+            best = None
+        if best is None and timed:
+            ts = _ms(sub.get("first_ts"))      # 0 = 没有可用时间，不做就近匹配
+            delta = None
+            if ts:
+                for m in timed:
+                    for at in m["agent_calls"]:
+                        at = _ms(at)
+                        if not at:
+                            continue
+                        d = abs(ts - at)
+                        if d <= SUBAGENT_WINDOW_MS and (delta is None or d < delta):
+                            best, delta = m, d
         if best is None:
             unmatched.append(sub)
         else:
@@ -2032,6 +2065,14 @@ def v_index(q):
     groups = OrderedDict()
     for s in page_items:
         groups.setdefault(s["ws"], []).append(s)
+    # 分组标题按「该工作区的全部会话」统计，不能拿本页切片算：分页条写「共 60」，
+    # 标题写「本页 40 个会话 · 40.0 分」，同一屏两套口径。工作区被分页切开时
+    # 才追加「本页 N」，说明为什么这一组只显示了一部分。
+    ws_stat = {}
+    for s in shown:
+        a = ws_stat.setdefault(s["ws"], [0, 0.0])
+        a[0] += 1
+        a[1] += s["credit"]
     for name in sorted(groups, key=lambda w: -max(x["mtime"] for x in groups[w])):
         items = groups[name]
         cards = []
@@ -2060,9 +2101,11 @@ def v_index(q):
                  esc(s["id"][:8]), esc(s["model"] or "?"),
                  s["turns"], s["calls"], "%.1fM" % (s["pin"] / 1e6),
                  "%.0fk" % (s["pout"] / 1000), s["credit"], t))
-        body += ('<details class="grp" open><summary>%s<small>%d 个会话 · %.1f 分</small></summary>'
+        n_all, cr_all = ws_stat.get(name) or (len(items), sum(s["credit"] for s in items))
+        part = "" if len(items) >= n_all else " · 本页 %d" % len(items)
+        body += ('<details class="grp" open><summary>%s<small>%d 个会话 · %.1f 分%s</small></summary>'
                  '<div class="in">%s</div></details>' %
-                 (esc(name), len(items), sum(s["credit"] for s in items), "".join(cards)))
+                 (esc(name), n_all, cr_all, part, "".join(cards)))
     if total_shown > PAGE_SESSIONS:
         body += pager("/", q, pg, PAGE_SESSIONS, total_shown, "个会话")
     # 元数据降级提示放在列表之后：它不影响会话列表本身，不该抢占首屏

@@ -110,7 +110,7 @@
 - **首页工具条**：导航、排序、元信息合成一条分区横带，取代原先两行 pill 按钮；排序为分段控件，窄屏自动折行
 - **命中块折叠**：调用详情里连续命中块默认折成一枚紧凑胶囊「#a–#b 块缓存命中」，展开时才铺成全宽标题条并拉出逐块清单；「按调用浏览」每行也带同样的折叠摘要；主动选「只看命中」时全部展开
 - **轮来源标签**：`role=user` 的消息并不都是你输入的。每轮标为「用户消息 / 后台任务 / 压缩摘要 / 系统注入 / 内部消息」，非真人输入显示可读摘要而不是整段 XML；会话页可按类别筛选，单轮详情也按来源改标题
-- **子代理标注**：子代理是独立的 `agent-*` 会话文件，会话列表直接给子代理与其派生主会话打标签（「子代理 · Explore」/「N 个子代理」），不再单独占一块关系面板，避免把列表挤到首屏之外；父会话 id 未写入记录，关联按 `Agent` 调用时间就近推断并明确标注
+- **子代理标注**：子代理是独立的 `agent-*` 会话文件，会话列表直接给子代理与其派生主会话打标签（「子代理 · Explore」/「N 个子代理」），不再单独占一块关系面板，避免把列表挤到首屏之外；父子关系优先用子会话的 `rootRequestId` 精确匹配派发它的 `Agent` 调用，字段缺失时才退回 5 秒时间窗兜底
 - **首页全库画像**：按模型的输入 token 环（模型名取自 jsonl 的 `providerData`，不依赖 db）、按时间的输入 token 折线、工作区路径递归树（两级 + 占比条），只消费已缓存的会话索引
 - **统一检索入口**：单行搜索区，左侧用零脚本分段开关切换「按字符匹配 / 按块匹配」并由服务端分流，输入框吃掉剩余宽度、按钮贴右；会话页入口改为无边框渐变卡片（分类色侧条）+ 分段浏览控件，次要链接降级
 - 缓存命中率统一显示到小数点后一位
@@ -130,7 +130,7 @@
 **Linux（Debian / Ubuntu / 银河麒麟 / 统信 UOS / Deepin）**
 
 ```bash
-V=1.1.5   # 换成 Release 页上的最新版本号
+V=1.1.6   # 换成 Release 页上的最新版本号
 curl -fLO "https://github.com/The-garden-of-sinner/token-trace/releases/download/v$V/token-trace_${V}_all.deb"
 sudo dpkg -i "token-trace_${V}_all.deb"
 token-trace                     # 起服务并自动打开浏览器
@@ -285,14 +285,16 @@ python3 scripts/make_checksums.py    # -> dist/SHA256SUMS
 `build_deb.py` 直接读取 `build_deb.sh` 的 heredoc 作为唯一内容来源，再用标准库写出
 ar + `control.tar.gz` + `data.tar.gz` 容器，因此与 `dpkg-deb` 产物同构、不会两处维护漂移；
 它只用于「本机没有 `dpkg-deb`」的场景，Linux 发版仍以 `build_deb.sh` 为准。
-校验：`dpkg-deb -c dist/token-trace_<VERSION>_all.deb`。
+tar 成员与 gzip 容器头的 `mtime` 都固定为 0（`GzipFile(..., mtime=0)`），同输入两次
+构建字节一致，可用 `sha256sum` 复核。校验：`dpkg-deb -c dist/token-trace_<VERSION>_all.deb`。
 
 
 ### 版本记录
 
 | 版本 | 主要内容 |
 | --- | --- |
-| **v1.1.5** | 视觉收尾：KPI 数字带列宽改为**按内容分配**（`kpi_weights()` 估算每格文字宽度并输出 `fr` 表，两位数的「会话」不再和九位 token 等宽，12 项两行仍按列对齐）；工具条 / 检索区 / 分段控件 / 入口卡 / 会话分组 / 图表卡补齐入场错峰；构成环各段按起始角度错峰生长、概览与走势折线用 `clip-path` 从左往右揭开、渐变色带柱 `scaleY` 拉起；README 替换为最新界面截图（会话索引 + 会话概览）。自检 73 项 |
+| **v1.1.6** | 第二轮复测修复：① 首页 500 —— `subagent_relations()` 对字符串时间戳直接做减法，`first_ts` 统一用 `_ms()` 归一，0 值不再参与就近匹配；② 分页后分组标题用本页切片计数、与分页条口径冲突，改为按该工作区全量统计并在被切开时标「本页 N」；③ `rootRequestId` 采而未用，改为父子关系首选的精确键（`agent_reqs`），时间窗降级为兜底，嵌套子代理可挂到直接父级；④ `build_deb.py` 的 gzip 容器头写墙钟时间，改用 `GzipFile(mtime=0)`，构建真正可复现。自检补 11 项（子代理边界 / 脏时间戳渲染 / 分组计数 / 残差桶 / `/stats` 解析次数 / `?kind=` 非法值与转义）增至 84 项 |
+| v1.1.5 | 视觉收尾：KPI 数字带列宽改为**按内容分配**（`kpi_weights()` 估算每格文字宽度并输出 `fr` 表，两位数的「会话」不再和九位 token 等宽，12 项两行仍按列对齐）；工具条 / 检索区 / 分段控件 / 入口卡 / 会话分组 / 图表卡补齐入场错峰；构成环各段按起始角度错峰生长、概览与走势折线用 `clip-path` 从左往右揭开、渐变色带柱 `scaleY` 拉起；README 替换为最新界面截图（会话索引 + 会话概览）。自检 73 项 |
 | v1.1.4 | 社区复测反馈修复：`--cache` 默认改为按会话数自适应（cap < 会话数会让 `/stats` 每轮全部重解析，33 会话 / cap 32 实测约 5 s）；首页会话列表分页（此前 132 个会话时 94.8 KB 会顶破 80 KB 硬闸）；`page(need=...)` 显式声明样式，空库不再丢 `.hero` / `.toolbar`；页脚体积改算整页响应；源文件体积 / 长块字数改为运行时计算；修面包屑双重转义、模型环残差与 DST 分桶。自检增至 73 项 |
 | v1.1.3 | 轮来源标签（你发的 / 后台任务 / 压缩摘要 / 系统注入 / 内部消息）与 `?kind=` 筛选，非真人输入改显可读摘要；首页「会话 · 子代理关系」面板与会话列表子代理标签；新增 `scripts/build_deb.py`（无 `dpkg-deb` 时用纯标准库构建等价 deb）；Release 补齐 bat / deb / SHA256SUMS 附件。自检 64 项 |
 | v1.1.2 | 前端可视化升级：设计令牌 + 深浅色、SVG 构成环 / 日历热力图 / 块地图、渐变色带趋势柱、按需 CSS 注入；跨文档过渡动效与「返回上一层」；连续命中块折叠、命中率一位小数、首页全库画像、检索与菜单重构；模型名改从 jsonl 的 `providerData` 按输入 token 聚合（不再依赖 `workbuddy.db`），链接配色与首页 / 菜单 / 折叠视觉统一，工具条重排与过渡节奏放缓；修复单轮详情无分页撑破 80 KB 硬闸。自检 64 项 |
@@ -589,7 +591,7 @@ token（`providerData.requestModelName`）。db 不可读时只影响标题 / �
 | 命中块折叠 | `cache_hit_span()` 用前缀和 + `bisect` 求命中前缀 `[lo, hi]`，`hit_fold_html()` 输出原生 `<details>`；折叠态为紧凑胶囊、展开态铺全宽，箭头旋转 + 高度渐变 | O(log B) / 次，不逐块遍历 |
 | 轮来源标签 | `gen_trace.user_kind()` 按 `isCompacted` / `isSummary` / `<cb_summary`、`<task-notification` / `<task-id>`、`isMeta`、`startsNewUserRequest` / `<user_query` 依次判定；`user_disp()` 给非真人输入一句可读摘要，`q` 原文保留供全文检索；`turn_chip()` 输出标签，`v_session` 按 `?kind=` 筛选 | 复用解析时已在手的字段，零额外遍历、零新增索引 |
 | 静态模式同步 | `gen_trace.render()` 的每轮概要同样显示类别标签与可读摘要 | 离线兜底口径一致 |
-| 子代理标注 | `scan_all()` 在同一次逐行遍历里记 `isSubAgent` / `agent` / `rootRequestId` / 首条时间戳 / 主会话的 `Agent` 调用时间；`subagent_relations()` 做 5 秒窗口就近匹配，会话列表按结果打「子代理」/「N 个子代理」标签 | 零额外全库遍历；无子代理时无标签，页面不多一块高度 |
+| 子代理标注 | `scan_all()` 在同一次逐行遍历里记 `isSubAgent` / `agent` / `rootRequestId` / 首条时间戳 / `Agent` 调用的时间与 `conversationRequestId`（`agent_reqs`）；`subagent_relations()` 先用 `rootRequestId` 精确匹配，匹配不到再退回 5 秒时间窗，会话列表按结果打「子代理」/「N 个子代理」标签 | 零额外全库遍历；精确匹配 O(子代理数)，只有未命中的才走时间窗；无子代理时无标签，页面不多一块高度 |
 | 首页全库画像 | `index_overview()` 只聚合 `STORE.sessions()` 的 `models / model / mtime / ws / pin`，输出模型环、时间折线、工作区两级树；`models` 由 `scan_all()` 在原有逐行遍历里按输入 token 加权得出 | 零额外全库遍历、零新增索引、不依赖 `workbuddy.db` |
 | 统一检索 | `search_box()` 用 `radio + label` 分段开关（无 `id`、无脚本、同页可复用），固定 form action，`v_search()` 按 `mode` 分流到 `v_find()` | 零 JS、零新增路由；分页仍直连 `/find` |
 | 按需 CSS（续） | `CSS_FOLD` / `CSS_NAV` / `CSS_INDEX` 分别按 `hitfold` / `navgrid` / `ovgrid` 注入 | 只有用到的页面才带对应图表样式 |
@@ -642,7 +644,7 @@ token（`providerData.requestModelName`）。db 不可读时只影响标题 / �
 都从它生成。新增端点只需加一行，不会再出现「页面能开但文档没写」或反过来。
 
 ```bash
-python3 -B scripts/selftest.py                    # 73 项检查
+python3 -B scripts/selftest.py                    # 84 项检查
 TRACE_TEST_PORT=8901 python3 -B scripts/selftest.py
 ```
 
@@ -795,9 +797,11 @@ RSS 仍是 84.0 MB —— Python 不把 arena 归还 OS。它限制的是缓存�
 
 **子代理是独立会话**：`Explore` 等子代理运行在 `agent-*` 前缀的独立 jsonl 里，行内有
 `providerData.isSubAgent` 与 `agent` 标记，token / 积分单独计费，不会并进主会话的统计。
-`scan_all()` 给每个会话记 `is_sub` / `agent` / `root` / `first_ts`，主会话另记 `Agent`
-工具调用的时间戳。**记录里没有父会话 id**，首页的「主会话 → 子代理」是按时间戳就近
-匹配（5 秒窗口）得到的推断；共享 `rootRequestId` 的子代理视为同一次并行派生。
+`scan_all()` 给每个会话记 `is_sub` / `agent` / `root` / `first_ts` / `agent_reqs`，
+主会话另记 `Agent` 工具调用的时间戳。**记录里没有父会话 id**，但子会话的
+`rootRequestId` 等于派发它的那次 `Agent` 调用的 `conversationRequestId`，所以首页的
+「主会话 → 子代理」优先用这个键精确匹配；字段缺失（老记录、跨项目根）时才退回
+时间戳就近匹配（5 秒窗口）。子会话也可作为父级，嵌套派生挂到最近的一层。
 本机实测：1 个主会话的 2 次 `Agent` 调用对应 2 个 `Explore` 子会话（相差 16–33 ms），
 两者共享同一个 `rootRequestId`。
 
@@ -932,10 +936,12 @@ RSS 仍是 84.0 MB —— Python 不把 arena 归还 OS。它限制的是缓存�
     若客户端改了这些字段名或通知格式，未被识别的消息会落到「内部消息」或「用户消息」，
     不会丢轮、也不会影响调用与 token 统计；此时需同步 `gen_trace.user_kind()`。
     分类是**基于写入侧标记的推断**，不是客户端提供的官方「消息来源」枚举。
-20. **子代理与父会话的关联是推断**：jsonl 没有写父会话 id，会话列表里的子代理标签用主会话
-    `Agent` 调用与子会话首条消息的时间就近匹配（5 秒窗口）。同一时刻并行派生多个
-    子代理、或日志时间戳缺失时可能匹配不准；匹配不上的子代理会单独列出并标注
-    「未匹配到主会话」。子代理会话本身、token 与调用统计是**事实**，只有归属是推断。
+20. **子代理与父会话的关联优先精确、其次推断**：jsonl 没有写父会话 id，但子会话的
+    `rootRequestId` 与派发它的 `Agent` 调用的 `conversationRequestId` 是同一个值，
+    会话列表的子代理标签优先按这个键匹配；键缺失时退回「`Agent` 调用时间 ↔ 子会话
+    首条时间」的 5 秒窗口，此时同一时刻并行派生多个子代理、或日志时间戳缺失仍可能
+    匹配不准。匹配不上的子代理会单独列出并标注「未匹配到主会话」。子代理会话本身、
+    token 与调用统计是**事实**，只有归属在兜底路径下才是推断。
     另外子代理的 token / 积分在独立会话里统计，不会自动汇总到主会话。
 21. **缓存容量自适应有上限**：默认 `cap = max(32, 会话数 + 8)`，最多 256 个会话。
     超过 256 个会话时超出部分仍走 LRU，`/stats` 每次请求会重新解析它们（单次约

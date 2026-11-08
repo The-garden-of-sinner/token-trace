@@ -9,6 +9,7 @@
 
 校验：`ar t <deb>` 或 `dpkg-deb -c <deb>`；安装：`sudo dpkg -i <deb>`。
 """
+import gzip
 import io
 import os
 import re
@@ -36,9 +37,14 @@ def heredoc(tag):
 
 
 def tar_gz(files):
-    """files: [(arcname, bytes, mode)]；uid/gid=0、mtime=0 便于复现构建。"""
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz", format=tarfile.GNU_FORMAT) as tf:
+    """files: [(arcname, bytes, mode)]；uid/gid=0、mtime=0，gzip 头也不写墙钟时间。
+
+    注意 `tarfile.open(mode="w:gz")` 只把 tar 成员时间归零，gzip 容器头里的
+    MTIME 仍是当前时间 —— 同输入相隔一秒构建出来的字节就不同。这里先写裸 tar，
+    再用 GzipFile(mtime=0) 压一层，注释里的「可复现构建」才成立。
+    """
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w", format=tarfile.GNU_FORMAT) as tf:
         for name, data, mode in files:
             ti = tarfile.TarInfo("./" + name)
             ti.size = len(data)
@@ -47,6 +53,9 @@ def tar_gz(files):
             ti.uname = ti.gname = "root"
             ti.mtime = 0
             tf.addfile(ti, io.BytesIO(data))
+    buf = io.BytesIO()
+    with gzip.GzipFile(filename="", mode="wb", fileobj=buf, mtime=0) as gz:
+        gz.write(raw.getvalue())
     return buf.getvalue()
 
 

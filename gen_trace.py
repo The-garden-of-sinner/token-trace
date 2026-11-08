@@ -22,6 +22,21 @@ MAX_CALLS = 150      # 单页最多渲染多少次调用，超出只留最近这
 CHIP = {"hit": "命中", "miss": "未命中", "part": "跨边界", "none": "上下文"}
 
 
+def _ms(v):
+    """timestamp 归一成毫秒数值：int / float / 字符串 / None 都接受，非正值记 0。
+
+    jsonl 是外部数据，timestamp 偶尔会被写成字符串；下游要做减法（子代理关系）、
+    取最大值（工具聚合的最后使用时间），类型不统一就会在渲染时炸成 500。
+    """
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return 0
+    if not (x > 0):
+        return 0
+    return int(x) if x == int(x) else x
+
+
 def trim(ctx, calls, turns, limit=MAX_CALLS):
     """超大会话只保留最近 limit 次调用，ctx 同步裁掉用不到的前缀"""
     if not limit or len(calls) <= limit:
@@ -256,7 +271,7 @@ def build(path, full=False):
             prov, ru, u = usage_of(d)
             rec = {
                 "seq": len(calls) + 1,
-                "ts": d.get("timestamp") or 0,
+                "ts": _ms(d.get("timestamp")),
                 "model": model_of(prov),
                 "tool": d.get("name") or "",
                 "pin": val((ru, "prompt_tokens"), (u, "input_tokens")),
@@ -299,7 +314,7 @@ def build(path, full=False):
                     "chars": len(plain) + sum(len(x) for x in inj),
                     "kind": prov.get("compactType") or "?",
                     "is_summary": bool(prov.get("isSummary")),
-                    "ts": d.get("timestamp") or 0,
+                    "ts": _ms(d.get("timestamp")),
                     "before_seq": len(calls),   # 压缩前最后一次调用序号
                 })
             kind = user_kind(raw, prov, plain, inj)
@@ -317,7 +332,7 @@ def build(path, full=False):
             txt = text_of(d)
             calls.append({
                 "seq": len(calls) + 1,
-                "ts": d.get("timestamp") or 0,
+                "ts": _ms(d.get("timestamp")),
                 "model": model_of(prov),
                 "tool": "最终回答",
                 "pin": val((ru, "prompt_tokens"), (u, "input_tokens")),
@@ -719,16 +734,19 @@ def scan_all():
         agent_votes = {}
         # 子代理是独立的 agent-* 会话文件，行内另有 providerData.isSubAgent 标记。
         # first_ts / rootRequestId / 主会话的 Agent 调用时间用于首页做关系推断。
+        # 时间戳一律归一成毫秒数值：外部 jsonl 里 timestamp 可能是字符串或 None，
+        # 原样留着会在下游做减法时 TypeError（首页 500）。
         is_sub = sid.startswith("agent-")
         root = ""
         first_ts = 0
         agent_calls = []
+        agent_reqs = []
         skipped = {"skipped": 0}
         for d in iter_rows(f, skipped):
             pd = d.get("providerData") or {}
             t = d.get("type")
             if not first_ts:
-                first_ts = d.get("timestamp") or 0
+                first_ts = _ms(d.get("timestamp"))
             a = pd.get("agent")
             if a:
                 agent_votes[a] = agent_votes.get(a, 0) + 1
@@ -737,7 +755,10 @@ def scan_all():
             if not root and pd.get("rootRequestId"):
                 root = str(pd["rootRequestId"])
             if t == "function_call" and d.get("name") == "Agent":
-                agent_calls.append(d.get("timestamp") or 0)
+                # 时间戳给时间窗兜底用；请求 id 是子会话 rootRequestId 的精确对照键。
+                agent_calls.append(_ms(d.get("timestamp")))
+                if pd.get("conversationRequestId"):
+                    agent_reqs.append(str(pd["conversationRequestId"]))
             if t == "message" and d.get("role") == "user":
                 turns += 1
             elif t == "function_call":
@@ -770,6 +791,7 @@ def scan_all():
             "root": root,
             "first_ts": first_ts,
             "agent_calls": agent_calls,
+            "agent_reqs": agent_reqs,
             "mtime": os.path.getmtime(f),
             "turns": turns, "calls": calls, "credit": credit, "pin": pin, "pout": pout,
             "skipped": skipped["skipped"],

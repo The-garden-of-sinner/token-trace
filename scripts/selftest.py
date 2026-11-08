@@ -244,7 +244,7 @@ def main():
             check(".hero{" in h and ".toolbar{display" in h and ".kpi{" in h,
                   "空库首页仍注入 CSS_INDEX（hero / toolbar / kpi 不裸样式）")
 
-            # 缓存自适应：cap 覆盖全部会话，全库统计第二次访问不应再解析
+            # 缓存自适应：cap 必须覆盖全部会话（否则全库统计每轮都被 LRU 冲掉）
             st = T.Store(0)
             st._index = [{"id": "s%d" % i, "path": "p", "ws": "w", "mtime": 0}
                          for i in range(33)]
@@ -253,8 +253,113 @@ def main():
             check(st.cap >= 33, "自适应缓存覆盖全部会话（cap=%d / 33）" % st.cap)
             check(T.CACHE_SESSIONS == 0,
                   "默认 --cache 为自适应（0），不是写死的固定值")
+
+            # 分组标题必须用全量统计：60 个会话同一工作区分两页，
+            # 两页的标题都应写 60 个会话 / 90.0 分，只有「本页 N」不同。
+            same = []
+            for i in range(60):
+                s = _sess(i)
+                s["ws"] = "D:/ws/same/p1"
+                s["credit"] = 1.5
+                same.append(s)
+            T.STORE = _FakeStore(same)
+            p0 = T.v_index({"p": ["0"]})
+            p1 = T.v_index({"p": ["1"]})
+            check("60 个会话 · 90.0 分" in p0 and "本页 40" in p0,
+                  "分页第 1 页：分组标题用全量（60 个会话 · 90.0 分 · 本页 40）")
+            check("60 个会话 · 90.0 分" in p1 and "本页 20" in p1,
+                  "分页第 2 页：标题口径一致（60 个会话 · 90.0 分 · 本页 20）")
         finally:
             T.STORE = orig_store
+
+        print("== 全库画像：模型残差桶 ==")
+        fake_one = [{"id": "a", "ws": "D:/x/y", "title": "t", "model": "m1",
+                     "models": {"m1": 60}, "mtime": time.time(), "calls": 1, "turns": 1,
+                     "pin": 100, "pout": 10, "credit": 0.1}]
+        ov = T.index_overview(fake_one)
+        pcts = [float(x) for x in re.findall(r"<em>([\d.]+)%</em>", ov)]
+        check("未知模型" in ov and abs(sum(pcts) - 100) < 0.15,
+              "models 之和小于 pin 时补「未知模型」残差，图例合计 %.1f%%" % sum(pcts))
+
+        print("== 子代理关系推断 ==")
+
+        def _sm(sid, **kw):
+            """造一个最小会话条目；agent-* 视为子代理。"""
+            d = {"id": sid, "is_sub": sid.startswith("agent-"), "root": "",
+                 "first_ts": 0, "agent_calls": [], "agent_reqs": []}
+            d.update(kw)
+            return d
+
+        m1 = _sm("main-1", agent_reqs=["req-a"], agent_calls=[1780000000000],
+                 first_ts=1779999999000)
+        m2 = _sm("main-2", agent_reqs=["req-b"], agent_calls=[1780000600000])
+        s1 = _sm("agent-1", root="req-a", first_ts="1794062198000")  # 字符串时间 + 远：靠 root
+        s2 = _sm("agent-2", first_ts="1780000000500")                 # 无 root：时间窗兜底
+        s3 = _sm("agent-3", root="missing", first_ts="0")             # 0 不参与匹配
+        s4 = _sm("agent-4", root="req-b", first_ts=None)
+        rel, un = T.subagent_relations([m1, m2, s1, s2, s3, s4])
+        check([x["id"] for x in rel.get("main-1", [])] == ["agent-1", "agent-2"],
+              "rootRequestId 精确命中优先，字符串时间戳不再抛 TypeError（原首页 500）")
+        check([x["id"] for x in rel.get("main-2", [])] == ["agent-4"],
+              "第二个父会话按 root 命中")
+        check([x["id"] for x in un] == ["agent-3"],
+              "时间戳为 0 的子代理既不误挂载、也不混进已匹配")
+        s5 = _sm("agent-5", agent_reqs=["req-c"], agent_calls=[1780000001000])
+        s6 = _sm("agent-6", root="req-c")
+        rel2, _ = T.subagent_relations([s5, s6])
+        check(bool(rel2.get("agent-5")) and rel2["agent-5"][0]["id"] == "agent-6",
+              "嵌套子代理挂到直接父级（子会话也可作为父）")
+
+        print("== 首页：脏时间戳不再 500 ==")
+        dirty = [dict(x) for x in T.STORE.sessions()[:3]]
+        dirty[0] = dict(dirty[0], agent_calls=["1780000000000"], agent_reqs=[],
+                        first_ts="1780000000000")
+        dirty.append(dict(dirty[0], id="agent-dirty", is_sub=True, root="",
+                          first_ts="1794062198000"))
+        class _DirtyStore(_FakeStore):
+            def get(self, sid):
+                raise KeyError(sid)
+        T.STORE = _DirtyStore(dirty)
+        try:
+            h = T.v_index({})
+            check('class="hero"' in h and 'class="kpi"' in h,
+                  "首页遇字符串时间戳正常渲染（修复前 subagent_relations 抛 TypeError → 500）")
+        finally:
+            T.STORE = orig_store
+
+        print("== /stats 不重复解析 ==")
+        T.v_stats({})                       # 预热全部会话
+        orig_build = T.G.build
+        n_build = {"n": 0}
+
+        def _count_build(*a, **k):
+            n_build["n"] += 1
+            return orig_build(*a, **k)
+
+        T.G.build = _count_build
+        try:
+            # 清空会话缓存：第一次渲染必须把全部会话各解析一遍（且只一遍），
+            # 第二次应当全部命中缓存 —— 只断言 cap 大小不足以证明这一点。
+            with T.STORE.lock:
+                T.STORE._cache.clear()
+            T.v_stats({})
+            first = n_build["n"]
+            T.v_stats({})
+            again = n_build["n"] - first
+            check(first == len(sessions) and again == 0,
+                  "/stats 首次解析 %d/%d 个会话、连刷第二次 %d 次（不重复解析）"
+                  % (first, len(sessions), again))
+        finally:
+            T.G.build = orig_build
+
+        print("== 轮来源筛选：非法值 / 分页 / 转义 ==")
+        st, body = get("/s/%s?kind=%%3Cscript%%3Ealert(1)%%3C%%2Fscript%%3E" % sid)
+        check(st == 200 and b"<script" not in body and b"alert(1)" not in body,
+              "?kind= 注入串按非法值丢弃，不回显、不破坏页面（%d）" % st)
+        st, body = get("/s/%s?kind=user&p=999" % sid)
+        check(st == 200 and body.count(b'class="row') > 0,
+              "?kind=user 越界分页仍有数据行（%d / %d 行）"
+              % (st, body.count(b'class="row')))
 
         print("== 命中块折叠不丢块行 ==")
         cd0 = T.STORE.get(sid)
