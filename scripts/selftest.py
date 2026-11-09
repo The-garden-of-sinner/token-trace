@@ -197,7 +197,7 @@ def main():
                     ru, u = prov.get("rawUsage") or {}, prov.get("usage") or {}
                     raw_pin += ru.get("prompt_tokens") or u.get("inputTokens") or 0
             check(raw_pin == cd["stats"]["pin"],
-                  "真实累计输入 tok 等于 rawUsage 原值累加（未被统计修正影响）")
+                  "真实累计输入 token 等于 rawUsage 原值累加（未被统计修正影响）")
         if plain:
             pd = T.STORE.get(plain[0]["id"])
             check(all(c.get("vf", 0) == 0 for c in pd["calls"]),
@@ -306,7 +306,7 @@ def main():
                                         "deepseek-v4.1-flash": 50,
                                         "Hy4": 200, "Hy4 preview": 50})
         check(len(merged) == 3 and merged.get("DeepSeek-V4.1-Flash") == 750,
-              "merge 合并为 750 tok 并保留得票最多的展示名（%d 组）" % len(merged))
+              "merge 合并为 750 token 并保留得票最多的展示名（%d 组）" % len(merged))
         fake_vars = [{"id": "b", "ws": "D:/x/y", "title": "t",
                       "model": "DeepSeek-V4.1-Flash",
                       "models": {"DeepSeek-V4.1-Flash": 500,
@@ -346,6 +346,71 @@ def main():
                   % (len(prim), len(keys)))
         except Exception as e:
             check(False, "scan_all 索引层全库同名（异常 %s）" % type(e).__name__)
+
+        print("== 按调用真实日期分桶（days）==")
+        try:
+            idx = G.scan_all()
+            bad = [s["id"] for s in idx
+                   if "days" in s and (
+                       sum(b[0] for b in s["days"].values()) != s["pin"]
+                       or sum(b[1] for b in s["days"].values()) != s["calls"])]
+            check(all("days" in s for s in idx) and not bad,
+                  "scan_all 每个会话 days 的 token/调用数与 pin/calls 自洽（%d 会话，%d 异常）"
+                  % (len(idx), len(bad)))
+            spanning = [s for s in idx if len(s.get("days") or {}) > 1]
+            check(bool(spanning),
+                  "真实库存在跨天会话，days 确实把调用分散到多天（%d 个）" % len(spanning))
+        except Exception as e:
+            check(False, "days 口径自洽（异常 %s）" % type(e).__name__)
+
+        # 构造：mtime 是今天，但调用全部发生在 9 天前 / 3 天前。
+        # 旧口径会把整个会话压到今天；新口径应按 days 分散到真实那两天。
+        today = T.datetime.date.today()
+        d9 = (today - T.datetime.timedelta(days=9)).strftime("%Y-%m-%d")
+        d3 = (today - T.datetime.timedelta(days=3)).strftime("%Y-%m-%d")
+        d0 = today.strftime("%Y-%m-%d")
+        fake_days = dict(_sess(0))
+        fake_days.update({"mtime": time.time(), "calls": 105, "pin": 105000,
+                          "days": {d9: [100000, 100], d3: [5000, 5]}})
+        hm = T.activity_heatmap([fake_days])
+        check(("%s · 100 次调用" % d9) in hm and ("%s · 5 次调用" % d3) in hm,
+              "活动日历按 days 分色：9 天前 100 次 / 3 天前 5 次各归其日")
+        check(d0 not in hm,
+              "活动日历不再把整段会话压到 mtime（今天）那一天")
+        # 窗口外的历史活动日进 agg 但不进热力图：「N 天有活动」只数有色格子
+        old = (today - T.datetime.timedelta(days=400)).strftime("%Y-%m-%d")
+        fake_days2 = dict(fake_days)
+        fake_days2["days"] = {d9: [100000, 100], d3: [5000, 5], old: [9, 1]}
+        hm3 = T.activity_heatmap([fake_days2])
+        n_tip = len(re.findall(r'data-tip="[\d-]+ · [\d,]+ 次调用"', hm3))
+        n_label = int(re.search(r'(\d+) 天有活动', hm3).group(1))
+        check(n_tip == 2 and n_label == 2,
+              "窗口外活动日不计入「N 天有活动」（格子 %d / 标注 %d）" % (n_tip, n_label))
+        # 无 days 的旧索引 / 外部数据必须回退 mtime，不抛异常
+        try:
+            hm2 = T.activity_heatmap([_sess(0)])
+            ov2 = T.index_overview([_sess(0)])
+            check("会话活动日历" in hm2 and "全库画像" in ov2,
+                  "无 days 字段时回退 mtime 兜底，首页与日历正常渲染")
+        except Exception as e:
+            check(False, "无 days 回退不抛异常（异常 %s）" % type(e).__name__)
+
+        print("== 文案口径：token / 输入 / 输出 / 两栏布局 ==")
+        src = open(os.path.join(ROOT, "trace_server.py"), encoding="utf-8").read()
+        check('class="num">in %s' not in src and 'class="num">out %s' not in src,
+              "列表行不再用 in/out 简写，统一为「输入」「输出」")
+        check('"累计输入 tok"' not in src and '"输出 tok"' not in src
+              and "<span>tok</span>" not in src,
+              "KPI 与环心不再用 tok 简写，统一为 token")
+        ss = T.STORE.sessions()
+        st_html = T.v_stats({})
+        check('class="viz2"' in st_html and st_html.count('class="viz"') >= 2,
+              "全局统计两张卡片并排为左右两栏（viz2 容器）")
+        check("@media(max-width:900px){.viz2{grid-template-columns:1fr}}" in st_html,
+              "窄屏单列回退随 CSS_VIZ 注入 /stats（不只在首页的 CSS_INDEX 里）")
+        check("按模型 ID 分组" in T.index_overview(ss)
+              and "按每次调用实际发生日" in T.index_overview(ss),
+              "首页三栏备注已精简、时间备注改为真实日期口径")
 
         print("== 子代理关系推断 ==")
 

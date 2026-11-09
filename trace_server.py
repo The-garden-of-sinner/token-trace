@@ -1047,6 +1047,12 @@ details.grp:nth-of-type(n+4){animation-delay:.14s}
 # 不会为环形图、热力图或块地图的样式买单。判定只是一次子串扫描，微秒级。
 CSS_VIZ = """
 .viz{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:12px 14px;margin:0 0 16px;box-shadow:var(--shadow)}
+/* 全局统计页：两张各占整行、内容都挤在左边的卡片并排成左右两栏。
+   align-items:start 让各自按内容定高，不被另一张拉出大片空白。 */
+.viz2{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start;margin:0 0 16px}
+.viz2>.viz{margin-bottom:0;min-width:0}
+/* 回退必须和定义同在 CSS_VIZ 里：CSS_INDEX 只在首页注入，/stats 页窄屏会漏。 */
+@media(max-width:900px){.viz2{grid-template-columns:1fr}}
 .viz-hd{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin:0 0 10px}
 .viz-hd b{font-size:12.5px;font-weight:600}.viz-hd small{font-size:10.5px;color:var(--faint)}
 .viz-hd .fine{margin-left:auto}
@@ -1498,7 +1504,7 @@ def _text_px(s, fs):
 def kpi_weights(items, cols, fs=18, pad=32):
     """按内容宽度给每列一个 fr 权重，替代「每格一样宽」。
 
-    「会话 11」只要 60 px，而「177,353,380 tok」要 160 px；等分的结果就是
+    「会话 11」只要 60 px，而「177,353,380 token」要 160 px；等分的结果就是
     左边一片空白、右边数字贴着边框。这里以每列最宽的那格为基准，加一个
     固定底盘（保证短格不贴边），再压到 2.6 倍以内（避免一个长数字吃掉半行）。
     同一列的多行取最大值，所以 12 项 6 列的两行也仍然对齐。
@@ -1590,7 +1596,7 @@ def compose_bar(comp):
            'aria-label="上下文文本构成环形图"><circle class="trk" cx="21" cy="21" r="15.9155"/>' +
            "".join(arcs) + '</svg>')
     return ('<div class="viz"><div class="viz-hd"><b>进入上下文的文本构成</b>'
-            '<small>按字符数 · 归档全文口径 · ≈ 为原文统计，非官方 tokenizer</small></div>'
+            '<small>按字符数 · 非官方 tokenizer</small></div>'
             '<div class="donut-row"><div class="donut-wrap">%s'
             '<div class="ctr"><b>%s</b><span>字 · 5 类</span></div></div>'
             '<div class="slice">%s</div></div></div>' %
@@ -1642,34 +1648,51 @@ def sparkline_svg(series):
 
 
 def activity_heatmap(ss, weeks=10):
-    """活动日历：只消费已缓存的会话索引（mtime / calls），零额外全库遍历。
-    列 = 周，行 = 周日..周六；5 级色阶，无数据的格子只输出一个空 <i>。"""
+    """活动日历：按每次调用的真实发生日分色，只消费已缓存的会话索引。
+
+    scan_all 已把每个会话的调用按日拆进 days（YYYY-MM-DD -> [输入 token, 调用数]），
+    这里逐日聚合，不再把整个会话压到 mtime（文件最后修改日）那一天——长会话
+    常跨多天，按 mtime 会让前几天全空、最后一天虚高。老索引 / 外部构造的
+    sessions 没有 days 时退回 mtime + calls 兜底。
+    列 = 周，行 = 周一..周日；5 级色阶，无数据的格子只输出一个空 <i>。
+    """
     agg = Counter()
     for s in ss:
-        day = fmt_ts(s["mtime"], "%Y-%m-%d", "")
-        if day:
-            agg[day] += s["calls"]
+        bins = s.get("days")
+        if bins:
+            for day, pair in bins.items():
+                agg[day] += pair[1]
+        else:
+            day = fmt_ts(s["mtime"], "%Y-%m-%d", "")
+            if day:
+                agg[day] += s["calls"]
     # 用 date 运算而不是 +i*86400：有夏令时的地区跨切换日不会错位一格。
     today = datetime.date.today()
     end = today + datetime.timedelta(days=6 - today.weekday())
     start = end - datetime.timedelta(days=weeks * 7 - 1)
-    mx = max(agg.values(), default=0) or 1
+    # 色阶只按窗口内的日期取峰值，否则窗口外某天的历史高值会把整张图压淡。
+    window = [(start + datetime.timedelta(days=i)).strftime("%Y-%m-%d")
+              for i in range(weeks * 7)]
+    mx = max([agg.get(d, 0) for d in window], default=0) or 1
     cells = []
-    for i in range(weeks * 7):
-        day = (start + datetime.timedelta(days=i)).strftime("%Y-%m-%d")
+    active = 0
+    for day in window:
         v = agg.get(day, 0)
         if not v:
             cells.append("<i></i>")
             continue
+        active += 1
         lv = 1 if v / mx <= .25 else (2 if v / mx <= .5 else (3 if v / mx <= .75 else 4))
         cells.append('<i class="h%d" data-tip="%s · %s 次调用"></i>' %
                      (lv, esc(day), nfmt(v)))
+    # 「N 天有活动」只数窗口里有色的格子：按真实日期分桶后，窗口外的历史
+    # 日期会进 agg，用 len(agg) 会标出比画面更多的天数。
     return ('<div class="viz"><div class="viz-hd"><b>会话活动日历</b>'
-            '<small>最近 %d 周 · 按会话索引的调用数分色 · 悬停看当日</small></div>'
+            '<small>最近 %d 周 · 按当日实际调用数分色</small></div>'
             '<div class="hm">%s</div><div class="hm-lg">少 <i></i><i class="l1"></i>'
             '<i class="l2"></i><i class="l3"></i><i class="l4"></i> 多'
             '<span style="margin-left:auto">%d 天有活动</span></div></div>' %
-            (weeks, "".join(cells), len(agg)))
+            (weeks, "".join(cells), active))
 
 
 # 子代理会话是独立的 agent-* jsonl。首选的父子关系键是子会话记录里的
@@ -1735,7 +1758,9 @@ def index_overview(ss):
     """首页全库画像：按模型的输入 token 环 + 按时间的折线 + 工作区递归树。
 
     三种图都只消费 STORE.sessions() 已缓存的会话索引字段（models / model /
-    mtime / ws / pin），不解析任何会话全文、不新增索引、不新增一次全库遍历。
+    days / mtime / ws / pin），不解析任何会话全文、不新增一次全库遍历。
+    「按时间」折线按 days（每次调用真实发生日）落桶，而非会话 mtime，
+    跨天会话的 token 会分散到各自那天；无 days 的老索引回退 mtime 兜底。
     模型分组键来自 jsonl 的 providerData.model，不依赖 workbuddy.db；
     展示名允许大小写变体，这里再兜一层归一合并（兼容旧索引缓存）。
     """
@@ -1787,23 +1812,31 @@ def index_overview(ss):
              '<circle class="trk" cx="21" cy="21" r="15.9155"/>' +
              "".join(arcs) + '</svg>')
 
-    # 2) 按时间：最近 14 天，会话按 mtime 落桶（date 运算，DST 安全）
+    # 2) 按时间：最近 14 天，按每次调用的真实发生日落桶（date 运算，DST 安全）。
+    #    老索引 / 外部构造的 sessions 没有 days 时退回 mtime + pin 兜底。
     days = 14
     day_list = [datetime.date.today() - datetime.timedelta(days=days - 1 - i)
                 for i in range(days)]
     day_idx = dict((d.strftime("%Y-%m-%d"), i) for i, d in enumerate(day_list))
     buckets = [0.0] * days
     for s in ss:
-        k = day_idx.get(fmt_ts(s["mtime"], "%Y-%m-%d", ""))
-        if k is not None:
-            buckets[k] += s["pin"]
+        bins = s.get("days")
+        if bins:
+            for day, pair in bins.items():
+                k = day_idx.get(day)
+                if k is not None:
+                    buckets[k] += pair[0]
+        else:
+            k = day_idx.get(fmt_ts(s["mtime"], "%Y-%m-%d", ""))
+            if k is not None:
+                buckets[k] += s["pin"]
     mx = max(buckets) or 1
     pts = " ".join("%.2f,%.2f" % (i * 100.0 / (days - 1), 38 - v / mx * 34)
                    for i, v in enumerate(buckets))
     line = ('<svg class="spark" viewBox="0 0 100 40" preserveAspectRatio="none" '
             'role="img" aria-label="按天输入 token 走势">'
             '<polygon points="0,40 %s 100,40"/><polyline points="%s"/></svg>' % (pts, pts))
-    axis = ('<div class="ovaxis"><span>%s</span><span>峰值 %s tok/天</span><span>今天</span></div>' %
+    axis = ('<div class="ovaxis"><span>%s</span><span>峰值 %s token/天</span><span>今天</span></div>' %
             (day_list[0].strftime("%m-%d"), kh(mx)))
 
     # 3) 工作区：按路径最后两段聚成「父目录 → 工作区」两层树
@@ -1854,21 +1887,21 @@ def index_overview(ss):
         ctr_fs = max(9.0, min(13.0, 13.0 * 6.0 / max(1, len(ctr_txt))))
         model_cell = ('<div class="donut-row"><div class="donut-wrap">%s'
                       '<div class="ctr"><b style="font-size:%.1fpx">%s</b>'
-                      '<span>tok</span></div></div>'
+                      '<span>token</span></div></div>'
                       '<div class="slice">%s</div></div>' %
                       (donut, ctr_fs, ctr_txt, "".join(legend)))
     else:
         model_cell = '<div class="empty">会话记录未写模型名，此图暂不可用</div>'
 
     return ('<div class="viz"><div class="viz-hd"><b>全库画像</b>'
-            '<small>只读取已缓存的会话索引 · 输入 token 口径 · 无额外全库遍历</small></div>'
+            '<small>输入 token 口径 · 只读索引</small></div>'
             '<div class="ovgrid">'
             '<div class="ovcell"><div class="ovt">按模型 · 输入 token</div>%s'
-            '<div class="fine ovnote">按 <code>providerData.model</code> 分组（忽略展示名大小写），输入 token 加权</div></div>'
+            '<div class="fine ovnote">按模型 ID 分组</div></div>'
             '<div class="ovcell"><div class="ovt">按时间 · 输入 token</div>%s%s'
-            '<div class="fine ovnote">按会话最后修改日落桶；同一天多个会话合并</div></div>'
+            '<div class="fine ovnote">按每次调用实际发生日</div></div>'
             '<div class="ovcell"><div class="ovt">工作区 · 递归关系</div>%s'
-            '<div class="fine ovnote">父目录 → 工作区；右侧数字为会话数</div></div>'
+            '<div class="fine ovnote">右侧数字为会话数</div></div>'
             '</div></div>' %
             (model_cell, line, axis, ws_cell))
 
@@ -2040,8 +2073,8 @@ def call_row(d, c, sid, show_turn=True):
     return ('<a class="row %s" href="/s/%s/c/%d" style="grid-template-columns:40px 90px 1fr 78px 78px 78px 66px 60px 92px">'
             '<span class="idx">#%d</span>%s'
             '<span class="grow"><b style="font-weight:500">%s</b>%s</span>'
-            '<span class="num">in %s</span><span class="num">未命中 %s</span>'
-            '<span class="num">out %s</span><span class="num">%s</span>'
+            '<span class="num">输入 %s</span><span class="num">未命中 %s</span>'
+            '<span class="num">输出 %s</span><span class="num">%s</span>'
             '<span class="num credit">%.2f 分</span><span class="num">%s</span></a>' %
             (cls, esc(sid), c["seq"], c["seq"], rate_bar(c),
              esc(c["tool"] or "—"),
@@ -2056,8 +2089,8 @@ def turn_row(d, t, sid):
     return ('<a class="row" href="/s/%s/t/%d" style="grid-template-columns:52px 1fr 68px 92px 72px 90px 74px 62px">'
             '<span class="idx">轮 %d</span>'
             '<span class="grow">%s<b style="font-weight:500">%s</b>%s</span>'
-            '<span class="num">%d 次</span><span class="num">in %s</span>'
-            '<span class="num">命中 %s</span><span class="num">out %s</span>'
+            '<span class="num">%d 次</span><span class="num">输入 %s</span>'
+            '<span class="num">命中 %s</span><span class="num">输出 %s</span>'
             '<span class="num credit">%.2f 分</span>'
             '<span class="num" style="color:var(--link-h)">展开 →</span></a>' %
             (esc(sid), b["i"], b["i"], turn_chip(b["kind"]),
@@ -2103,8 +2136,8 @@ def v_index(q):
     body = ('<div class="hero">' + kpi([
                 ("会话", nfmt(len(ss))), ("工作区", nfmt(len(set(s["ws"] for s in ss)))),
                 ("模型调用", nfmt(total_calls)), ("累计积分", "%.1f" % total_cr),
-                ("累计输入 tok", nfmt(sum(s["pin"] for s in ss))),
-                ("累计输出 tok", nfmt(sum(s["pout"] for s in ss)))],
+                ("累计输入 token", nfmt(sum(s["pin"] for s in ss))),
+                ("累计输出 token", nfmt(sum(s["pout"] for s in ss)))],
                 fs=21, pad=42) +
             index_overview(ss) + '</div>')
     # 子代理关系用全量 shown 算（父在第 1 页、子在第 2 页时也能标出归属）。
@@ -2175,7 +2208,7 @@ def v_index(q):
                 '<span class="grow">%s%s<b style="font-weight:500">%s</b>'
                 '<span class="fine" style="display:block">%s · %s%s</span></span>'
                 '<span class="num">%d 轮</span><span class="num">%d 次调用</span>'
-                '<span class="num">in %s</span><span class="num">out %s</span>'
+                '<span class="num">输入 %s</span><span class="num">输出 %s</span>'
                 '<span class="num credit">%.1f 分</span>'
                 '<span class="num">%s</span></a>' %
                 (rowcls, esc(s["id"]), br, tag, esc(label[:70]),
@@ -2246,8 +2279,8 @@ def v_session(q, sid):
                 ("上下文块", nfmt(st["blocks"])), ("归档原文", nfmt(st["chars"]) + " 字"),
                 ("可见峰值", nfmt(st["visible_peak"]) + " 字"),
                 ("压缩次数", nfmt(st["compactions"])),
-                ("累计输入 tok", nfmt(st["pin"])), ("缓存命中", "%.1f%%" % (st["rate"] * 100)),
-                ("未命中（计费）", nfmt(st["miss"])), ("输出 tok", nfmt(st["pout"])),
+                ("累计输入 token", nfmt(st["pin"])), ("缓存命中", "%.1f%%" % (st["rate"] * 100)),
+                ("未命中（计费）", nfmt(st["miss"])), ("输出 token", nfmt(st["pout"])),
                 ("累计积分", "%.2f" % st["credit"]), ("冷启动断点", nfmt(st["cold"]))])
     if st["compactions"]:
         body += ('<div class="warn">本会话发生过 <b>%d 次上下文压缩</b>：'
@@ -2332,7 +2365,7 @@ def v_session(q, sid):
                 c = d["calls"][i]
                 body += ('<a class="row bad" href="/s/%s/c/%d" style="grid-template-columns:56px 1fr 100px 92px 82px">'
                          '<span class="idx">#%d</span><span class="grow">轮 %d · 命中率从 &gt;80%% 掉到 %.1f%%</span>'
-                         '<span class="num">in %s</span><span class="num">未命中 %s</span>'
+                         '<span class="num">输入 %s</span><span class="num">未命中 %s</span>'
                          '<span class="num credit">%.2f 分</span></a>' %
                          (esc(sid), c["seq"], c["seq"], c["turn"], c["hit"] / c["pin"] * 100,
                           nfmt(c["pin"]), nfmt(c["pin"] - c["hit"]), c["credit"]))
@@ -2351,8 +2384,8 @@ def v_turn(q, sid, turn):
     crumbs = [("索引", "/"), (d["title"][:24], "/s/%s" % sid), (label, "")]
     body = ""
     if tb:
-        body += kpi([("调用次数", nfmt(tb["calls"])), ("输入 tok", nfmt(tb["pin"])),
-                     ("命中率", "%.1f%%" % (tb["rate"] * 100)), ("输出 tok", nfmt(tb["pout"])),
+        body += kpi([("调用次数", nfmt(tb["calls"])), ("输入 token", nfmt(tb["pin"])),
+                     ("命中率", "%.1f%%" % (tb["rate"] * 100)), ("输出 token", nfmt(tb["pout"])),
                      ("积分", "%.2f" % tb["credit"]), ("系统注入", nfmt(tb["inj"]) + " 字")])
         kind = tb["kind"]
         heads = {"user": "你这一轮问的是：",
@@ -2393,10 +2426,10 @@ def v_call(q, sid, seq):
               ("轮 %d" % c["turn"] if c["turn"] else "开场", "/s/%s/t/%d" % (sid, c["turn"])),
               ("调用 #%d" % seq, "")]
     r = (c["hit"] / c["pin"]) if c["pin"] else None
-    body = kpi([("接口输入 tok", nfmt(c["pin"])), ("缓存命中 tok", nfmt(c["hit"])),
-                ("未命中 tok", nfmt(c["pin"] - c["hit"])),
+    body = kpi([("接口输入 token", nfmt(c["pin"])), ("缓存命中 token", nfmt(c["hit"])),
+                ("未命中 token", nfmt(c["pin"] - c["hit"])),
                 ("命中率", "%.1f%%" % (r * 100) if r is not None else "—"),
-                ("输出 tok", nfmt(c["pout"])), ("积分", "%.2f" % (c.get("credit") or 0)),
+                ("输出 token", nfmt(c["pout"])), ("积分", "%.2f" % (c.get("credit") or 0)),
                 ("可见上下文", "%s 块 / %s 字" % (nfmt(o["n"]), kh(o["chars"]))),
                 ("缓存边界", "#%s" % (o["boundary"] + 1) if o["boundary"] is not None else "—")])
     if o["compacted"]:
@@ -2536,7 +2569,7 @@ def v_block(q, sid, idx):
         c = d["calls"][k]
         body += ('<a class="row" href="/s/%s/c/%d" style="grid-template-columns:64px 1fr 100px 80px">'
                  '<span class="idx">#%d</span><span class="grow">轮 %d · %s</span>'
-                 '<span class="num">in %s</span><span class="num credit">%.2f 分</span></a>' %
+                 '<span class="num">输入 %s</span><span class="num credit">%.2f 分</span></a>' %
                  (esc(sid), c["seq"], c["seq"], c["turn"], esc(c["tool"] or "最终回答"),
                   nfmt(c["pin"]), c.get("credit") or 0))
     nav = ('<div class="tabs"><a class="btn %s" href="/s/%s/b/%d">← 上一块</a>' %
@@ -2715,7 +2748,7 @@ def v_tools(q, sid=None):
         for r in rows:
             body += ('<a class="row" href="%s" style="grid-template-columns:74px 1fr 70px 92px 88px 82px">'
                      '<span class="idx">#%d</span><span class="grow">%s</span>'
-                     '<span class="num">轮 %d</span><span class="num">in %s</span>'
+                     '<span class="num">轮 %d</span><span class="num">输入 %s</span>'
                      '<span class="num credit">%.2f 分</span><span class="num">%s</span></a>' %
                      (esc(r["href"]), r["seq"], esc(r["ws"]), r["turn"], nfmt(r["pin"]),
                       r["credit"],
@@ -2904,7 +2937,7 @@ def v_compact(q, sid):
                 ("可见峰值", nfmt(st["visible_peak"]) + " 字"),
                 ("末次可见", nfmt(st["visible_last"]) + " 字"),
                 ("已退役历史", nfmt(st["retired_chars"]) + " 字"),
-                ("真实累计输入", nfmt(st["pin"]) + " tok"),
+                ("真实累计输入", nfmt(st["pin"]) + " token"),
                 ("真实累计积分", "%.2f" % st["credit"])])
     body += ('<div class="note"><b>怎么核对</b>：WorkBuddy 压缩会把历史替换成一条摘要，'
              '真实 <code>rawUsage.prompt_tokens</code> 应骤降。'
@@ -2946,7 +2979,7 @@ def v_compact(q, sid):
                     (label, bv, av, "var(--accent)" if good else "var(--neg)", pct))
         if r["before"] and r["after"]:
             b, a = r["before"], r["after"]
-            body += line("真实输入 tok（接口原值）", nfmt(b["pin"]), nfmt(a["pin"]),
+            body += line("真实输入 token（接口原值）", nfmt(b["pin"]), nfmt(a["pin"]),
                          "%+.0f%%" % r["pin_delta_pct"], True)
             body += line("真实缓存命中率", "%.1f%%" % (b["rate"] * 100),
                          "%.1f%%" % (a["rate"] * 100),
@@ -2983,12 +3016,13 @@ def v_stats(q):
                 ("上下文块", nfmt(st["blocks"])), ("归档原文", nfmt(st["chars"]) + " 字"),
                 ("可见峰值合计", nfmt(st["visible_peak_sum"]) + " 字"),
                 ("压缩次数", nfmt(st["compactions"])),
-                ("累计输入 tok", nfmt(st["pin"])), ("缓存命中率", "%.1f%%" % (st["rate"] * 100)),
-                ("未命中 tok", nfmt(st["miss"])), ("输出 tok", nfmt(st["pout"])),
+                ("累计输入 token", nfmt(st["pin"])), ("缓存命中率", "%.1f%%" % (st["rate"] * 100)),
+                ("未命中 token", nfmt(st["miss"])), ("输出 token", nfmt(st["pout"])),
                 ("累计积分", "%.2f" % st["credit"]),
                 ("积分/万未命中", "%.3f" % st["unit_miss"])])
-    body += compose_bar(st["compose"])
-    body += activity_heatmap(ss)
+    # 两张卡片内容都偏窄，各占整行时右边大片留白；并排成左右两栏（窄屏回落单列）。
+    body += ('<div class="viz2">' + compose_bar(st["compose"]) +
+             activity_heatmap(ss) + '</div>')
     body += ('<div class="note">上面每个数字都是<b>全量</b>算出来的（%d ms，遍历 %d 个会话全文），'
              '不是抽样、不是截断后的静态页统计。<b>归档原文</b>是全部块的总字数，'
              '包含已被压缩替换、但保留下来供全文检索的历史；'
@@ -3001,7 +3035,7 @@ def v_stats(q):
     for x in st["top_calls"]:
         body += ('<a class="row bad" href="/s/%s/c/%d" style="grid-template-columns:64px 1fr 104px 84px 84px">'
                  '<span class="idx">#%d</span><span class="grow">%s · %s</span>'
-                 '<span class="num">in %s</span><span class="num">命中 %.1f%%</span>'
+                 '<span class="num">输入 %s</span><span class="num">命中 %.1f%%</span>'
                  '<span class="num credit">%.2f 分</span></a>' %
                  (esc(x["sid"]), x["seq"], x["seq"], esc(x["ws"]), esc(x["tool"] or "最终回答"),
                   nfmt(x["pin"]), x["rate"] * 100, x["credit"]))
@@ -3017,7 +3051,7 @@ def v_stats(q):
         ts = fmt_ts(x["ts"], "%m-%d %H:%M", "?")
         body += ('<a class="row bad" href="/s/%s/c/%d" style="grid-template-columns:64px 1fr 104px 84px 84px 66px">'
                  '<span class="idx">#%d</span><span class="grow">%s · %s</span>'
-                 '<span class="num">in %s</span><span class="num">命中 %.1f%%</span>'
+                 '<span class="num">输入 %s</span><span class="num">命中 %.1f%%</span>'
                  '<span class="num credit">%.2f 分</span><span class="num">%s</span></a>' %
                  (esc(x["sid"]), x["seq"], x["seq"], esc(x["ws"]), esc(x["sid"][:8]),
                   nfmt(x["pin"]), x["rate"] * 100, x["credit"], ts))

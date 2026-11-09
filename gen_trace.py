@@ -12,6 +12,7 @@ import os
 import re
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 SR = re.compile(r"<system-reminder[^>]*>(.*?)</system-reminder>", re.S)
@@ -35,6 +36,26 @@ def _ms(v):
     if not (x > 0):
         return 0
     return int(x) if x == int(x) else x
+
+
+def day_key(v):
+    """把一条 jsonl 记录的 timestamp 换成本地日期 YYYY-MM-DD，无效值返回空串。
+
+    首页「按时间」折线和「会话活动日历」要按**每次调用实际发生日**分桶，
+    而不是把整个会话塞进 mtime（文件最后修改日）那一天——长会话常跨多天。
+    口径与 trace_server.fmt_ts 一致：毫秒 / 秒都接受，范围校验挡住 Windows
+    CRT 对越界 localtime 抛 OSError(Errno 22)、Linux 给出荒谬年份。
+    """
+    try:
+        n = float(v)
+        if not (0 < n < 1e14):
+            return ""
+        sec = n / 1000.0 if n > 1e11 else n
+        if not (0 < sec < 32503680000):
+            return ""
+        return time.strftime("%Y-%m-%d", time.localtime(sec))
+    except (OSError, ValueError, OverflowError, TypeError):
+        return ""
 
 
 def trim(ctx, calls, turns, limit=MAX_CALLS):
@@ -467,7 +488,7 @@ def body_html(ctx, c):
         cut = None
     else:
         parts.append(f'<p class="tot">本次带上 {len(blocks)} 块 / {total:,} 字 · '
-                     f'缓存命中 {ratio:.1%} · 接口报输入 {c["pin"]:,} tok'
+                     f'缓存命中 {ratio:.1%} · 接口报输入 {c["pin"]:,} token'
                      f'<br><span class="fine">token 含系统提示与工具定义，字数只是可见部分，两者不可直接换算</span></p>')
         cut = total * ratio
 
@@ -548,10 +569,10 @@ def render(ctx, calls, meta, turns, src, back="", trimmed=0):
             miss = c["pin"] - c["hit"]
             bar = (f'<span class="bar"><i class="hit" style="width:{r*100:.2f}%"></i>'
                    f'<i class="miss" style="width:{(1-r)*100:.2f}%"></i></span>')
-            nums = (f'<span class="num in">in {c["pin"]:,}</span>'
+            nums = (f'<span class="num in">输入 {c["pin"]:,}</span>'
                     f'<span class="num hit">命中 {c["hit"]:,}</span>'
                     f'<span class="num miss">未命中 {miss:,}</span>'
-                    f'<span class="num out">out {c["pout"]:,}</span>'
+                    f'<span class="num out">输出 {c["pout"]:,}</span>'
                     + (f'<span class="num credit">{c.get("credit",0):.2f} 分</span>' if tcredit else "")
                     + f'<span class="pct">{r:.0%}</span>')
         return (f'<details class="call {cls}">'
@@ -581,11 +602,11 @@ def render(ctx, calls, meta, turns, src, back="", trimmed=0):
     <span class="tq">{html.escape(t.get('disp') or t['q'])}</span>
     <span class="tn">{t['n']} 次调用</span>
     {f'<span class="cold">缓存冷启动</span>' if cold else ''}
-    <span class="num out">out {pout:,}</span>
+    <span class="num out">输出 {pout:,}</span>
     <span class="num credit">{cred:.2f} 分</span>
   </summary>
   <div class="tbody">
-    <p class="tmeta">这一轮分 {t['n']} 次调用完成 · 输入 {pin:,} tok（命中 {hit:,}，{rr:.0%}）· 输出 {pout:,} tok · <b>积分 {cred:.2f}</b>
+    <p class="tmeta">这一轮分 {t['n']} 次调用完成 · 输入 {pin:,} token（命中 {hit:,}，{rr:.0%}）· 输出 {pout:,} token · <b>积分 {cred:.2f}</b>
     {f'<br><span class="coldnote">首次调用只命中 {first["hit"]/first["pin"]:.0%} —— 多半是重启或换会话后缓存失效，这一次按全价计费 {first["credit"]:.2f} 分</span>' if cold else ''}
     {f'<br><span class="fine">含系统注入 {t["inj"]:,} 字</span>' if t.get("inj") else ''}</p>
     {''.join(call_html(c) for c in cs)}
@@ -780,6 +801,9 @@ def scan_all():
         credit = pin = pout = 0
         ai = ""
         model_tokens = {}   # 本会话：稳定分组键 -> 输入 token
+        # 按「本次调用实际发生的日期」分桶，供首页时间折线与活动日历使用。
+        # value = [输入 token, 调用数]；不落盘，索引重建时重算。
+        day_bins = {}
         agent_votes = {}
         # 子代理是独立的 agent-* 会话文件，行内另有 providerData.isSubAgent 标记。
         # first_ts / rootRequestId / 主会话的 Agent 调用时间用于首页做关系推断。
@@ -819,6 +843,14 @@ def scan_all():
                 pin += pt
                 pout += ru.get("completion_tokens", 0)
                 credit += ru.get("credit") or 0
+                # 按调用真实发生日落桶：跨天会话的 token 与调用分散到各自那天，
+                # 不再整段压到文件 mtime（最后修改日）。与 calls / pin 同一批记录，
+                # 保证 sum(day_bins[pin]) == pin、sum(day_bins[calls]) == calls。
+                dk = day_key(d.get("timestamp"))
+                if dk:
+                    b = day_bins.setdefault(dk, [0, 0])
+                    b[0] += pt
+                    b[1] += 1
                 # 模型构成直接从会话记录取：db 只负责补标题/工作区，db 不可读或
                 # 会话中途换过模型时，仍能得到按输入 token 加权的真实构成。
                 # 用底层 model ID 分组、展示名单独投票，避免同一模型因大小写
@@ -845,6 +877,7 @@ def scan_all():
             "agent_calls": agent_calls,
             "agent_reqs": agent_reqs,
             "mtime": os.path.getmtime(f),
+            "days": day_bins,           # YYYY-MM-DD -> [输入 token, 调用数]
             "turns": turns, "calls": calls, "credit": credit, "pin": pin, "pout": pout,
             "skipped": skipped["skipped"],
             "meta_ok": meta_ok,
@@ -855,9 +888,9 @@ def scan_all():
     best = dict((k, max(v, key=v.get)) for k, v in all_labels.items() if v)
     for s in out:
         named = {}
-        for key, tok in s["models"].items():
+        for key, token in s["models"].items():
             name = best.get(key, key)
-            named[name] = named.get(name, 0) + tok
+            named[name] = named.get(name, 0) + token
         s["models"] = named
         if named:
             s["model"] = max(named, key=named.get)
