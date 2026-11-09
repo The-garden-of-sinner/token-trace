@@ -117,7 +117,7 @@
 - 缓存命中率统一显示到小数点后一位
 - **压缩感知**：识别上下文压缩，只统计本次请求真正带上的块；压缩事件页把真实账单与修正前后口径并列，可人工核对
 - 跨会话统计：字数构成、最贵调用、最大块、冷启动断点、计费单价
-- 17 个 JSON 端点，统一 `{ok, data, meta}` 信封，供脚本调用
+- 18 个 JSON 端点，统一 `{ok, data, meta}` 信封，供脚本调用；新增跨会话分析宽表，程序接入说明见 [docs/API.md](docs/API.md)
 - Linux / Windows 各有一键启动与停止脚本，幂等、自动开浏览器
 
 
@@ -344,11 +344,15 @@ tar 成员与 gzip 容器头的 `mtime` 都固定为 0（`GzipFile(..., mtime=0)
 统一信封 `{"ok":true,"data":...,"meta":{...}}`；出错是 `{"ok":false,"error":"..."}` 加 4xx/5xx。
 分页统一 `offset` / `limit`，`meta` 给 `total` / `offset` / `limit`，有下一页时给 `next` 完整 URL。
 
+> **给数据分析程序 / Notebook / BI 取数**：完整的字段字典、时间戳量纲、pandas 示例与
+> 扩展性说明见 **[docs/API.md](docs/API.md)**。本节只做人可读的接口速查。
+
 | 端点 | 说明 |
 | --- | --- |
 | `GET /api/health` | 状态、`pid`、`rss_mb`、`uptime_s`、会话数、缓存数、`write_files=false` |
 | `GET /api/sessions` | 全部会话摘要 |
 | `GET /api/stats` | 跨会话全量聚合 |
+| `GET /api/analytics/calls?from=&to=&model=&ws=&tool=&fields=&offset=&limit=` | 跨会话扁平调用宽表，分析程序入口（字段与量纲见 `docs/API.md`） |
 | `GET /api/s/<sid>` | 会话统计 + 每轮摘要 + 冷启动调用号 |
 | `GET /api/s/<sid>/calls?offset=&limit=&turn=` | 调用列表（不含正文） |
 | `GET /api/s/<sid>/calls/<seq>` | 单次调用：usage、缓存边界、块总数、输出段索引 |
@@ -366,6 +370,7 @@ tar 成员与 gzip 容器头的 `mtime` 都固定为 0（`GzipFile(..., mtime=0)
 | `POST /shutdown` | 停止服务，供 `start.sh stop` 调用；校验 Host / Origin / Sec-Fetch-Site |
 
 ```bash
+curl -s "http://127.0.0.1:8765/api/analytics/calls?limit=3" | python3 -m json.tool
 curl -s "http://127.0.0.1:8765/api/sessions" | python3 -m json.tool
 curl -s "http://127.0.0.1:8765/api/s/<sid>/calls?limit=5"
 curl -s "http://127.0.0.1:8765/api/s/<sid>/blocks/42?offset=0&limit=1000"
@@ -628,7 +633,7 @@ token（按 `providerData.model` 分组，展示名取全库得票最多的写�
 | `windows/` | Windows 版 `start.cmd` / `start.ps1` / `install-shortcut.ps1`，可选签名入口 `sign-release.ps1` |
 | `scripts/` | 发行构建（`build_win_bat.py`、`build_deb.sh`、`build_deb.py`、`release.sh`、`VERSION`）、回归自检（`selftest.py`）、独立压缩校验（`verify_compact.py`）、演示数据生成（`make_demo.py`，虚构排查会话）、图标生成（`make_icon.py`）、校验清单（`make_checksums.py`） |
 | `assets/` | `TokenTrace.ico`（内嵌进单 bat、供快捷方式用）与 `token-trace.png`（Linux hicolor 图标） |
-| `docs/` | `architecture.svg` / `architecture.mmd` 架构图与图源；`demo.png`（会话索引）与 `demo-session.png`（会话概览）界面截图，均由 `scripts/make_demo.py` 的虚构数据渲染 |
+| `docs/` | `API.md`（程序接入指南：字段字典、量纲、pandas 示例与扩展性评估）；`architecture.svg` / `architecture.mmd` 架构图与图源；`demo.png`（会话索引）与 `demo-session.png`（会话概览）界面截图，均由 `scripts/make_demo.py` 的虚构数据渲染 |
 | `REVIEW_CHANGES.md` | 安全与跨平台改造的分阶段变更记录 |
 | `.gitignore` | 排除含会话原文的静态页与运行时产物 |
 | `trace/` | 静态模式产物（不入库），随时可由 `gen_trace.py` 重建 |
@@ -649,7 +654,7 @@ token（按 `providerData.model` 分组，展示名取全库得票最多的写�
 都从它生成。新增端点只需加一行，不会再出现「页面能开但文档没写」或反过来。
 
 ```bash
-python3 -B scripts/selftest.py                    # 113 项检查
+python3 -B scripts/selftest.py                    # 127 项检查
 TRACE_TEST_PORT=8901 python3 -B scripts/selftest.py
 ```
 
@@ -664,7 +669,7 @@ TRACE_TEST_PORT=8901 python3 -B scripts/selftest.py
 运行期零写盘与 `write_files=false`。结束自动 `POST /shutdown` 退出，
 有失败返回 1。分页统一走 `clamp_p()`，与 `pager()` 同步夹取页码。
 
-实测本机一次跑完 **113 项全绿**，最大单页 52.9 KB（搜索结果页）。
+实测本机一次跑完 **127 项全绿**，18 条 HTML 路由全部 200、零脚本，最大单页 67.1 KB（80 KB 硬闸内）。
 其中「真实累计输入 token」一项改为在主进程独立累加 `rawUsage` 原值后与 `build()` 结果比对：
 早期版本拿服务子进程与主进程的两次解析互比，遇到会话文件正在写入时会偶发误报，
 现在既不受数据漂移影响，也真正验证了「压缩修正没有改动真实账单」。
@@ -689,7 +694,7 @@ TRACE_TEST_PORT=8901 python3 -B scripts/selftest.py
 | 块全文页 | 2575 / 2575 全部 200 |
 | 最大块 | 579 969 字 / 49 片，逐片拼回与 API 全文逐字一致（这个块本身是压缩摘要，见「压缩感知」） |
 | `<script>` 标签 | 全部页面 0 个 |
-| JSON 端点 | 17 / 17 返回 `{ok:true, data, meta}` |
+| JSON 端点 | 18 / 18 返回 `{ok:true, data, meta}` |
 
 **单页体积**
 

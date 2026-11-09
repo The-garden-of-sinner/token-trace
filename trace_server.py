@@ -333,10 +333,51 @@ def block_users(d, idx):
     return range(lo, max(lo, hi))
 
 
+_MODEL_MAP = {"key": None, "val": {}}
+
+
+def model_display_map():
+    """全库统一的「归一键 -> 展示名」，让调用级 API 与会话索引口径一致。
+
+    scan_all() 已按 providerData.model 分组、全库投票选出唯一展示名；但
+    gen_trace 的逐调用记录里 model 仍是随客户端变化的原始写法（同一模型会
+    出现三种大小写）。若 API 直接吐原始值，分析程序按 model 分组就会重新
+    裂成多份。索引刷新会生成新的 list，故用 (id, len) 作缓存键自动失效。
+    """
+    ss = STORE.sessions()
+    key = (id(ss), len(ss))
+    if _MODEL_MAP["key"] != key:
+        m = {}
+        for s in ss:
+            for name in (s.get("models") or {}):
+                k = G.canon_model(name)
+                if k:
+                    m[k] = name
+            if s.get("model"):
+                k = G.canon_model(s["model"])
+                if k and k not in m:
+                    m[k] = s["model"]
+        _MODEL_MAP["key"] = key
+        _MODEL_MAP["val"] = m
+    return _MODEL_MAP["val"]
+
+
+def display_model(name):
+    """把逐调用的原始模型名换成全库统一展示名；查不到就原样返回。
+
+    gen_trace 对没有 providerData 模型名的调用兜底成字面量 "?"，网页里显示
+    无妨，但给分析程序会变成一个假类别；API 层统一收敛成空串（见 docs/API.md）。
+    """
+    if not name or name == "?":
+        return ""
+    return model_display_map().get(G.canon_model(name), name or "")
+
+
 def call_brief(c):
     """调用列表用的轻量字典，不含上下文与输出正文"""
     r = (c["hit"] / c["pin"]) if c["pin"] else None
-    return {"seq": c["seq"], "ts": c["ts"], "model": c["model"], "tool": c["tool"],
+    return {"seq": c["seq"], "ts": c["ts"], "model": display_model(c["model"]),
+            "tool": c["tool"],
             "pin": c["pin"], "hit": c["hit"], "miss": c["pin"] - c["hit"],
             "pout": c["pout"], "credit": c.get("credit") or 0, "turn": c.get("turn", 0),
             "rate": r, "ctxN": c["ctxN"], "vf": c.get("vf", 0),
@@ -3117,6 +3158,128 @@ def paged(data, total, offset, limit, base, q):
     return env(data, **m)
 
 
+# ------------------------------------------------ 分析宽表（给外部程序取数用）
+ANALYTICS_FIELDS = (
+    "sid", "seq", "ts", "date", "model", "tool",
+    "pin", "hit", "miss", "pout", "credit", "rate", "turn", "ws",
+)
+ANALYTICS_MAX_LIMIT = 500     # 与 API_MAX_LIMIT 对齐，避免一次序列化过大
+
+
+def _parse_bound(raw, end=False):
+    """from/to 边界：YYYY-MM-DD（服务器本地时区）或 Unix 秒 / 毫秒数字。"""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", raw):
+        try:
+            t = time.mktime(time.strptime(raw, "%Y-%m-%d"))
+        except (ValueError, OverflowError, OSError):
+            raise ValueError("invalid date: " + raw)
+        return (t + 86400) * 1000.0 - 1 if end else t * 1000.0
+    try:
+        n = float(raw)
+    except ValueError:
+        raise ValueError("invalid time bound: " + raw)
+    if not (0 < n < 1e14):
+        raise ValueError("time bound out of range: " + raw)
+    return n if n > 1e11 else n * 1000.0
+
+
+def _session_may_hit(s, lo, hi):
+    """会话级粗筛：[first_ts, mtime] 是保守超集，只会少算不会漏算。
+
+    first_ts 是会话首条记录时间、mtime 是文件最后修改时间；脏 / 越界时间戳
+    一律返回 True，交给调用级用 ts 精筛，保证正确性优先于剪枝率。
+    """
+    if lo is None and hi is None:
+        return True
+    try:
+        a = float(s.get("first_ts") or 0)
+        b = float(s.get("mtime") or 0) * 1000.0
+    except (TypeError, ValueError, OverflowError):
+        return True
+    if a <= 0 or b <= 0:
+        return True
+    if b < a:
+        a, b = b, a
+    return not ((hi is not None and a > hi) or (lo is not None and b < lo))
+
+
+def analytics_calls(q):
+    """跨会话扁平调用宽表，返回 (信封, HTTP 状态码)。
+
+    只读内存索引；过滤下推到会话级，且只物化 [offset, offset+limit) 这一段，
+    因此序列化开销随 limit 走而不是随全库调用数走。total 是过滤后的命中数。
+    """
+    try:
+        lo = _parse_bound(qstr(q, "from"))
+        hi = _parse_bound(qstr(q, "to"), end=True)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}, 400
+    if lo is not None and hi is not None and lo > hi:
+        return {"ok": False, "error": "from must not be later than to"}, 400
+
+    raw = qstr(q, "fields").strip()
+    if raw:
+        cols = [x.strip() for x in raw.split(",") if x.strip()]
+        bad = [x for x in cols if x not in ANALYTICS_FIELDS]
+        if bad:
+            return ({"ok": False,
+                     "error": "unknown fields: %s (allowed: %s)"
+                              % (",".join(bad), ",".join(ANALYTICS_FIELDS))}, 400)
+    else:
+        cols = list(ANALYTICS_FIELDS)
+
+    lim = min(ANALYTICS_MAX_LIMIT, qint(q, "limit", 200, 1))
+    off = qint(q, "offset", 0, 0)
+    mf = G.canon_model(qstr(q, "model").strip())
+    wf = qstr(q, "ws").strip().lower()
+    tf = qstr(q, "tool").strip().lower()
+
+    total, rows = 0, []
+    for s in STORE.sessions():
+        if not _session_may_hit(s, lo, hi):
+            continue
+        ws = s.get("ws") or ""
+        if wf and wf not in ws.lower():
+            continue
+        d = STORE.get(s["id"])
+        for c in d["calls"]:
+            ts = c.get("ts") or 0
+            try:
+                tsf = float(ts)
+            except (TypeError, ValueError):
+                tsf = 0.0
+            if (lo is not None and tsf < lo) or (hi is not None and tsf > hi):
+                continue
+            model = display_model(c.get("model"))
+            if mf and G.canon_model(model) != mf:
+                continue
+            tool = c.get("tool") or ""
+            if tf and tf not in tool.lower():
+                continue
+            if off <= total < off + lim:
+                pin = c.get("pin") or 0
+                hit = c.get("hit") or 0
+                full = {
+                    "sid": s["id"], "seq": c.get("seq"), "ts": ts,
+                    "date": fmt_ts(ts, "%Y-%m-%d", ""), "model": model,
+                    "tool": tool, "pin": pin, "hit": hit, "miss": pin - hit,
+                    "pout": c.get("pout") or 0, "credit": c.get("credit") or 0,
+                    "rate": (hit / pin) if pin else None,
+                    "turn": c.get("turn", 0), "ws": ws,
+                }
+                rows.append(dict((k, full[k]) for k in cols))
+            total += 1
+
+    resp = paged(rows, total, off, lim, "/api/analytics/calls", q)
+    resp["meta"].update({"ts_unit": "unix_ms", "date_tz": "server local time",
+                         "fields": cols,
+                         "model_key": "providerData.model（全库统一展示名）"})
+    return resp, 200
+
+
 def api_route(path, q):
     def json_bytes(obj, status=200):
         return status, "application/json; charset=utf-8", json.dumps(
@@ -3141,6 +3304,9 @@ def api_route(path, q):
     if path == "/api/stats":
         with CALC_LOCK:
             return json_bytes(env(global_stats()))
+    if path == "/api/analytics/calls":
+        obj, st = analytics_calls(q)
+        return json_bytes(obj, st)
     if path == "/api/search":
         sid = qstr(q, "sid") or None
         if sid:
@@ -3262,7 +3428,8 @@ def api_route(path, q):
             return json_bytes(paged(rows, len(idxs), off, lim,
                                     "/api/s/%s/calls/%d/context" % (sid, seq), q))
         return json_bytes(env({
-            "call": call_brief(c), "model": c["model"], "tool": c["tool"],
+            "call": call_brief(c), "model": display_model(c["model"]),
+            "tool": c["tool"],
             "context": {"blocks": o["n"], "chars": o["chars"], "cache_ratio": o["ratio"],
                         "visible_from": o["lo"], "visible_to": o["hi"],
                         "compacted": o["compacted"],
@@ -3404,6 +3571,9 @@ ROUTE_SPEC = [
     A("/api/health", "状态、pid、rss_mb、会话数、缓存数、write_files、monitor", "/api/health"),
     A("/api/sessions", "全部会话摘要", "/api/sessions"),
     A("/api/stats", "跨会话全量聚合", "/api/stats"),
+    A("/api/analytics/calls?from=&to=&model=&ws=&tool=&fields=&offset=&limit=",
+      "跨会话扁平调用宽表（分析程序入口，字段与量纲见 docs/API.md）",
+      "/api/analytics/calls?limit=3"),
     A("/api/s/<sid>", "单会话全量统计 + 每一轮摘要", "/api/s/{sid}"),
     A("/api/s/<sid>/calls?offset=&limit=&turn=", "调用列表（分页；不含正文）", "/api/s/{sid}/calls?limit=3"),
     A("/api/s/<sid>/calls/<seq>", "单次调用：usage、缓存边界、输出段索引", "/api/s/{sid}/calls/1"),

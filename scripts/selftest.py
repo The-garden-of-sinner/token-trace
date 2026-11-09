@@ -559,6 +559,72 @@ def main():
         if not checked_fold:
             print("  SKIP 样例会话没有连续命中块，跳过折叠完整性检查")
 
+        print("== 分析宽表 /api/analytics/calls ==")
+        st, body = get("/api/analytics/calls?limit=3")
+        d = json.loads(body)
+        check(st == 200 and d.get("ok") is True and len(d["data"]) == 3
+              and d["meta"]["total"] > 3,
+              "宽表端点返回统一信封、3 行与全库 total=%s"
+              % d.get("meta", {}).get("total"))
+        check(d["meta"].get("ts_unit") == "unix_ms"
+              and len(d["meta"]["fields"]) == 14,
+              "meta 声明毫秒时间戳单位与 14 列字段字典")
+        check(all(set(r) == set(T.ANALYTICS_FIELDS) for r in d["data"]),
+              "默认每行字段完整（14 列宽表）")
+
+        allrows = T.analytics_calls({"limit": ["500"]})[0]["data"]
+        sess_names = set(k for s in T.STORE.sessions()
+                         for k in (s.get("models") or {}))
+        api_names = set(r["model"] for r in allrows)
+        check(all(not n or n in sess_names for n in api_names),
+              "调用级模型名与会话索引展示名一致（%d 种）" % len(api_names))
+        check("?" not in api_names,
+              "缺模型名的调用收敛为空串，不产生假类别")
+        by_variant = {}
+        for s in T.STORE.sessions():
+            for c in T.STORE.get(s["id"])["calls"]:
+                if "deepseek" in (c.get("model") or "").lower():
+                    by_variant.setdefault(c["model"], c)
+        fixed = set(T.call_brief(c)["model"] for c in by_variant.values())
+        check(len(by_variant) > 1 and len(fixed) == 1,
+              "call_brief 把 %d 种大小写变体收敛成 1 个展示名"
+              % len(by_variant))
+
+        st2, b2 = get("/api/analytics/calls?fields=ts,model,pin&limit=2")
+        check(st2 == 200 and all(set(r) == {"ts", "model", "pin"}
+                                 for r in json.loads(b2)["data"]),
+              "fields 投影只返回指定列")
+        st3, b3 = get("/api/analytics/calls?fields=nope")
+        check(st3 == 400 and json.loads(b3).get("ok") is False,
+              "非法 fields 返回 400 + 错误信封，不静默忽略")
+        st4, b4 = get("/api/analytics/calls?from=abc")
+        check(st4 == 400, "非法 from 返回 400")
+        any_date = T.analytics_calls({"limit": ["1"]})[0]["data"][0]["date"]
+        st5, b5 = get("/api/analytics/calls?from=%s&to=%s&limit=500"
+                      % (any_date, any_date))
+        d5 = json.loads(b5)
+        expected = 0
+        for s in T.STORE.sessions():
+            for c in T.STORE.get(s["id"])["calls"]:
+                if T.fmt_ts(c.get("ts"), "%Y-%m-%d", "") == any_date:
+                    expected += 1
+        check(st5 == 200 and d5["meta"]["total"] == expected
+              and all(r["date"] == any_date for r in d5["data"]),
+              "from/to 单日过滤生效且会话级粗筛不漏算（%s：%d 条）"
+              % (any_date, expected))
+        st6, b6 = get("/api/analytics/calls?offset=99999999&limit=3")
+        d6 = json.loads(b6)
+        check(st6 == 200 and d6["data"] == []
+              and d6["meta"]["total"] == d["meta"]["total"],
+              "offset 越界返回空页但 total 不变")
+        check("offset=3" in (d["meta"].get("next") or "")
+              and "limit=3" in (d["meta"].get("next") or ""),
+              "meta.next 保留分页参数")
+        st7, b7 = get("/api/analytics/calls?limit=99999")
+        check(st7 == 200
+              and len(json.loads(b7)["data"]) <= T.ANALYTICS_MAX_LIMIT,
+              "limit 超上限被夹到 %d" % T.ANALYTICS_MAX_LIMIT)
+
         print("== 运行期零写盘 ==")
         check(not os.path.isdir(os.path.join(ROOT, "__pycache__")),
               "项目目录无 __pycache__")
