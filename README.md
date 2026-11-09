@@ -131,7 +131,7 @@
 **Linux（Debian / Ubuntu / 银河麒麟 / 统信 UOS / Deepin）**
 
 ```bash
-V=1.1.7   # 换成 Release 页上的最新版本号
+V=1.1.8   # 换成 Release 页上的最新版本号
 curl -fLO "https://github.com/The-garden-of-sinner/token-trace/releases/download/v$V/token-trace_${V}_all.deb"
 sudo dpkg -i "token-trace_${V}_all.deb"
 token-trace                     # 起服务并自动打开浏览器
@@ -294,6 +294,7 @@ tar 成员与 gzip 容器头的 `mtime` 都固定为 0（`GzipFile(..., mtime=0)
 
 | 版本 | 主要内容 |
 | --- | --- |
+| **v1.1.8** | 修复首页「按模型 · 输入 token」环把同一模型按 `requestModelName` 大小写变体拆成多份（改为按 `providerData.model` 分组、全库投票统一展示名；`sum(models)==sum(pin)` 不变），环心数字按字数收字号不再压环；首页子代理改为「父会话行 → 缩进子树」展示隶属关系（原生 `<details>` 折叠、零脚本，子行标「派生自」，跨页 / 未能定位父级时在行内注明），不再作为孤立工作区分组平铺。README 口径同步。自检 102 项 |
 | **v1.1.7** | 同机互链：探测到 WorkBuddy 用量监视（`workbuddy-token-monitor --web`，默认 `127.0.0.1:8791`）在运行时，工具条与页脚出现「实时用量 ↗」；`/api/health` 自报 `monitor=up/down/disabled`；地址可用 `TRACE_MONITOR_URL` 覆盖，置空即关闭探测。自检 89 项 |
 | v1.1.6 | 第二轮复测修复：① 首页 500 —— `subagent_relations()` 对字符串时间戳直接做减法，`first_ts` 统一用 `_ms()` 归一，0 值不再参与就近匹配；② 分页后分组标题用本页切片计数、与分页条口径冲突，改为按该工作区全量统计并在被切开时标「本页 N」；③ `rootRequestId` 采而未用，改为父子关系首选的精确键（`agent_reqs`），时间窗降级为兜底，嵌套子代理可挂到直接父级；④ `build_deb.py` 的 gzip 容器头写墙钟时间，改用 `GzipFile(mtime=0)`，构建真正可复现。README 补「渲染性能」实测（兆芯集显帧率与测量方法）；另修 `src_bytes` 单文件失效即整页失真、页脚 KB 迭代轮数；自检补 12 项（子代理边界 / 脏时间戳渲染 / 分组计数 / 残差桶 / `/stats` 解析次数 / `?kind=` 非法值与转义 / `build_deb` 版本号校验）增至 85 项 |
 | v1.1.5 | 视觉收尾：KPI 数字带列宽改为**按内容分配**（`kpi_weights()` 估算每格文字宽度并输出 `fr` 表，两位数的「会话」不再和九位 token 等宽，12 项两行仍按列对齐）；工具条 / 检索区 / 分段控件 / 入口卡 / 会话分组 / 图表卡补齐入场错峰；构成环各段按起始角度错峰生长、概览与走势折线用 `clip-path` 从左往右揭开、渐变色带柱 `scaleY` 拉起；README 替换为最新界面截图（会话索引 + 会话概览）。自检 73 项 |
