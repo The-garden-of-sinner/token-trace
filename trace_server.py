@@ -333,6 +333,29 @@ def block_users(d, idx):
     return range(lo, max(lo, hi))
 
 
+def block_use_counts(d):
+    """一次线性扫描算出每个块被多少调用携带，等价于逐块 len(block_users(d, i))。
+
+    调用 k 携带的可见块区间是 [vf_k, ctxN_k)；对区间做差分再求前缀和，
+    复杂度 O(块数 + 调用数)，比逐块两次二分 O(B log C) 快一个量级
+    （本机最大会话 3906 块：3.6 ms vs 43 ms）。全库块排名与统计页复用。
+    """
+    n = len(d["ctx"])
+    diff = [0] * (n + 1)
+    for c in d["calls"]:
+        hi = min(c["ctxN"], n)
+        lo = min(c.get("vf", 0), hi)
+        if lo < hi:
+            diff[lo] += 1
+            diff[hi] -= 1
+    out = [0] * n
+    run = 0
+    for i in range(n):
+        run += diff[i]
+        out[i] = run
+    return out
+
+
 _MODEL_MAP = {"key": None, "val": {}}
 
 
@@ -422,7 +445,7 @@ def global_stats():
            "calls": 0, "turns": 0, "blocks": 0, "chars": 0,
            "visible_peak_sum": 0, "compactions": 0,
            "pin": 0, "hit": 0, "pout": 0, "credit": 0, "compose": Counter(),
-           "cold": [], "top_calls": [], "top_blocks": []}
+           "cold": [], "top_calls": [], "top_blocks": [], "costly_blocks": []}
     for s in ss:
         d = STORE.get(s["id"])
         st = d["stats"]
@@ -444,6 +467,20 @@ def global_stats():
         for i, b in sorted(enumerate(d["ctx"]), key=lambda x: -x[1]["n"])[:3]:
             out["top_blocks"].append({"sid": s["id"], "idx": i, "chars": b["n"],
                                       "kind": b["k"], "label": b["l"]})
+        # 「最贵的块」与「最大的块」口径不同：一个块哪怕不大，只要被成百上千次
+        # 调用反复带上，累计输入量就很可观。cost = 估算 token × 被携带次数。
+        # block_users 是二分查找，逐块算一次即可；估算 token 解析期已存好。
+        uses = block_use_counts(d)
+        costs = []
+        for i, b in enumerate(d["ctx"]):
+            # 旧缓存若没有 e，用字符数 /3 粗估（O(1)），避免为兜底扫长块全文。
+            est = b.get("e") or (b["n"] // 3)
+            u = uses[i]
+            costs.append((est * u, i, est, u, b))
+        for cost, i, est, u, b in sorted(costs, reverse=True)[:3]:
+            out["costly_blocks"].append({"sid": s["id"], "idx": i,
+                                         "kind": b["k"], "label": b["l"],
+                                         "est": est, "users": u, "cost": cost})
     out["rate"] = (out["hit"] / out["pin"]) if out["pin"] else 0
     out["miss"] = out["pin"] - out["hit"]
     # 实测单价：积分 / 未命中输入
@@ -454,6 +491,8 @@ def global_stats():
     out["top_calls"] = out["top_calls"][:20]
     out["top_blocks"].sort(key=lambda x: -x["chars"])
     out["top_blocks"] = out["top_blocks"][:20]
+    out["costly_blocks"].sort(key=lambda x: -x["cost"])
+    out["costly_blocks"] = out["costly_blocks"][:20]
     out["compose"] = dict(out["compose"])
     return out
 
@@ -1456,7 +1495,8 @@ def page(title, crumbs, body, sub="", extra_head="", need=()):
            '<footer><span>本页 HTML @@KB@@ KB</span>' +
            '<span>数据只读 · 全文由后端按需提供 · 无需 JavaScript</span>' +
            back_link(crumbs, footer=True) +
-           '<a href="/">索引</a><a href="/stats">全局统计</a><a href="/api">API</a>' +
+           '<a href="/">索引</a><a href="/stats">全局统计</a>'
+           '<a href="/rank">统计排序</a><a href="/api">API</a>' +
            monitor_link("ext") + '</footer>' +
            back + '</div></html>')
     # 页脚口径与 80 KB 硬闸对齐：算整页响应字节（含内联 CSS 与 header），
@@ -2074,13 +2114,19 @@ def cache_hit_span(d, i):
 def block_row_html(d, i, sid, seq, j, st):
     """上下文块清单里的一行（抽出来供折叠 / 展开两种路径共用）。"""
     b = d["ctx"][j]
-    return ('<a class="row" href="/s/%s/b/%d?ref=%d" '
+    # 行内保持「X 字」不挤，时间 / 估算 token / 携带次数放 title 悬停可见；
+    # 块全文页的 KPI 里则三项都直接展示。
+    tip = ("%s · ≈ %s token · 被带上 %s 次" %
+           (fmt_ts(b.get("ts"), "%Y-%m-%d %H:%M", "时间未知"),
+            nfmt(b.get("e") or G.est_tokens(b["t"])),
+            nfmt(len(block_users(d, j)))))
+    return ('<a class="row" title="%s" href="/s/%s/b/%d?ref=%d" '
             'style="grid-template-columns:52px 64px 92px 1fr 84px 62px">'
             '<span class="idx">#%d</span><span class="chip %s">%s</span>'
             '<span class="chip t">%s</span>'
             '<span class="grow"><b style="font-weight:500">%s</b>%s</span>'
             '<span class="num">%s 字</span><span class="num" style="color:var(--link-h)">全文 →</span></a>' %
-            (esc(sid), j, seq, j, st, G.CHIP[st], TYPES.get(b["k"], b["k"]),
+            (esc(tip), esc(sid), j, seq, j, st, G.CHIP[st], TYPES.get(b["k"], b["k"]),
              esc(b["l"]), G.cmd_html(b, 140), nfmt(b["n"])))
 
 
@@ -2218,6 +2264,7 @@ def v_index(q):
     body += ('<div class="toolbar"><nav class="tb-nav">'
              '<a href="/tools">工具与命令</a>'
              '<a href="/stats">全局统计</a>'
+             '<a href="/rank">统计排序</a>'
              '<a href="/api">API 文档</a>'
              '<a href="/?refresh=1">刷新</a>%s</nav>'
              '<div class="tb-sort"><span class="tb-lab">排序</span>'
@@ -2566,7 +2613,12 @@ def v_block(q, sid, idx):
     crumbs = [("索引", "/"), (d["title"][:20], "/s/%s" % sid),
               ("调用 #%d" % ref if ref else "上下文块", "/s/%s/c/%d" % (sid, ref) if ref else ""),
               ("块 #%d 全文" % idx, "")]
-    body = kpi([("原文长度", nfmt(b["n"]) + " 字"),
+    # 估算 token 在解析期已存进块（gen_trace.est_tokens）；旧索引没有该字段时
+    # 用当前全文现算一次兜底。≈ 表示非官方 tokenizer，口径见 README 已知限制。
+    est = b.get("e") or G.est_tokens(text)
+    body = kpi([("写入时间", fmt_ts(b.get("ts"), "%m-%d %H:%M", "时间未知")),
+                ("原文长度", nfmt(b["n"]) + " 字"),
+                ("估算 token", "≈ " + nfmt(est)),
                 ("类型", TYPES.get(b["k"], b["k"])),
                 ("分片", "%d / %d" % (part + 1, total_parts)),
                 ("本片字数", nfmt(len(chunk))),
@@ -3087,6 +3139,16 @@ def v_stats(q):
                  '<span class="num">%s 字</span><span class="num" style="color:var(--link-h)">全文 →</span></a>' %
                  (esc(x["sid"]), x["idx"], x["idx"], TYPES.get(x["kind"], x["kind"]),
                   esc(x["label"]), nfmt(x["chars"])))
+    body += ('<h2>成本最高的 20 个块 <small>≈ 估算 token × 被携带次数 · '
+             '不是真实账单，只衡量重复携带量</small></h2>')
+    for x in st["costly_blocks"]:
+        body += ('<a class="row bad" href="/s/%s/b/%d" '
+                 'style="grid-template-columns:64px 1fr 106px 82px 92px">'
+                 '<span class="idx">#%d</span><span class="grow">%s · %s</span>'
+                 '<span class="num">≈ %s token</span><span class="num">× %s 次</span>'
+                 '<span class="num credit">≈ %s</span></a>' %
+                 (esc(x["sid"]), x["idx"], x["idx"], esc(TYPES.get(x["kind"], x["kind"])),
+                  esc(x["label"]), nfmt(x["est"]), nfmt(x["users"]), kh(x["cost"])))
     body += '<h2>缓存冷启动断点 <small>共 %d 次；按当次输入量排序，列前 30</small></h2>' % len(st["cold"])
     for x in st["cold"][:30]:
         ts = fmt_ts(x["ts"], "%m-%d %H:%M", "?")
@@ -3100,6 +3162,141 @@ def v_stats(q):
              '<a class="btn" href="/">← 回索引</a></div>')
     return page("全局统计", [("索引", "/"), ("全局统计", "")], body,
                 sub="跨会话全量聚合 · 每次访问现算，不缓存结论")
+
+
+# ------------------------------------------------------ 统计排序（按会话 / 时间）
+RANK_BY = ("session", "day")
+RANK_WHAT = ("call", "block")
+RANK_SORT = ("token", "count", "product")
+_RANK_CACHE = {}
+
+
+def rank_rows(by, what):
+    """按会话 / 日期聚合调用或块，返回可排序的行列表。
+
+    what=call 只读会话索引（零额外遍历）；what=block 遍历会话全文，但用
+    block_use_counts() 的差分一次算出携带次数。结果按「索引对象 + 参数」缓存，
+    切换排序 / 翻页不重复扫全库；缓存持有索引对象本身，刷新后自动失效。
+    """
+    ss = STORE.sessions()
+    key = (by, what, id(ss), len(ss))
+    hit = _RANK_CACHE.get(key)
+    # 只把 id 存进 key 是不够的：旧索引列表一旦被回收，新列表可能分配到同一
+    # 地址，刷新后就会误命中旧结果。缓存 value 持有 ss 本身可杜绝 id 复用，
+    # `is ss` 再挡一层，失效判定不依赖分配器的偶然行为。
+    if hit is not None and hit[0] is ss:
+        return hit[1]
+    acc = {}
+    if what == "call":
+        for s in ss:
+            if by == "day":
+                for day, v in (s.get("days") or {}).items():
+                    a = acc.setdefault(day, [0, 0, ""])
+                    a[0] += v[0]
+                    a[1] += v[1]
+            else:
+                a = acc.setdefault(s["id"], [0, 0, ""])
+                a[0] += s["pin"]
+                a[1] += s["calls"]
+                a[2] = s["title"]
+    else:
+        for s in ss:
+            d = STORE.get(s["id"])
+            uses = block_use_counts(d)
+            for i, b in enumerate(d["ctx"]):
+                est = b.get("e") or (b["n"] // 3)
+                u = uses[i]
+                day = G.day_key(b.get("ts")) or "未知日期"
+                k = day if by == "day" else s["id"]
+                a = acc.setdefault(k, [0, 0, ""])
+                a[0] += est * u
+                a[1] += u
+                if by == "session":
+                    a[2] = s["title"]
+    rows = [{"key": k, "label": lab or k,
+             "token": t, "count": c, "product": t * c,
+             "sid": k if by == "session" else ""}
+            for k, (t, c, lab) in acc.items()]
+    if len(_RANK_CACHE) > 8:
+        _RANK_CACHE.clear()
+    _RANK_CACHE[key] = (ss, rows)
+    return rows
+
+
+def v_rank(q):
+    by = qstr(q, "by", "session")
+    what = qstr(q, "what", "call")
+    sort = qstr(q, "sort", "token")
+    if by not in RANK_BY:
+        by = "session"
+    if what not in RANK_WHAT:
+        what = "call"
+    if sort not in RANK_SORT:
+        sort = "token"          # 白名单：非法值一律回落，不拼进 HTML / 排序键
+
+    rows = sorted(rank_rows(by, what), key=lambda r: -r[sort])
+    size = PAGE_BLOCKS
+    p = clamp_p(q, len(rows), size)
+    shown = rows[p * size:(p + 1) * size]
+    total_tok = sum(r["token"] for r in rows)
+    total_cnt = sum(r["count"] for r in rows)
+    mx = max((r[sort] for r in rows), default=0) or 1
+
+    def link(**kw):
+        d = {"by": by, "what": what, "sort": sort}
+        d.update(kw)
+        return esc("/rank?" + urlencode(d))
+
+    def tabs(opts, cur, key):
+        return "".join('<a class="btn %s" href="%s">%s</a>' %
+                       ("on" if k == cur else "", link(**{key: k}), lab)
+                       for k, lab in opts)
+
+    prefix = "≈ " if what == "block" else ""
+    body = kpi([("分组数", nfmt(len(rows))),
+                ("token 合计", prefix + kh(total_tok)),
+                ("次数合计", nfmt(total_cnt)),
+                ("当前排序", {"token": "token 数", "count": "次数",
+                             "product": "二者乘积"}[sort])])
+    if what == "call":
+        note = ("统计对象是<b>调用</b>：token 为接口 <code>rawUsage.prompt_tokens</code> "
+                "的真实输入量，次数为调用数。按日期分组直接读索引里的 <code>days</code> "
+                "（每次调用按真实发生日落桶），不额外遍历全文。")
+    else:
+        note = ("统计对象是<b>上下文块</b>：token 为「块估算 token × 被携带次数」的累计"
+                "（<b>≈ 估算</b>，非官方 tokenizer、非真实账单），次数为被携带总次数。"
+                "一个块反复出现在后续请求的上下文里，累计量就会累积——这也是"
+                "「成本最高的块」排名的口径。")
+    body += ('<div class="note">%s「乘积」= token 合计 × 次数合计，是排序用的综合热度，'
+             '不是物理量；末列占比按当前排序键归一化到该维度的最大值。</div>' % note)
+    body += ('<div class="tabs"><b>分组</b>%s</div>' %
+             tabs((("session", "按会话"), ("day", "按日期")), by, "by"))
+    body += ('<div class="tabs"><b>对象</b>%s</div>' %
+             tabs((("call", "调用"), ("block", "上下文块")), what, "what"))
+    body += ('<div class="tabs"><b>排序</b>%s</div>' %
+             tabs((("token", "按 token"), ("count", "按次数"),
+                   ("product", "按乘积")), sort, "sort"))
+    cols = "52px 1fr 118px 96px 108px 62px"
+    body += ('<div class="row" style="grid-template-columns:%s">'
+             '<span class="idx">#</span><span class="grow">分组</span>'
+             '<span class="num">token</span><span class="num">次数</span>'
+             '<span class="num">乘积</span><span class="num">占比</span></div>' % cols)
+    for n, r in enumerate(shown, p * size + 1):
+        label = (('<a href="/s/%s">%s</a>' % (esc(r["sid"]), esc(r["label"][:52])))
+                 if r["sid"] else esc(r["label"]))
+        body += ('<div class="row" style="grid-template-columns:%s">'
+                 '<span class="idx">#%d</span><span class="grow">%s</span>'
+                 '<span class="num">%s%s</span><span class="num">%s</span>'
+                 '<span class="num credit">%s</span><span class="num">%.0f%%</span></div>' %
+                 (cols, n, label, prefix, kh(r["token"]), nfmt(r["count"]),
+                  kh(r["product"]), r[sort] / mx * 100))
+    # 分页链接用回落后的白名单值，别把 URL 里的非法 by/what/sort 继续传下去。
+    body += pager("/rank", {"by": [by], "what": [what], "sort": [sort]},
+                  p, size, len(rows), "组")
+    body += ('<div class="tabs"><a class="btn" href="/stats">← 全局统计</a>'
+             '<a class="btn" href="/">← 回索引</a></div>')
+    return page("统计与排序", [("索引", "/"), ("统计与排序", "")], body,
+                sub="按会话 / 日期聚合调用与块 · 可选 token / 次数 / 乘积排序 · 零脚本")
 
 
 def v_api_doc(q):
@@ -3538,7 +3735,9 @@ def A(route, doc, sample):
 # 新增端点只需在此加一行；sample 里的 {sid} 由自检脚本替换成真实会话 id。
 ROUTE_SPEC = [
     H(r"^/$", lambda q, m: v_index(q), "GET /", "会话索引，按工作区分组", "/"),
-    H(r"^/stats$", lambda q, m: v_stats(q), "GET /stats", "跨会话全量聚合、最贵调用与最大块", "/stats"),
+    H(r"^/stats$", lambda q, m: v_stats(q), "GET /stats", "跨会话全量聚合、最贵调用 / 最贵块与最大块", "/stats"),
+    H(r"^/rank$", lambda q, m: v_rank(q),
+      "GET /rank?by=&what=&sort=&p=", "按会话 / 日期统计调用与块，按 token / 次数 / 乘积排序", "/rank"),
     H(r"^/api$", lambda q, m: v_api_doc(q), "GET /api", "API 文档", "/api"),
     H(r"^/search$", lambda q, m: v_search(q), "GET /search?q=&scope=", "全文搜索（跨会话）", "/search?q=token"),
     H(r"^/find$", lambda q, m: v_find(q), "GET /find?q=&p=", "按块精确检索（跨会话）", "/find?q=token"),

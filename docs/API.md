@@ -3,14 +3,16 @@
 面向数据分析脚本、Notebook 与 BI 取数。网页版 `/api` 页是给人看的接口清单，本文补充
 **字段字典、量纲、取数范式与扩展性说明**。
 
-> **适用范围**：`v1.2.0` 及以上（分析端点自该版本起进入 Release）。更早版本只有
-> 17 个端点、没有 `/api/analytics/calls`；任何版本都以服务自身的 `/api` 页为实时清单。
+> **适用范围**：`v1.2.0` 及以上（分析端点自该版本起进入 Release）。v1.2.0 是
+> 18 个 HTML 页面 / 18 个 JSON 端点；其后的改动新增 `/rank` 页面与
+> `/api/stats.costly_blocks`（19 页 / 18 端点，见 §6）。更早版本只有 17 个端点、
+> 没有 `/api/analytics/calls`；任何版本都以服务自身的 `/api` 页为实时清单。
 
 ---
 
 ## 1 先理解一件事：JSON 不是前端的数据源
 
-项目是**零 JavaScript 的服务端渲染**：18 个 HTML 页面由服务端直接算好、拼成完整网页
+项目是**零 JavaScript 的服务端渲染**：19 个 HTML 页面由服务端直接算好、拼成完整网页
 吐给浏览器，页面里所有 `/api` 链接都是给人点开核对的 `<a href>`，没有 `fetch` / AJAX。
 
 所以：
@@ -195,6 +197,13 @@ by_model = df.groupby("model").agg(
 （同一模型出现三种大小写），现已与新端点、`/api/sessions` **统一为全库唯一展示名**；
 没有模型名的调用由字面量 `"?"` 收敛为空串。按 `model` 分组不会再裂成多份。
 
+另外 `/api/stats` 多一个 `costly_blocks` 数组（最多 20 条，元素含 `sid` / `idx` /
+`kind` / `label` / `est` / `users` / `cost`）：`est` 是**估算** token，`users` 是携带过
+该块的调用数，`cost = est * users`。它排的是「重复携带的累计量」，不是账单；
+口径见 README「已知限制」23。块级 `ts` / `e` 目前只供 HTML 展示，
+`.../calls/<seq>/context` 与 `.../blocks/<idx>` 的返回结构并未改变，
+分析程序不必为此改解析代码。`/rank` 是纯 HTML 页面，没有对应的 JSON 端点。
+
 ---
 
 ## 7 已知口径与坑
@@ -216,7 +225,7 @@ by_model = df.groupby("model").agg(
 
 ## 8 规划中（尚未实现）
 
-以下都在同一套信封 / 分页 / `ROUTE_SPEC` 下扩展，不需要改动 18 个 HTML 路由。
+以下都在同一套信封 / 分页 / `ROUTE_SPEC` 下扩展，不需要改动 19 个 HTML 路由。
 先落地宽表这一小步，是为了覆盖大部分取数需求，同时把范围控制住：
 
 | 端点 | 用途 |
@@ -300,3 +309,4 @@ by_model = df.groupby("model").agg(
 | 日期 | 变更 |
 | --- | --- |
 | 2026-11-09 | 新增 `/api/analytics/calls` 扁平宽表（`from/to/model/ws/tool/fields` + 分页）；`call_brief()` 模型名归一、`?` → 空串；`ROUTE_SPEC` 18 个 JSON 端点；固化自检 113 → 127 项 |
+| 2026-11-09（未发布） | `/api/stats` 新增 `costly_blocks`（估算 token × 被携带次数）；HTML 页面增至 19 个（新增 `/rank`，纯页面无对应 JSON 端点），JSON 端点仍 18 个；块级 `ts` / `e` 仅供 HTML 展示，原有块端点返回结构不变；自检 127 → 144 项 |

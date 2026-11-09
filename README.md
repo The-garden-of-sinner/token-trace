@@ -324,7 +324,8 @@ tar 成员与 gzip 容器头的 `mtime` 都固定为 0（`GzipFile(..., mtime=0)
 | 路由 | 内容 |
 | --- | --- |
 | `/` | 会话索引；`?sort=mtime\|credit\|calls`、`?ws=`、`?refresh=1` |
-| `/stats` | 跨会话聚合、最贵 20 次调用、最大 20 个块、冷启动断点 |
+| `/stats` | 跨会话聚合、最贵 20 次调用、最大 20 个块、**成本最高的 20 个块**（≈ 估算 token × 被携带次数）、冷启动断点 |
+| `/rank?by=&what=&sort=&p=` | **统计与排序**：按会话 / 日期分组统计调用或上下文块，按 token / 次数 / 二者乘积排序；`by=session\|day`、`what=call\|block`、`sort=token\|count\|product` |
 | `/search?q=&scope=&mode=` | 全文搜索；`scope=blocks\|outputs\|turns\|all`；`mode=blocks` 由服务端转交按块检索；会话内为 `/s/<sid>/search` |
 | `/find?q=&p=` | **按块精确检索**（跨会话）；`/s/<sid>/find?q=` 为会话内；也可从搜索框切「按块匹配」进入 |
 | `/tools?tool=&view=&q=&p=` | **工具与命令聚合**；`view=tools\|progs` 切换，`tool=` 下钻到该工具全部调用；会话内为 `/s/<sid>/tools` |
@@ -573,7 +574,8 @@ token（按 `providerData.model` 分组，展示名取全库得票最多的写�
 | `call_state(d, seq, i)` | 第 seq 次调用里第 i 块是命中 / 未命中 / 跨边界 | **O(1)**，用前缀和比边界，不展开上下文 |
 | `call_outline(d, seq)` | 本次带上几块 / 多少字 / 命中比例 / 边界落在第几块 | 边界用 `bisect` 定位 |
 | `block_users(d, idx)` | 哪些调用带上了这个块 | `bisect_right(ctxns, idx)` |
-| `global_stats()` | 跨会话聚合、最贵调用、最大块、冷启动断点、单价 | 内存遍历一次 |
+| `block_use_counts(d)` | 一次算出**每个块**被多少调用携带（区间差分 + 前缀和） | **O(B + C)**，替代逐块两次二分 `O(B log C)`；本机 3906 块实测 3.6 ms vs 43 ms |
+| `global_stats()` | 跨会话聚合、最贵调用、最贵块 / 最大块、冷启动断点、单价 | 内存遍历一次 |
 | `search()` | 940 万字原文里找关键词，返回片段与跳转链接 | `re.compile(escape(q), I)` 直接扫原文，不复制小写副本 |
 
 **前端：为什么最终渲染得很少。** 浏览器只做三件事：显示 HTML、点链接、原生
@@ -649,20 +651,20 @@ token（按 `providerData.model` 分组，展示名取全库得票最多的写�
 
 ### 维护：路由声明与自检
 
-`trace_server.py` 里的 `ROUTE_SPEC` 是 **34 条**（17 HTML + 17 JSON）路由 / 端点的单一事实源。
+`trace_server.py` 里的 `ROUTE_SPEC` 是 **37 条**（19 HTML + 18 JSON）路由 / 端点的单一事实源。
 每条声明带 `pattern`（HTML 正则）、`view`（处理函数）、`route`（文档路径）、
 `doc`（说明）与 `sample`（自检样例）；`HTML_ROUTES` 分发表和 `/api` 文档页的两张表
 都从它生成。新增端点只需加一行，不会再出现「页面能开但文档没写」或反过来。
 
 ```bash
-python3 -B scripts/selftest.py                    # 127 项检查
+python3 -B scripts/selftest.py                    # 144 项检查
 TRACE_TEST_PORT=8901 python3 -B scripts/selftest.py
 ```
 
 自检脚本起临时服务（默认 8899）后依次核对：声明无重复且与分发逐条一致、
-全部 view 可调用、18 个 HTML 路由的状态码 / 单页 ≤ 80 KB / 严格零脚本
+全部 view 可调用、19 个 HTML 路由的状态码 / 单页 ≤ 80 KB / 严格零脚本
 （`<script>`、内联事件、`javascript:`、外链资源与 `<link>` 全为 0）/ 页脚体积与
-实际响应一致、17 个 API 的 `{ok:true}` 信封、`/api` 文档覆盖全部声明、
+实际响应一致、18 个 API 的 `{ok:true}` 信封、`/api` 文档覆盖全部声明、
 **压缩感知专项**（方向一致、旧块仍可打开、区间外返回 `None`、
 真实 `pin` 不受影响、未压缩会话 `vf` 全 0）、7 个分页路由 `p=999` 不出现空表、
 首页放大索引 33 / 132 / 400 会话均 ≤ 80 KB、空库首页样式完整、
@@ -670,7 +672,7 @@ TRACE_TEST_PORT=8901 python3 -B scripts/selftest.py
 运行期零写盘与 `write_files=false`。结束自动 `POST /shutdown` 退出，
 有失败返回 1。分页统一走 `clamp_p()`，与 `pager()` 同步夹取页码。
 
-实测本机一次跑完 **127 项全绿**，18 条 HTML 路由全部 200、零脚本，最大单页 67.1 KB（80 KB 硬闸内）。
+实测本机一次跑完 **144 项全绿**，19 条 HTML 路由全部 200、零脚本，最大单页 64.1 KB（`/search?q=token`，80 KB 硬闸内）。
 其中「真实累计输入 token」一项改为在主进程独立累加 `rawUsage` 原值后与 `build()` 结果比对：
 早期版本拿服务子进程与主进程的两次解析互比，遇到会话文件正在写入时会偶发误报，
 现在既不受数据漂移影响，也真正验证了「压缩修正没有改动真实账单」。
@@ -1002,6 +1004,13 @@ p95 回落到 16.8 ms；run1 的 P/S 低帧是脚本在冷加载末尾强制 `ca
     超过 256 个会话时超出部分仍走 LRU，`/stats` 每次请求会重新解析它们（单次约
     0.1–0.7 s/会话，线性而非二次退化）；此时可用 `--cache` 显式调大，代价是内存
     （单会话约 1.5 MB）。这是「内存上限」与「全库统计速度」之间的取舍，不是缺陷。
+23. **块级 token 是估算，不是官方 tokenizer**：块全文页、块清单悬停提示与「成本最高的块」
+    里的 `≈ N token` 由 `gen_trace.est_tokens()` 给出 —— CJK 每字记 1 token、其余字符
+    每 4 个字符记 1 token，解析期算一次存进块对象。它只用于展示与排序，**不能当账单**：
+    真实计费还受系统提示、工具 schema、BPE 切分与缓存命中影响。「成本最高的块」=
+    估算 token × 被携带次数，衡量**重复携带的累计量**而非某次请求的真实输入量；
+    `/api/stats` 的 `costly_blocks` 是同一口径。块的时间戳取该块写入上下文那行 jsonl 的
+    `timestamp`，与调用时间不是一回事；`/rank` 按日期统计块时也用它落桶。
 
 ---
 

@@ -625,6 +625,57 @@ def main():
               and len(json.loads(b7)["data"]) <= T.ANALYTICS_MAX_LIMIT,
               "limit 超上限被夹到 %d" % T.ANALYTICS_MAX_LIMIT)
 
+        print("== 块时间戳 / 估算 token / 成本排名 ==")
+        d0 = T.STORE.get(sid)
+        check(all("ts" in b and "e" in b for b in d0["ctx"]),
+              "解析期给每个块写入 ts 与估算 token e（%d 块）" % len(d0["ctx"]))
+        check(T.G.est_tokens("你好世界") == 4
+              and T.G.est_tokens("a" * 100) == 25,
+              "估算口径：CJK 1 字 ≈1 token，ASCII 4 字 ≈1 token")
+        check(T.block_use_counts(d0) ==
+              [len(T.block_users(d0, i)) for i in range(len(d0["ctx"]))],
+              "差分 block_use_counts 与逐块二分完全一致")
+        hb = T.v_block({}, sid, 0)
+        check("写入时间" in hb and "估算 token" in hb and "≈" in hb,
+              "块全文页 KPI 显示时间戳与 ≈ 估算 token")
+        cb = T.global_stats()["costly_blocks"]
+        check(len(cb) == 20
+              and all(cb[i]["cost"] >= cb[i + 1]["cost"] for i in range(19))
+              and all(x["cost"] == x["est"] * x["users"] for x in cb),
+              "最贵的块按「估算 token × 被携带次数」降序（20 条）")
+
+        print("== 统计排序 /rank ==")
+        for by in ("session", "day"):
+            for what in ("call", "block"):
+                st, body = get("/rank?by=%s&what=%s" % (by, what))
+                check(st == 200 and b"<script" not in body
+                      and len(body) <= MAX_HTML,
+                      "/rank by=%s what=%s 200 / 零脚本 / 未越 80KB" % (by, what))
+        h = T.v_rank({"by": ["../../x"], "what": ["<script>"],
+                      "sort": ["x"], "p": ["999999"]})
+        check("<script" not in h and "按 token" in h and "按会话" in h
+              and 'class="pager"' in h,
+              "非法 by/what/sort 与越界分页回落白名单，不回显注入串")
+        for sk in ("token", "count", "product"):
+            rr = sorted(T.rank_rows("day", "call"), key=lambda r: -r[sk])
+            check(all(rr[i][sk] >= rr[i + 1][sk] for i in range(len(rr) - 1)),
+                  "按 %s 排序结果单调不增（%d 组）" % (sk, len(rr)))
+        srows = T.rank_rows("session", "block")
+        check(sum(r["token"] for r in srows) > 0
+              and all(r["product"] == r["token"] * r["count"] for r in srows),
+              "块统计口径自洽：乘积 = token 合计 × 次数合计（%d 组）"
+              % len(srows))
+        before = T.rank_rows("day", "call")
+        T.STORE.sessions(refresh=True)
+        after = T.rank_rows("day", "call")
+        check(after is not before and len(after) > 0,
+              "索引刷新后聚合重算，缓存不误命中复用的 id")
+        hj = T.v_rank({"by": ["<script>"], "what": ["x"],
+                       "sort": ["y"], "p": ["1"]})
+        check("%3Cscript" not in hj and "by=session" in hj
+              and "sort=token" in hj and "what=call" in hj,
+              "分页链接改用白名单值，不继续传播原始非法参数")
+
         print("== 运行期零写盘 ==")
         check(not os.path.isdir(os.path.join(ROOT, "__pycache__")),
               "项目目录无 __pycache__")

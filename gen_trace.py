@@ -38,6 +38,21 @@ def _ms(v):
     return int(x) if x == int(x) else x
 
 
+_CJK_RE = re.compile(
+    r"[\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff\U00010000-\U0010ffff]")
+
+
+def est_tokens(s):
+    """粗略估算原文 token 数：CJK 按 1 字 ≈ 1 token，其余按 4 字符 ≈ 1 token。
+
+    只用于展示与排序，页面统一带 ``≈`` 标注，**不冒充官方 tokenizer**（见 README
+    已知限制）。在 push() 时算一次存进块对象，避免长块在每次渲染时重复扫全文。
+    """
+    cjk = sum(1 for _ in _CJK_RE.finditer(s))
+    other = len(s) - cjk
+    return cjk + (other + 3) // 4
+
+
 def day_key(v):
     """把一条 jsonl 记录的 timestamp 换成本地日期 YYYY-MM-DD，无效值返回空串。
 
@@ -313,7 +328,12 @@ def build(path, full=False):
         return s if full else clip(s)
 
     def push(kind, label, text, cmd=""):
-        ctx.append({"k": kind, "l": label, "n": len(text), "t": keep(text), "c": cmd})
+        # ts / e 随块一起存：ts 是这条消息写入上下文的时间（当前行的 timestamp），
+        # e 是原文 token 估算。两者都只算一次，供块全文页、最贵块排名与按时间
+        # 统计复用；调用处全在下面的 for d in rows 循环内，d 必定已绑定。
+        ctx.append({"k": kind, "l": label, "n": len(text), "t": keep(text),
+                    "c": cmd, "ts": _ms(d.get("timestamp")),
+                    "e": est_tokens(text)})
 
     def usage_of(d):
         prov = d.get("providerData") or {}
