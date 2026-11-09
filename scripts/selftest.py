@@ -376,6 +376,35 @@ def main():
         check(bool(rel2.get("agent-5")) and rel2["agent-5"][0]["id"] == "agent-6",
               "嵌套子代理挂到直接父级（子会话也可作为父）")
 
+        print("== 首页：子代理树状隶属 ==")
+        _b = _sess(0)
+        _p = dict(_b, id="main-tree", ws="D:/ws/main", title="主会话",
+                  agent_reqs=["req-t"], agent_calls=[], is_sub=False,
+                  mtime=time.time())
+        _k = dict(_b, id="agent-tree", ws="subagents", title="(无标题)",
+                  is_sub=True, root="req-t", agent="general-purpose",
+                  first_ts=0, agent_reqs=[], agent_calls=[],
+                  mtime=time.time() - 60)
+        try:
+            T.STORE = _FakeStore([_p, _k])
+            h = T.v_index({})
+            check('<details class="subtree"' in h
+                  and h.count('class="row subagent child"') == 1,
+                  "同页父子收编为可折叠子树，子代理行缩进挂载")
+            check("派生自「主会话」" in h and "由本会话派生" in h,
+                  "子树与子行双向标明隶属关系")
+            check("含 1 个子代理" in h and "1 个子代理" in h,
+                  "分组标题与父行 chip 都标出子代理数量")
+            check("<summary>subagents" not in h,
+                  "子代理不再单独占一个工作区分组")
+            check("<script" not in h and len(h.encode("utf-8")) <= MAX_HTML,
+                  "子树仍是零脚本且未越过 80 KB")
+            h2 = T.v_index({"ws": ["subagents"]})
+            check("未能定位父级" in h2,
+                  "筛选掉父会话后，子代理行仍标注未能定位父级")
+        finally:
+            T.STORE = orig_store
+
         print("== 首页：脏时间戳不再 500 ==")
         dirty = [dict(x) for x in T.STORE.sessions()[:3]]
         dirty[0] = dict(dirty[0], agent_calls=["1780000000000"], agent_reqs=[],

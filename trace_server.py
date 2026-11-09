@@ -928,6 +928,17 @@ a:focus-visible,button:focus-visible,summary:focus-visible{outline:2px solid var
 .chip.ks{background:var(--part-bg);color:var(--part-fg)}
 .chip.km{background:var(--accent-bg);color:var(--accent-fg)}
 .row.subagent{border-left:2px solid var(--p3)}
+/* 首页子代理树：父行下缩进挂载，纯 details 折叠，零脚本 */
+.subtree{margin:2px 0 7px 16px;padding-left:14px;border-left:1px solid var(--line2)}
+.subtree>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:8px;font-size:10.5px;color:var(--faint);padding:3px 0 5px}
+.subtree>summary::-webkit-details-marker{display:none}
+.subtree>summary .st-n:before{content:"▸ ";color:var(--p3)}
+.subtree[open]>summary .st-n:before{content:"▾ "}
+.subtree>summary .st-h{margin-left:auto}
+.subtree[open]>summary .st-h{font-size:0}
+.subtree[open]>summary .st-h:after{content:"收起";font-size:10px}
+.subtree .row.subagent{margin-bottom:3px;background:var(--panel2)}
+.subtree .row .branch{color:var(--p3);font-weight:600;margin-right:6px}
 .row .grow>.chip{margin-right:7px;vertical-align:1px}
 .note .chip{margin-right:9px;vertical-align:1px}
 .cmd{display:block;font:11px/1.5 ui-monospace,"Noto Sans Mono CJK SC",monospace;color:var(--muted);word-break:break-all;margin-top:3px}
@@ -2096,10 +2107,20 @@ def v_index(q):
                 ("累计输出 tok", nfmt(sum(s["pout"] for s in ss)))],
                 fs=21, pad=42) +
             index_overview(ss) + '</div>')
-    # 子代理不再单独占用一块高度：关系已在下方会话列表里以「子代理 · Explore」
-    # /「N 个子代理」标签体现，避免把列表挤到首屏之外。
-    rel, _unmatched = subagent_relations(ss)
+    # 子代理关系用全量 shown 算（父在第 1 页、子在第 2 页时也能标出归属）。
+    # 同一页内的父子在会话列表里收编成「父行 → 缩进子树」，不再各贴一个孤立
+    # chip 平铺在不同工作区分组里；跨页 / 未定位的行内注明父级。
+    rel, _unmatched = subagent_relations(shown)
     sub_count = {k: len(v) for k, v in rel.items()}
+    page_ids = set(s["id"] for s in page_items)
+    parent_of, children_of, nested_ids = {}, {}, set()
+    for p, kids in rel.items():
+        for k in kids:
+            parent_of[k["id"]] = p
+            if p in page_ids and k["id"] in page_ids:
+                children_of.setdefault(p, []).append(k)
+                nested_ids.add(k["id"])
+    ptitle = dict((s["id"], s["title"]) for s in shown)
     meta_warn = ""
     if any(not s.get("meta_ok", True) for s in ss):
         meta_warn = ('<div class="warn">workbuddy.db 未读到：会话标题与工作区已退回路径兜底；'
@@ -2133,6 +2154,8 @@ def v_index(q):
 
     groups = OrderedDict()
     for s in page_items:
+        if s["id"] in nested_ids:
+            continue                      # 已收编到父会话的子树，不再平铺一次
         groups.setdefault(s["ws"], []).append(s)
     # 分组标题按「该工作区的全部会话」统计，不能拿本页切片算：分页条写「共 60」，
     # 标题写「本页 40 个会话 · 40.0 分」，同一屏两套口径。工作区被分页切开时
@@ -2142,39 +2165,68 @@ def v_index(q):
         a = ws_stat.setdefault(s["ws"], [0, 0.0])
         a[0] += 1
         a[1] += s["credit"]
-    for name in sorted(groups, key=lambda w: -max(x["mtime"] for x in groups[w])):
-        items = groups[name]
-        cards = []
-        for s in items:
-            t = fmt_ts(s["mtime"], "%m-%d %H:%M", "")
-            if s.get("is_sub"):
-                tag = ('<span class="chip ks" title="子代理会话 · %s">子代理 · %s</span>' %
-                       (esc(s["agent"]), esc(s["agent"])))
-                rowcls = "row subagent"
-            elif sub_count.get(s["id"]):
-                n = sub_count[s["id"]]
-                tag = ('<span class="chip km" title="派生了 %d 个子代理会话">%d 个子代理</span>' %
-                       (n, n))
-                rowcls = "row"
-            else:
-                tag, rowcls = "", "row"
-            cards.append(
-                '<a class="%s" href="/s/%s" style="grid-template-columns:1fr 96px 108px 92px 92px 82px 70px">'
-                '<span class="grow">%s<b style="font-weight:500">%s</b>'
-                '<span class="fine" style="display:block">%s · %s</span></span>'
+
+    def session_row(s, tag, rowcls, note="", branch=False, title=None):
+        """会话列表一行；note 追加在第二行说明里，branch 画树状连接符。"""
+        t = fmt_ts(s["mtime"], "%m-%d %H:%M", "")
+        br = '<span class="branch">└</span>' if branch else ""
+        label = title if title is not None else s["title"]
+        return ('<a class="%s" href="/s/%s" style="grid-template-columns:1fr 96px 108px 92px 92px 82px 70px">'
+                '<span class="grow">%s%s<b style="font-weight:500">%s</b>'
+                '<span class="fine" style="display:block">%s · %s%s</span></span>'
                 '<span class="num">%d 轮</span><span class="num">%d 次调用</span>'
                 '<span class="num">in %s</span><span class="num">out %s</span>'
                 '<span class="num credit">%.1f 分</span>'
                 '<span class="num">%s</span></a>' %
-                (rowcls, esc(s["id"]), tag, esc(s["title"][:70]),
-                 esc(s["id"][:8]), esc(s["model"] or "?"),
+                (rowcls, esc(s["id"]), br, tag, esc(label[:70]),
+                 esc(s["id"][:8]), esc(s["model"] or "?"), note,
                  s["turns"], s["calls"], "%.1fM" % (s["pin"] / 1e6),
                  "%.0fk" % (s["pout"] / 1000), s["credit"], t))
+
+    def sub_row(k, parent, nested):
+        tag = ('<span class="chip ks" title="子代理会话 · %s">子代理 · %s</span>' %
+               (esc(k["agent"] or "?"), esc(k["agent"] or "?")))
+        title = "派生子代理" if k["title"] == "(无标题)" else None
+        if nested:
+            note = ' · 派生自「%s」' % esc(cut(parent["title"], 20))
+            return session_row(k, tag, "row subagent child", note, True, title)
+        par = parent_of.get(k["id"])
+        if par:
+            note = ' · 派生自「%s」（父级不在本页）' % esc(cut(ptitle.get(par, "?"), 18))
+        else:
+            note = " · 未能定位父级"
+        return session_row(k, tag, "row subagent", note, False, title)
+
+    def sub_tree(kids, parent, total_n):
+        more = (" · 另有 %d 个在其它页" % (total_n - len(kids))) if total_n > len(kids) else ""
+        rows = "".join(sub_row(k, parent, True) for k in kids)
+        return ('<details class="subtree"%s><summary>'
+                '<span class="st-n">由本会话派生%s</span>'
+                '<span class="st-h">展开</span></summary>'
+                '<div class="in">%s</div></details>' %
+                (" open" if len(kids) <= 3 else "", more, rows))
+
+    for name in sorted(groups, key=lambda w: -max(x["mtime"] for x in groups[w])):
+        items = groups[name]
+        cards = []
+        for s in items:
+            kids = children_of.get(s["id"]) or []
+            if s.get("is_sub"):
+                cards.append(sub_row(s, None, False))
+            else:
+                n = sub_count.get(s["id"], 0)
+                tag = ('<span class="chip km" title="派生了 %d 个子代理会话">%d 个子代理</span>' %
+                       (n, n)) if n else ""
+                cards.append(session_row(s, tag, "row"))
+                if kids:
+                    cards.append(sub_tree(kids, s, n))
         n_all, cr_all = ws_stat.get(name) or (len(items), sum(s["credit"] for s in items))
         part = "" if len(items) >= n_all else " · 本页 %d" % len(items)
-        body += ('<details class="grp" open><summary>%s<small>%d 个会话 · %.1f 分%s</small></summary>'
+        n_kids = sum(len(children_of.get(s["id"]) or []) for s in items)
+        kid_note = " · 含 %d 个子代理" % n_kids if n_kids else ""
+        body += ('<details class="grp" open><summary>%s<small>%d 个会话 · %.1f 分%s%s</small></summary>'
                  '<div class="in">%s</div></details>' %
-                 (esc(name), n_all, cr_all, part, "".join(cards)))
+                 (esc(name), n_all, cr_all, part, kid_note, "".join(cards)))
     if total_shown > PAGE_SESSIONS:
         body += pager("/", q, pg, PAGE_SESSIONS, total_shown, "个会话")
     # 元数据降级提示放在列表之后：它不影响会话列表本身，不该抢占首屏
