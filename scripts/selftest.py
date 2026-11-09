@@ -292,6 +292,61 @@ def main():
         check("未知模型" in ov and abs(sum(pcts) - 100) < 0.15,
               "models 之和小于 pin 时补「未知模型」残差，图例合计 %.1f%%" % sum(pcts))
 
+        print("== 全库画像：模型名变体归一 ==")
+        import gen_trace as G
+        k1, _ = G.model_bucket({"model": "deepseek-v4.1-flash",
+                                "requestModelName": "DeepSeek-V4.1-Flash"})
+        k2, _ = G.model_bucket({"model": "deepseek-v4.1-flash",
+                                "requestModelName": "Deepseek-V4.1-Flash"})
+        k3, _ = G.model_bucket({"requestModelName": "deepseek-v4.1-flash"})
+        check(k1 == k2 == k3 == "deepseek-v4.1-flash",
+              "model_bucket 按底层 ID 分组，三种展示名写法同组")
+        merged = G.merge_model_counter({"DeepSeek-V4.1-Flash": 500,
+                                        "Deepseek-V4.1-Flash": 200,
+                                        "deepseek-v4.1-flash": 50,
+                                        "Hy4": 200, "Hy4 preview": 50})
+        check(len(merged) == 3 and merged.get("DeepSeek-V4.1-Flash") == 750,
+              "merge 合并为 750 tok 并保留得票最多的展示名（%d 组）" % len(merged))
+        fake_vars = [{"id": "b", "ws": "D:/x/y", "title": "t",
+                      "model": "DeepSeek-V4.1-Flash",
+                      "models": {"DeepSeek-V4.1-Flash": 500,
+                                 "Deepseek-V4.1-Flash": 200,
+                                 "deepseek-v4.1-flash": 50,
+                                 "Hy4": 200, "Hy4 preview": 50},
+                      "mtime": time.time(), "calls": 5, "turns": 3,
+                      "pin": 1000, "pout": 10, "credit": 0.1}]
+        ov2 = T.index_overview(fake_vars)
+        names = re.findall(r'<span class="g">(.*?)</span>', ov2)
+        ds = [n for n in names if "flash" in n.lower()]
+        check(len(ds) == 1, "首页构成环里同一模型只出现 1 项（%s）" % ds)
+        check(any(n.strip() == "Hy4" for n in names)
+              and any("Hy4 preview" in n for n in names),
+              "归一不会把 Hy4 与 Hy4 preview 误并")
+        pcts2 = [float(x) for x in re.findall(r"<em>([\d.]+)%</em>", ov2)]
+        check(abs(sum(pcts2) - 100) < 0.15,
+              "归一后图例合计仍为 100%%（%.1f%%）" % sum(pcts2))
+        big = 10340000000
+        fake_big = [{"id": "c", "ws": "D:/x/y", "title": "t", "model": "m",
+                     "models": {"m": big}, "mtime": time.time(), "calls": 1,
+                     "turns": 1, "pin": big, "pout": 1, "credit": 0.1}]
+        ov3 = T.index_overview(fake_big)
+        ctr = re.search(r'<div class="ctr"><b style="font-size:([\d.]+)px">([^<]*)</b>', ov3)
+        check(ctr is not None and float(ctr.group(1)) < 12.0
+              and len(ctr.group(2)) >= 8,
+              "环心 8 字符数字收到 %s px，不压环" % (ctr.group(1) if ctr else "缺失"))
+        try:
+            idx = G.scan_all()
+            prim = set(s["model"] for s in idx if s.get("model"))
+            keys = set()
+            for s in idx:
+                keys.update(s.get("models") or {})
+            check(len(prim) == len(set(G.canon_model(x) for x in prim))
+                  and len(keys) == len(set(G.canon_model(x) for x in keys)),
+                  "scan_all 索引层全库同名：%d 个主模型 / %d 个 models 键无变体"
+                  % (len(prim), len(keys)))
+        except Exception as e:
+            check(False, "scan_all 索引层全库同名（异常 %s）" % type(e).__name__)
+
         print("== 子代理关系推断 ==")
 
         def _sm(sid, **kw):

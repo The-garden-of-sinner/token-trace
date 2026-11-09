@@ -116,6 +116,52 @@ def iter_rows(path, stats=None):
                     stats["skipped"] += 1
 
 
+def canon_model(s):
+    """模型名归一：大小写不敏感，把 _ / 空格 / 连续 - 折叠成单个 -。
+
+    只用于分组，不改变最终展示给人的写法。
+    """
+    return re.sub(r"[-_\s]+", "-", str(s or "").strip().lower())
+
+
+def model_bucket(pd):
+    """从 providerData 取 (稳定分组键, 展示名)。
+
+    providerData.model 是稳定的底层模型 ID（小写、规范），requestModelName
+    是随客户端版本变化的展示名：同一个 deepseek-v4.1-flash 在本库里就写过
+    DeepSeek-V4.1-Flash / Deepseek-V4.1-Flash / deepseek-v4.1-flash 三种。
+    早期直接拿展示名当聚合键，会把一个模型拆成多份 —— 首页「按模型」构成环
+    上同一模型出现三次，看起来像重复计数。有 model 时以它为分组键；
+    老数据没有 model 时退回归一后的展示名。
+    """
+    mid = str(pd.get("model") or "").strip()
+    disp = str(pd.get("requestModelName") or "").strip()
+    if mid:
+        return canon_model(mid), (disp or mid)
+    if disp:
+        return canon_model(disp), disp
+    return "", ""
+
+
+def merge_model_counter(counter):
+    """合并同一模型的命名变体，展示名取输入 token 最多的那种写法。
+
+    scan_all 已在解析层归一；服务端展示层再调一次，是为了兼容旧索引缓存、
+    外部构造的 sessions，以及 Windows 端可能写入的其它大小写变体。
+    """
+    groups = {}
+    for name, val in counter.items():
+        key = canon_model(name) or "未知模型"
+        g = groups.setdefault(key, {"total": 0, "votes": {}})
+        g["total"] += val
+        g["votes"][name] = g["votes"].get(name, 0) + val
+    out = {}
+    for g in groups.values():
+        label = max(g["votes"], key=g["votes"].get)
+        out[label] = out.get(label, 0) + g["total"]
+    return out
+
+
 def seg_user(text):
     injected = [m.group(1).strip() for m in SR.finditer(text)]
     return SR.sub("", text).strip(), injected
@@ -720,6 +766,9 @@ def scan_all():
               % (db, type(e).__name__, e), file=sys.stderr)
 
     out = []
+    # 全库展示名投票：不能按会话各自投票，否则同一模型在不同会话里会选出
+    # 不同写法，累加到首页又变回多份。所有会话共用同一张 key -> 展示名 表。
+    all_labels = {}
     seen = {}
     for f in iter_jsonl():
         sid = os.path.basename(f)[:-6]
@@ -730,7 +779,7 @@ def scan_all():
         turns = calls = 0
         credit = pin = pout = 0
         ai = ""
-        model_tokens = {}
+        model_tokens = {}   # 本会话：稳定分组键 -> 输入 token
         agent_votes = {}
         # 子代理是独立的 agent-* 会话文件，行内另有 providerData.isSubAgent 标记。
         # first_ts / rootRequestId / 主会话的 Agent 调用时间用于首页做关系推断。
@@ -770,22 +819,25 @@ def scan_all():
                 pin += pt
                 pout += ru.get("completion_tokens", 0)
                 credit += ru.get("credit") or 0
-                # 模型名直接从会话记录取：db 只负责补标题/工作区，db 不可读或
+                # 模型构成直接从会话记录取：db 只负责补标题/工作区，db 不可读或
                 # 会话中途换过模型时，仍能得到按输入 token 加权的真实构成。
-                m = pd.get("requestModelName") or pd.get("model") or ""
-                if m:
-                    model_tokens[m] = model_tokens.get(m, 0) + pt
+                # 用底层 model ID 分组、展示名单独投票，避免同一模型因大小写
+                # 写法不同被拆成多份（首页构成环的「重复计数」）。
+                key, label = model_bucket(pd)
+                if key:
+                    model_tokens[key] = model_tokens.get(key, 0) + pt
+                    if label:
+                        votes = all_labels.setdefault(key, {})
+                        votes[label] = votes.get(label, 0) + pt
             elif t == "ai-title" and not ai:
                 ai = d.get("aiTitle") or ""
         info = meta.get(sid, {})
-        primary_model = (max(model_tokens, key=model_tokens.get) if model_tokens
-                         else (info.get("model") or ""))
         out.append({
             "path": f, "id": sid,
             "ws": info.get("cwd") or os.path.basename(os.path.dirname(f)).replace("-", "/"),
             "title": info.get("title") or ai or "(无标题)",
-            "model": primary_model,
-            "models": model_tokens,
+            "model": info.get("model") or "",   # 循环后按全库统一结果重算
+            "models": dict(model_tokens),       # 暂存分组键，循环后统一换展示名
             "agent": max(agent_votes, key=agent_votes.get) if agent_votes else "cli",
             "is_sub": is_sub,
             "root": root,
@@ -797,6 +849,22 @@ def scan_all():
             "skipped": skipped["skipped"],
             "meta_ok": meta_ok,
         })
+    # 全库统一展示名：同一底层模型在所有会话、首页构成环、会话列表里都只
+    # 出现一次，且统一用得票最多的官方写法。不同分组键若展示名相同（老数据
+    # 缺 model 时按显示名分组），在这里自然合并。
+    best = dict((k, max(v, key=v.get)) for k, v in all_labels.items() if v)
+    for s in out:
+        named = {}
+        for key, tok in s["models"].items():
+            name = best.get(key, key)
+            named[name] = named.get(name, 0) + tok
+        s["models"] = named
+        if named:
+            s["model"] = max(named, key=named.get)
+        else:
+            # 没有模型名记录的会话退回 db 的 model，也统一到同一套展示名，
+            # 否则会话列表里会混进一个小写 ID，看起来又像「多了一个模型」。
+            s["model"] = best.get(canon_model(s["model"]), s["model"] or "")
     out.sort(key=lambda x: (x["ws"], -x["mtime"]))
     return out
 

@@ -1055,7 +1055,7 @@ CSS_VIZ = """
 @keyframes tt-pop{from{opacity:.55;transform:scale(.93)}to{opacity:1;transform:none}}
 @keyframes tt-arc{from{stroke-dasharray:0 100}}
 .donut-wrap .ctr{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:none}
-.donut-wrap .ctr b{font-size:16px;font-weight:600;line-height:1.2;font-variant-numeric:tabular-nums}
+.donut-wrap .ctr b{font-size:16px;font-weight:600;line-height:1.2;font-variant-numeric:tabular-nums;white-space:nowrap}
 .donut-wrap .ctr span{font-size:10px;color:var(--faint)}
 .slice{flex:1;min-width:200px}
 .slice .sl{display:flex;align-items:center;gap:7px;padding:3px 0;font-size:11.5px;border-bottom:1px solid var(--line2)}
@@ -1725,7 +1725,8 @@ def index_overview(ss):
 
     三种图都只消费 STORE.sessions() 已缓存的会话索引字段（models / model /
     mtime / ws / pin），不解析任何会话全文、不新增索引、不新增一次全库遍历。
-    模型名来自 jsonl 的 providerData，不依赖 workbuddy.db。
+    模型分组键来自 jsonl 的 providerData.model，不依赖 workbuddy.db；
+    展示名允许大小写变体，这里再兜一层归一合并（兼容旧索引缓存）。
     """
     if not ss:
         return ""
@@ -1742,6 +1743,10 @@ def index_overview(ss):
             by_model.update(mm)
         else:
             by_model[s["model"] or "未知模型"] += s["pin"]
+    # 同一模型的大小写/分隔符变体并到一组，展示名取输入 token 最多的写法。
+    # scan_all 已在解析层归一，这里再兜一层：兼容旧索引缓存、外部构造的
+    # sessions，以及 Windows 端可能写入的其它写法。
+    by_model = Counter(G.merge_model_counter(by_model))
     # 残差桶：少数调用有 prompt_tokens 却没写模型名，pin 进了 total 却进不了
     # by_model，环会画不满、图例百分比也不到 100%。显式归到「未知模型」，
     # 保证 sum(by_model) == sum(pin)。
@@ -1831,10 +1836,16 @@ def index_overview(ss):
     # 模型名取自会话 jsonl 的 providerData，与 workbuddy.db 是否可读无关；
     # 只有整库都没有模型名时才不画「未知模型 100%」这种无信息量的单色环。
     if by_model and not (len(by_model) == 1 and "未知模型" in by_model):
+        # 84px 小环内圈直径约 53px；"1034.1M" 这类 7 字符在 13px 下约 55px，
+        # 已经会压到环上（截图里首位数字被环盖住）。按字数收字号，保证任何
+        # 数据量都落在内圈里。
+        ctr_txt = kh(total)
+        ctr_fs = max(9.0, min(13.0, 13.0 * 6.0 / max(1, len(ctr_txt))))
         model_cell = ('<div class="donut-row"><div class="donut-wrap">%s'
-                      '<div class="ctr"><b>%s</b><span>tok</span></div></div>'
+                      '<div class="ctr"><b style="font-size:%.1fpx">%s</b>'
+                      '<span>tok</span></div></div>'
                       '<div class="slice">%s</div></div>' %
-                      (donut, kh(total), "".join(legend)))
+                      (donut, ctr_fs, ctr_txt, "".join(legend)))
     else:
         model_cell = '<div class="empty">会话记录未写模型名，此图暂不可用</div>'
 
@@ -1842,7 +1853,7 @@ def index_overview(ss):
             '<small>只读取已缓存的会话索引 · 输入 token 口径 · 无额外全库遍历</small></div>'
             '<div class="ovgrid">'
             '<div class="ovcell"><div class="ovt">按模型 · 输入 token</div>%s'
-            '<div class="fine ovnote">按 <code>providerData</code> 模型名聚合，输入 token 加权</div></div>'
+            '<div class="fine ovnote">按 <code>providerData.model</code> 分组（忽略展示名大小写），输入 token 加权</div></div>'
             '<div class="ovcell"><div class="ovt">按时间 · 输入 token</div>%s%s'
             '<div class="fine ovnote">按会话最后修改日落桶；同一天多个会话合并</div></div>'
             '<div class="ovcell"><div class="ovt">工作区 · 递归关系</div>%s'

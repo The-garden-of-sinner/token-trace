@@ -111,7 +111,7 @@
 - **命中块折叠**：调用详情里连续命中块默认折成一枚紧凑胶囊「#a–#b 块缓存命中」，展开时才铺成全宽标题条并拉出逐块清单；「按调用浏览」每行也带同样的折叠摘要；主动选「只看命中」时全部展开
 - **轮来源标签**：`role=user` 的消息并不都是你输入的。每轮标为「用户消息 / 后台任务 / 压缩摘要 / 系统注入 / 内部消息」，非真人输入显示可读摘要而不是整段 XML；会话页可按类别筛选，单轮详情也按来源改标题
 - **子代理标注**：子代理是独立的 `agent-*` 会话文件，会话列表直接给子代理与其派生主会话打标签（「子代理 · Explore」/「N 个子代理」），不再单独占一块关系面板，避免把列表挤到首屏之外；父子关系优先用子会话的 `rootRequestId` 精确匹配派发它的 `Agent` 调用，字段缺失时才退回 5 秒时间窗兜底
-- **首页全库画像**：按模型的输入 token 环（模型名取自 jsonl 的 `providerData`，不依赖 db）、按时间的输入 token 折线、工作区路径递归树（两级 + 占比条），只消费已缓存的会话索引
+- **首页全库画像**：按模型的输入 token 环（按 `providerData.model` 分组、忽略展示名大小写差异，不依赖 db）、按时间的输入 token 折线、工作区路径递归树（两级 + 占比条），只消费已缓存的会话索引
 - **同机互链**：服务端用一次 loopback `/api/ping`（150 ms 超时、结果缓存 15 s）判断同机的 WorkBuddy 用量监视是否在跑，在跑才在工具条与页脚放「实时用量 ↗」，没跑就不渲染——页面上不会出现死链；地址可用 `TRACE_MONITOR_URL` 改
 - **统一检索入口**：单行搜索区，左侧用零脚本分段开关切换「按字符匹配 / 按块匹配」并由服务端分流，输入框吃掉剩余宽度、按钮贴右；会话页入口改为无边框渐变卡片（分类色侧条）+ 分段浏览控件，次要链接降级
 - 缓存命中率统一显示到小数点后一位
@@ -553,7 +553,7 @@ python3 -B scripts/verify_compact.py 9367d786       # 只看某个会话
 
 **数据层：一次解析，全文常驻。** `Store.sessions()` 常驻会话索引（60 秒或
 `/?refresh=1` 失效），从 `workbuddy.db` 补 `cwd` / 标题，从 jsonl 补统计与按模型拆分的输入
-token（`providerData.requestModelName`）。db 不可读时只影响标题 / 工作区的兜底，
+token（按 `providerData.model` 分组，展示名取全库得票最多的写法）。db 不可读时只影响标题 / 工作区的兜底，
 模型环与所有 token 统计照常可用。
 `Store.get(sid)` 第一次访问某会话时调 `build(path, full=True)`，最大会话解析 0.69 s；
 `_derive()` 一次算好 `pref[]` 累积字数前缀和、`ctxns[]` 每次调用前的块数、
@@ -648,7 +648,7 @@ token（`providerData.requestModelName`）。db 不可读时只影响标题 / �
 都从它生成。新增端点只需加一行，不会再出现「页面能开但文档没写」或反过来。
 
 ```bash
-python3 -B scripts/selftest.py                    # 89 项检查
+python3 -B scripts/selftest.py                    # 96 项检查
 TRACE_TEST_PORT=8901 python3 -B scripts/selftest.py
 ```
 
@@ -818,12 +818,16 @@ p95 回落到 16.8 ms；run1 的 P/S 低帧是脚本在冷加载末尾强制 `ca
 | `~/.workbuddy/projects/**/*.jsonl` | 每次调用记录：消息、工具调用与结果、`providerData.rawUsage` |
 | `~/.workbuddy/workbuddy.db` | `sessions` 表提供 `cwd`、标题（仅用于展示；读不到时退回路径兜底） |
 
-**模型标识**：`providerData` 的 `model` / `requestModelId` / `requestModelName` 记录了每次
-调用的模型（本机出现过 `deepseek-v4.1-flash`、`hy4-free`、`step-5-preview`、
-`hy4-preview-f`、`hy3`）。`scan_all()` 在扫描 jsonl 时按输入 token 把每次调用归到
-`requestModelName`（缺省回退 `model`），首页「按模型 · 输入 token」环据此按调用拆分，
-会话中途换模型也能分别计入；会话列表显示该会话按 token 加权的主模型。`sessions` 表的
-模型名只作为整段会话都没有 `providerData` 时的兜底，因此 db 不可读不影响模型环。
+**模型标识**：`providerData.model` 是稳定的底层模型 ID（本机出现过
+`deepseek-v4.1-flash`、`hy4-free`、`step-5-preview`、`hy4-preview-f`、`hy3`），
+`requestModelName` 是随客户端版本变化的展示名 —— 同一个 `deepseek-v4.1-flash`
+在本机就写过 `DeepSeek-V4.1-Flash` / `Deepseek-V4.1-Flash` / `deepseek-v4.1-flash`
+三种。早期拿展示名当聚合键会把一个模型拆成三份，构成环看起来像重复计数。
+`scan_all()` 现在按输入 token 把每次调用归到归一的 `model`（老数据缺 `model` 时
+退回展示名），再全库投票选出得票最多的展示名统一显示；首页「按模型 · 输入 token」
+环据此拆分，会话中途换模型也能分别计入，同一模型不会因大小写差异被拆开。
+会话列表显示该会话按 token 加权的主模型。`sessions` 表的模型名只作为整段会话
+都没有 `providerData` 时的兜底，因此 db 不可读不影响模型环。
 口径提示：该环按**输入 token** 归因，不是按积分或调用次数；积分只对扣费模型非零。
 
 **一轮不等于一条真人提问**：`build()` 把每条 `type=message, role=user` 记为一轮，
@@ -932,8 +936,8 @@ p95 回落到 16.8 ms；run1 的 P/S 低帧是脚本在冷加载末尾强制 `ca
     系统提示与工具 schema 也不在可见块里，两者不能换算。
     另外压缩后的第一次调用常有 `pin=0`（并列调用，无独立 usage），
     校验表会自动取之后第一个带 usage 的调用，所以「压缩后调用号」可能不紧邻压缩点。
-13. **按模型拆分只做到首页画像这一层**：首页环按 `providerData` 的输入 token
-    分模型统计，会话列表只显示该会话的加权主模型；会话内 KPI、趋势与积分仍是
+13. **按模型拆分只做到首页画像这一层**：首页环按归一的 `providerData.model`
+    对输入 token 分模型统计，会话列表只显示该会话的加权主模型；会话内 KPI、趋势与积分仍是
     全模型合计，不提供按模型筛选会话或按模型拆分计费（见「数据来源与口径」）。
 14. **积分单价分 1× / 2× / 4× 三档**，且时段与策略会变；跨日比较单位成本前须先
     归一到同一档，`/stats` 的粗算单价不能当真实单价用（见「数据来源与口径」）。
@@ -968,8 +972,9 @@ p95 回落到 16.8 ms；run1 的 P/S 低帧是脚本在冷加载末尾强制 `ca
     列表同样按 40 条/页分页，单页体积与会话总数无关（放大索引 400 个会话仍 46.8 KB）。
     页脚「本页 HTML x KB」按**整页响应字节**计算（含内联 CSS 与 header），与 80 KB
     硬闸同口径。
-    首页「按模型」环的模型名来自 jsonl 的 `providerData`，与 `workbuddy.db` 是否
-    可读无关；只有整库都没有模型名时才显示空态，不画「未知模型 100%」的单色环。
+    首页「按模型」环按归一的 `providerData.model` 分组、展示名取全库得票最多的
+    写法，与 `workbuddy.db` 是否可读无关；只有整库都没有模型名时才显示空态，
+    不画「未知模型 100%」的单色环。
 19. **轮来源分类依赖客户端写入的字段**：判定用的是 `providerData.isCompacted` /
     `isMeta` / `startsNewUserRequest` 与 `<task-notification>` / `<cb_summary>` 标签。
     若客户端改了这些字段名或通知格式，未被识别的消息会落到「内部消息」或「用户消息」，
