@@ -416,9 +416,14 @@ def main():
               "全局统计两张卡片并排为左右两栏（viz2 容器）")
         check("@media(max-width:900px){.viz2{grid-template-columns:1fr}}" in st_html,
               "窄屏单列回退随 CSS_VIZ 注入 /stats（不只在首页的 CSS_INDEX 里）")
-        check("按模型 ID 分组" in T.index_overview(ss)
-              and "按每次调用实际发生日" in T.index_overview(ss),
-              "首页三栏备注已精简、时间备注改为真实日期口径")
+        ov = T.index_overview(ss)
+        check('class="fine ovnote"' not in ov
+              and "按模型 ID 分组" not in ov
+              and "按每次调用实际发生日" not in ov
+              and "右侧数字为会话数" not in ov,
+              "首页三栏下方的小字脚注已移除")
+        check(re.search(r"\d+ 个 parent 目录 · \d+ 个工作区 · \d+ 个会话", ov),
+              "递归关系摘要含 parent 目录 / 工作区 / 会话三项")
 
         print("== 子代理关系推断 ==")
 
@@ -752,7 +757,31 @@ def main():
                                           "cal": ["2026-10"],
                                           "calfield": ["from"]}),
               "日历翻页参数不参与筛选口径")
+        # 种类多选：逗号分隔多值是并集；下拉里逐项点选 / 取消，状态跟着 URL 回显
+        brows = T.rank_sorted("block", "token")
+        n_u = len(T.rank_filter("block", brows, "user", "", ""))
+        n_t = len(T.rank_filter("block", brows, "tool_result", "", ""))
+        n_both = len(T.rank_filter("block", brows, "user,tool_result", "", ""))
+        hmulti = T.v_rank({"what": ["block"], "k": ["user,tool_result"]})
+        check(n_both == n_u + n_t and "已选 2 类" in hmulti
+              and 'name="k" value="tool_result,user"' in hmulti,
+              "种类可多选组合，多值是并集且按规范顺序回显到表单")
+        # 默认排除压缩摘要块，cx=1 才纳入
+        hdef = T.v_rank({"what": ["block"]})
+        hcx = T.v_rank({"what": ["block"], "cx": ["1"]})
+        check("显示压缩摘要" in hdef and 'name="cx" value="1"' not in hdef
+              and hdef.count(">压缩摘要</b>") == 0,
+              "排行默认不纳入压缩摘要块")
+        check("隐藏压缩摘要" in hcx and 'name="cx" value="1"' in hcx
+              and hcx.count(">压缩摘要</b>") > 0,
+              "cx=1 可把压缩摘要块纳入排行")
+        # 块类型标签按类别配色，五类各一色
+        check(b".chip.bk0" in rbody and b".chip.bk4" in rbody
+              and b'class="chip t bk' in rbody,
+              "块类型标签按类别配不同颜色")
         st, stats_body = get("/stats")
+        check(b".viz2{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:stretch" in stats_body,
+              "全局统计两张卡片等高对齐，不再一高一低")
         hm_rule = re.search(rb"\.hm\{[^}]*\}", stats_body)
         check(st == 200 and hm_rule is not None
               and b"overflow" not in hm_rule.group(0)

@@ -66,6 +66,10 @@ ORDER = ["tool_result", "injected", "user", "tool_call", "assistant"]
 PALETTE = {"tool_result": "var(--p0)", "injected": "var(--p1)",
            "user": "var(--p2)", "tool_call": "var(--p3)",
            "assistant": "var(--p4)"}
+# 块类型标签的配色类，与 PALETTE 一一对应；所有列出块类型的地方共用，
+# 避免 /rank 是灰的、调用详情是彩的、搜索结果又是另一种写法。
+BK_CLS = {"tool_result": "bk0", "injected": "bk1", "user": "bk2",
+          "tool_call": "bk3", "assistant": "bk4"}
 SID_RE = re.compile(r"^[0-9A-Za-z_-]+$")
 TOKEN = ""          # --token / TRACE_TOKEN；非空时所有请求都要鉴权
 LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
@@ -73,6 +77,12 @@ LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
 
 def esc(s):
     return html.escape("" if s is None else str(s), quote=True)
+
+
+def type_chip(k):
+    """块类型标签：五类各一色（BK_CLS），未知类型退回中性灰。"""
+    return '<span class="chip t %s">%s</span>' % (
+        BK_CLS.get(k, ""), esc(TYPES.get(k, k)))
 
 
 def nfmt(n):
@@ -1080,6 +1090,22 @@ a:focus-visible,button:focus-visible,summary:focus-visible{outline:2px solid var
 /* 会话列表：子代理会话与其派生主会话 */
 .chip.ks{background:var(--part-bg);color:var(--part-fg)}
 .chip.km{background:var(--accent-bg);color:var(--accent-fg)}
+/* 块类型标签：与全库画像图例 / 上下文趋势带共用 --p0..--p4，
+   tool_result / injected / user / tool_call / assistant 各一色，深浅主题自动跟随。
+   color-mix 只把 16% 的主色混进面板底色做背景，文字用 72% 主色混近墨色，
+   保证浅色主题下也够对比；前面留 var(--track) 兜底不支持 color-mix 的浏览器。 */
+.chip.bk0{background:var(--track);background:color-mix(in srgb,var(--p0) 16%,var(--panel));
+ color:var(--muted);color:color-mix(in srgb,var(--p0) 72%,var(--fg))}
+.chip.bk1{background:var(--track);background:color-mix(in srgb,var(--p1) 16%,var(--panel));
+ color:var(--muted);color:color-mix(in srgb,var(--p1) 72%,var(--fg))}
+.chip.bk2{background:var(--track);background:color-mix(in srgb,var(--p2) 16%,var(--panel));
+ color:var(--muted);color:color-mix(in srgb,var(--p2) 72%,var(--fg))}
+.chip.bk3{background:var(--track);background:color-mix(in srgb,var(--p3) 16%,var(--panel));
+ color:var(--muted);color:color-mix(in srgb,var(--p3) 72%,var(--fg))}
+.chip.bk4{background:var(--track);background:color-mix(in srgb,var(--p4) 16%,var(--panel));
+ color:var(--muted);color:color-mix(in srgb,var(--p4) 72%,var(--fg))}
+/* 多选种类下拉：勾标记让「已选中的多类」一眼可辨，不再像单选 */
+.pickmenu a.on::before{content:"✓";margin-right:6px;font-weight:600}
 .row.subagent{border-left:2px solid var(--p3)}
 /* 首页子代理树：父行下缩进挂载，纯 details 折叠，零脚本 */
 .subtree{margin:2px 0 7px 16px;padding-left:14px;border-left:1px solid var(--line2)}
@@ -1192,8 +1218,9 @@ color-scheme:dark;
 CSS_VIZ = """
 .viz{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:12px 14px;margin:0 0 16px;box-shadow:var(--shadow)}
 /* 全局统计页：两张各占整行、内容都挤在左边的卡片并排成左右两栏。
-   align-items:start 让各自按内容定高，不被另一张拉出大片空白。 */
-.viz2{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start;margin:0 0 16px}
+   等高铺满（stretch）：早先用 align-items:start 让各自按内容定高，结果右栏
+   换成 7 行日历后比左栏高出一截，上下边框错开，看着就是「没对齐」。 */
+.viz2{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:stretch;margin:0 0 16px}
 .viz2>.viz{margin-bottom:0;min-width:0}
 /* 回退必须和定义同在 CSS_VIZ 里：CSS_INDEX 只在首页注入，/stats 页窄屏会漏。 */
 @media(max-width:900px){.viz2{grid-template-columns:1fr}}
@@ -1388,7 +1415,6 @@ CSS_INDEX = """
 .ovgrid .sl{font-size:10.5px;padding:2px 0}
 .ovgrid .sl em{min-width:36px}
 /* 三列底部说明共用一条基线：列高不一致时由留白吸收，而不是在某一列下方留洞 */
-.ovnote{margin-top:auto;padding-top:12px}
 .ovaxis{display:flex;justify-content:space-between;font-size:10px;color:var(--faint);margin-top:2px}
 .wsrow{display:grid;grid-template-columns:minmax(80px,1fr) 72px 28px;gap:7px;align-items:center;font-size:10.5px;padding:2px 0}
 .wsrow.top{font-weight:600;color:var(--fg);margin-top:3px}
@@ -2096,10 +2122,10 @@ def index_overview(ss):
         tree.append('<div class="wsrow more">另有 %d 个父目录…</div>' % (len(parents) - 8))
     # 递归关系收进展开卡片：默认只留一行摘要，避免把整列拉得比另外两列长一截
     ws_cell = ('<details class="wsfold"><summary>'
-               '<span class="wsfold-t">%d 个父目录 · %d 个工作区</span>'
+               '<span class="wsfold-t">%d 个 parent 目录 · %d 个工作区 · %d 个会话</span>'
                '<span class="wsfold-h">展开</span></summary>'
                '<div class="in">%s</div></details>' %
-               (len(parents), len(leaf), "".join(tree)))
+               (len(parents), len(leaf), len(ss), "".join(tree)))
 
     # 模型名取自会话 jsonl 的 providerData，与 workbuddy.db 是否可读无关；
     # 只有整库都没有模型名时才不画「未知模型 100%」这种无信息量的单色环。
@@ -2117,15 +2143,13 @@ def index_overview(ss):
     else:
         model_cell = '<div class="empty">会话记录未写模型名，此图暂不可用</div>'
 
+    # 三列各自的小字脚注删掉了：标题已经写明口径，脚注只是重复占高度。
     return ('<div class="viz"><div class="viz-hd"><b>全库画像</b>'
             '<small>输入 token 口径 · 只读索引</small></div>'
             '<div class="ovgrid">'
-            '<div class="ovcell"><div class="ovt">按模型 · 输入 token</div>%s'
-            '<div class="fine ovnote">按模型 ID 分组</div></div>'
-            '<div class="ovcell"><div class="ovt">按时间 · 输入 token</div>%s%s'
-            '<div class="fine ovnote">按每次调用实际发生日</div></div>'
-            '<div class="ovcell"><div class="ovt">工作区 · 递归关系</div>%s'
-            '<div class="fine ovnote">右侧数字为会话数</div></div>'
+            '<div class="ovcell"><div class="ovt">按模型 · 输入 token</div>%s</div>'
+            '<div class="ovcell"><div class="ovt">按时间 · 输入 token</div>%s%s</div>'
+            '<div class="ovcell"><div class="ovt">工作区 · 递归关系</div>%s</div>'
             '</div></div>' %
             (model_cell, line, axis, ws_cell))
 
@@ -2266,10 +2290,10 @@ def block_row_html(d, i, sid, seq, j, st):
     return ('<a class="row" title="%s" href="/s/%s/b/%d?ref=%d" '
             'style="grid-template-columns:52px 64px 92px 1fr 84px 62px">'
             '<span class="idx">#%d</span><span class="chip %s">%s</span>'
-            '<span class="chip t">%s</span>'
+            '%s'
             '<span class="grow"><b style="font-weight:500">%s</b>%s</span>'
             '<span class="num">%s 字</span><span class="num" style="color:var(--link-h)">全文 →</span></a>' %
-            (esc(tip), esc(sid), j, seq, j, st, G.CHIP[st], TYPES.get(b["k"], b["k"]),
+            (esc(tip), esc(sid), j, seq, j, st, G.CHIP[st], type_chip(b["k"]),
              esc(b["l"]), G.cmd_html(b, 140), nfmt(b["n"])))
 
 
@@ -2934,12 +2958,12 @@ def v_find(q, sid=None):
                     esc(r["href"]), r["parts_total"])
             sn, _ = hl_text(r["snippet"], term, max_hits=20)
             body += ('<div class="row" style="display:block;padding:9px 12px">'
-                     '<span class="chip t">%s</span> '
+                     '%s '
                      '<a href="%s"><b style="font-weight:500">块 #%d · %s</b></a> '
                      '<span class="fine">%s 字 · 命中 %s 处 · 首处 %s · %s</span>'
                      '<div class="tabs" style="margin-top:6px">%s</div>'
                      '<div class="snip">…%s…</div></div>' %
-                     (esc(TYPES.get(r["btype"], r["btype"])), esc(r["href"]),
+                     (type_chip(r["btype"]), esc(r["href"]),
                       r["idx"], esc(r["label"]), nfmt(r["chars"]), nfmt(r["count"]),
                       nfmt(r["pos"]), esc(r["ws"]), chips, sn))
         body += pager(base, q, p, FIND_MAX_BLOCKS, total, "个块")
@@ -3385,18 +3409,28 @@ def rank_metric(what, sort, r):
     return c["pin"] + c["pout"]
 
 
-def rank_filter(what, rows, kind, dfrom, dto):
+def rank_filter(what, rows, kinds, dfrom, dto, exclude_compact=False):
     """按种类 / 时间筛选排行行，各维可单独或任意组合。
 
-    块按块类型（k）筛选，调用按模型归一键筛选（大小写变体不会漏）；
+    kinds 支持单个字符串（兼容旧调用）或逗号分隔的多值 / 集合：块按块类型（k）
+    筛选，调用按模型归一键筛选；多选是「任一类命中即保留」，不是交集。
+    exclude_compact 为真时排除标题以「压缩摘要」开头的块——它们是上下文压缩
+    产生的历史摘要，单块几十万字，会把按 token 排行的前几名全占掉。
     时间按对象时间戳的本地日期做闭区间比较，任一端为空表示该侧不限。
     日期与归一键已在 rank_rows() 里预计算，这里只做字符串比较。
     """
-    if kind:
+    if isinstance(kinds, str):
+        kinds = set(x for x in kinds.split(",") if x)
+    else:
+        kinds = set(kinds or ())
+    if kinds:
         if what == "block":
-            rows = [r for r in rows if r[3]["k"] == kind]
+            rows = [r for r in rows if r[3]["k"] in kinds]
         else:
-            rows = [r for r in rows if r[4] == kind]
+            rows = [r for r in rows if r[4] in kinds]
+    if exclude_compact and what == "block":
+        rows = [r for r in rows
+                if not str(r[3].get("l") or "").startswith("压缩摘要")]
     if dfrom or dto:
         di = 6 if what == "block" else 3
         rows = [r for r in rows
@@ -3435,13 +3469,14 @@ def v_rank(q):
     if sort not in sorts:
         sort = sorts[0]          # 白名单：非法值一律回落，不拼进 HTML / 排序键
 
-    # ---- 筛选：种类（块类型 / 模型归一键）+ 时间闭区间，可任意组合 ----
-    kind = qstr(q, "k", "")
-    if what == "block":
-        if kind not in TYPES:
-            kind = ""
-    elif kind not in model_display_map():
-        kind = ""
+    # ---- 筛选：种类多选（块类型 / 模型归一键）+ 时间闭区间 + 压缩摘要开关 ----
+    # k 可以是单个值，也可以是逗号分隔的多个值；单值 URL 与旧版完全兼容。
+    valid_kinds = (list(ORDER) if what == "block"
+                   else sorted(model_display_map()))
+    picked = set(x for x in qstr(q, "k", "").split(",") if x in valid_kinds)
+    kinds = [x for x in valid_kinds if x in picked]   # 按规范顺序输出，URL 稳定
+    kind = ",".join(kinds)
+    show_compact = qstr(q, "cx", "") == "1"
 
     def _norm_date(s):
         s = (s or "").strip()
@@ -3455,7 +3490,8 @@ def v_rank(q):
     dfrom = _norm_date(qstr(q, "from", ""))
     dto = _norm_date(qstr(q, "to", ""))
 
-    rows = rank_filter(what, rank_sorted(what, sort), kind, dfrom, dto)
+    rows = rank_filter(what, rank_sorted(what, sort), kind, dfrom, dto,
+                       exclude_compact=(what == "block" and not show_compact))
     size = PAGE_BLOCKS
     p = clamp_p(q, len(rows), size)
     shown = rows[p * size:(p + 1) * size]
@@ -3468,6 +3504,8 @@ def v_rank(q):
         filt["from"] = dfrom
     if dto:
         filt["to"] = dto
+    if show_compact and what == "block":
+        filt["cx"] = "1"
 
     def url(what_, sort_, extra=None):
         d = {"what": what_, "sort": sort_}
@@ -3498,16 +3536,31 @@ def v_rank(q):
         kind_label = "模型"
 
     def kind_url(val):
-        # 自绘下拉的每个选项都是链接：保留当前时间范围，只换种类
+        # 多选：点一次把该类加入集合，再点一次移出；「全部种类」清空集合。
+        # 仍是纯链接，零脚本；时间范围、压缩摘要开关、排序都原样保留。
         d = {a: b for a, b in filt.items() if a != "k"}
-        if val:
-            d["k"] = val
+        cur = set(kinds)
+        if not val:
+            cur.clear()
+        elif val in cur:
+            cur.discard(val)
+        else:
+            cur.add(val)
+        ks = ",".join(x for x in valid_kinds if x in cur)
+        if ks:
+            d["k"] = ks
         return url(what, sort, d)
 
-    cur_kind = next((lab for v, lab in kind_opts if v == kind), kind_opts[0][1])
+    if not kinds:
+        cur_kind = kind_opts[0][1]
+    elif len(kinds) == 1:
+        cur_kind = next((lab for v, lab in kind_opts if v == kinds[0]), kinds[0])
+    else:
+        cur_kind = ("已选 %d 类" if what == "block" else "已选 %d 个模型") % len(kinds)
     kind_menu = "".join(
         '<a class="%s" href="%s">%s</a>' %
-        ("on" if v == kind else "", kind_url(v), esc(lab))
+        ("on" if ((not v and not kinds) or (v and v in kinds)) else "",
+         kind_url(v), esc(lab))
         for v, lab in kind_opts)
     # 原生 <select> 的弹层由浏览器绘制，黑色直角边框无法用 CSS 去掉；
     # 改成 details + 链接菜单：零脚本，圆角 / 阴影 / 选中态完全可控。
@@ -3579,23 +3632,40 @@ def v_rank(q):
                  week, "".join(cells),
                  date_href(field, today.isoformat()), date_href(field, "")))
 
+    # 压缩摘要开关：默认排除，避免几十万字的历史摘要霸占 token 排行前几名。
+    # 同样是纯链接，cx=1 时把开关状态塞进 filt，翻页 / 排序 / 日历都不丢。
+    cx_html, cx_hidden = "", ""
+    if what == "block":
+        d = dict(filt)
+        if show_compact:
+            d.pop("cx", None)
+        else:
+            d["cx"] = "1"
+        cx_href = esc("/rank?" + urlencode(dict({"what": what, "sort": sort}, **d)))
+        cx_html = ('<a class="btn %s" href="%s" '
+                   'title="上下文压缩产生的历史摘要，单块可达几十万字">%s</a>' %
+                   ("on" if show_compact else "", cx_href,
+                    "隐藏压缩摘要" if show_compact else "显示压缩摘要"))
+        if show_compact:
+            cx_hidden = '<input type="hidden" name="cx" value="1">'
+
     filt_html = ('<form class="searchbox" method="get" action="/rank">'
                  '<input type="hidden" name="what" value="%s">'
                  '<input type="hidden" name="sort" value="%s">'
-                 '<input type="hidden" name="k" value="%s">'
+                 '<input type="hidden" name="k" value="%s">%s'
                  '<input type="hidden" name="from" value="%s">'
                  '<input type="hidden" name="to" value="%s">'
                  '<span class="sb-tools">'
                  '<b class="sb-lab">%s</b>%s'
                  '<b class="sb-lab">时间</b>'
-                 '%s<span class="sb-sep">至</span>%s'
+                 '%s<span class="sb-sep">至</span>%s%s'
                  '</span>'
                  '<span class="sb-main"><button type="submit">筛选</button>'
                  '<a class="btn" href="%s">清空</a></span></form>' %
-                 (esc(what), esc(sort), esc(kind), esc(dfrom), esc(dto),
+                 (esc(what), esc(sort), esc(kind), cx_hidden, esc(dfrom), esc(dto),
                   esc(kind_label), pick_html,
                   date_pick("from", "起始日期", dfrom),
-                  date_pick("to", "结束日期", dto),
+                  date_pick("to", "结束日期", dto), cx_html,
                   esc("/rank?" + urlencode({"what": what, "sort": sort}))))
     n_label = (("筛选后块数" if filt else "块总数") if what == "block"
                else ("筛选后调用数" if filt else "调用总数"))
@@ -3621,8 +3691,10 @@ def v_rank(q):
                  '日期聚合出来的桶。<b>块 token</b> 是这块原文的估算量（<b>≈ 估算</b>，'
                  '非官方 tokenizer、非真实账单）；<b>被携带</b> 是它被后续请求带进上下文的'
                  '次数；<b>乘积</b> = 块 token × 被携带次数，也就是「成本最高的块」的口径。'
-                 '「种类」与「时间」可任意组合，时间按块<b>写入</b>的本地日期闭区间筛选。'
-                 '</div>')
+                 '「种类」可<b>多选组合</b>（在下拉里逐项点选 / 取消），「时间」按块'
+                 '<b>写入</b>的本地日期闭区间筛选，两者可任意叠加。'
+                 '默认已排除「压缩摘要」块（上下文压缩产生的历史摘要，单块几十万字，'
+                 '会把按 token 排行的前几名全占掉），需要时点筛选栏的开关纳入。</div>')
         body += ('<div class="tabs"><b>对象</b>%s</div>' %
                  tabs((("block", "上下文块"), ("call", "调用")), what, tab_obj))
         body += ('<div class="tabs"><b>排序</b>%s</div>' %
@@ -3642,14 +3714,14 @@ def v_rank(q):
                 body += ('<div class="row" style="grid-template-columns:%s">'
                          '<span class="idx">#%d</span>'
                          '<span class="grow"><a href="/s/%s/b/%d">'
-                         '<span class="chip t">%s</span>'
+                         '%s'
                          '<b style="font-weight:500">%s</b></a>%s</span>'
                          '<span><a href="/s/%s" title="%s">%s</a></span>'
                          '<span>%s</span>'
                          '<span class="num">≈ %s</span><span class="num">%s</span>'
                          '<span class="num credit">%s</span>'
                          '<span class="num">%.0f%%</span></div>' %
-                         (cols, n, esc(sid), i, TYPES.get(b["k"], b["k"]),
+                         (cols, n, esc(sid), i, type_chip(b["k"]),
                           esc(b["l"]), G.cmd_html(b, 72),
                           esc(sid), esc(title), esc(title[:26]),
                           esc(fmt_ts(b.get("ts"), "%Y-%m-%d %H:%M", "时间未知")),
