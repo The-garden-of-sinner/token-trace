@@ -707,11 +707,13 @@ def main():
               "调用模型 + 时间组合筛选（%d 行）" % len(f5))
         hf = T.v_rank({"what": ["block"], "k": [kk], "from": ["2026-13-99"],
                        "to": ["<script>"], "p": ["999999"]})
-        check("<script" not in hf and "全部种类" in hf and "selected" in hf
+        check("<script" not in hf and "全部种类" in hf and 'class="on"' in hf
               and 'type="date"' in hf and 'value="%s"' % kk in hf,
               "筛选表单回显种类与日期，非法日期被忽略且不回显注入串")
+        check('<details class="pick">' in hf and '<select name=' not in hf,
+              "种类筛选用自绘 details 菜单，不再出现原生 select")
         hc = T.v_rank({"what": ["call"], "k": [mk], "from": [day], "to": [day]})
-        check("全部模型" in hc and "selected" in hc and day in hc,
+        check("全部模型" in hc and 'class="on"' in hc and day in hc,
               "调用筛选表单回显模型与日期")
         hnone = T.v_rank({"what": ["block"], "k": [kk], "from": ["2099-01-01"],
                           "to": ["2099-12-31"]})

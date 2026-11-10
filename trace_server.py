@@ -970,6 +970,29 @@ form.searchbox select{appearance:none;-webkit-appearance:none;-moz-appearance:no
  color:var(--muted);font:11px inherit;cursor:pointer}
 form.searchbox select:hover{border-color:var(--line)}
 form.searchbox select:focus{outline:none;border-color:var(--accent);color:var(--fg)}
+/* 自绘下拉：原生 <select> 的弹层由浏览器绘制，黑边 / 直角改不掉；
+   details + 链接菜单零脚本，圆角、阴影、选中态都可控。 */
+.sb-lab{font-size:10.5px;color:var(--faint);font-weight:500;letter-spacing:.03em}
+.pick{position:relative;display:inline-block}
+.pick>summary{display:flex;align-items:center;list-style:none;cursor:pointer;
+ padding:6px 28px 6px 12px;border:1px solid transparent;border-radius:999px;
+ background:var(--track);color:var(--muted);font-size:11px;position:relative;user-select:none}
+.pick>summary::-webkit-details-marker{display:none}
+.pick>summary::after{content:"";position:absolute;right:11px;top:50%;width:6px;height:6px;
+ border-right:1.4px solid currentColor;border-bottom:1.4px solid currentColor;
+ transform:translateY(-70%) rotate(45deg);transition:transform .18s var(--ease)}
+.pick[open]>summary::after{transform:translateY(-30%) rotate(-135deg)}
+.pick>summary:hover{border-color:var(--line);color:var(--fg)}
+.pick[open]>summary{border-color:var(--accent);color:var(--fg);background:var(--bg)}
+.pickmenu{position:absolute;z-index:30;top:calc(100% + 5px);left:0;
+ min-width:max(100%,150px);padding:5px;background:var(--panel);
+ border:1px solid var(--line);border-radius:11px;
+ box-shadow:0 10px 28px #00000024,0 2px 6px #00000014;
+ display:flex;flex-direction:column;gap:1px}
+.pickmenu a{padding:7px 11px;border-radius:7px;color:var(--fg);
+ text-decoration:none;font-size:12px;white-space:nowrap}
+.pickmenu a:hover{background:var(--accent-bg);color:var(--accent-fg)}
+.pickmenu a.on{background:var(--accent);color:var(--bg);font-weight:500}
 .modepick{display:inline-flex;gap:2px;background:var(--track);border-radius:999px;padding:3px}
 .modepick label{position:relative;cursor:pointer}
 .modepick input{position:absolute;opacity:0;width:0;height:0}
@@ -3366,21 +3389,39 @@ def v_rank(q):
                      sorted(((a, b) for a, b in model_display_map().items()),
                             key=lambda x: x[1].lower()))
         kind_label = "模型"
-    kind_sel = "".join('<option value="%s"%s>%s</option>' %
-                       (esc(v), " selected" if v == kind else "", esc(lab))
-                       for v, lab in kind_opts)
+
+    def kind_url(val):
+        # 自绘下拉的每个选项都是链接：保留当前时间范围，只换种类
+        d = {a: b for a, b in filt.items() if a != "k"}
+        if val:
+            d["k"] = val
+        return url(what, sort, d)
+
+    cur_kind = next((lab for v, lab in kind_opts if v == kind), kind_opts[0][1])
+    kind_menu = "".join(
+        '<a class="%s" href="%s">%s</a>' %
+        ("on" if v == kind else "", kind_url(v), esc(lab))
+        for v, lab in kind_opts)
+    # 原生 <select> 的弹层由浏览器绘制，黑色直角边框无法用 CSS 去掉；
+    # 改成 details + 链接菜单：零脚本，圆角 / 阴影 / 选中态完全可控。
+    pick_html = ('<details class="pick"><summary>%s</summary>'
+                 '<div class="pickmenu">%s</div></details>' %
+                 (esc(cur_kind), kind_menu))
     filt_html = ('<form class="searchbox" method="get" action="/rank">'
                  '<input type="hidden" name="what" value="%s">'
                  '<input type="hidden" name="sort" value="%s">'
+                 '<input type="hidden" name="k" value="%s">'
                  '<span class="sb-tools">'
-                 '<select name="k" aria-label="%s">%s</select>'
+                 '<b class="sb-lab">%s</b>%s'
+                 '<b class="sb-lab">时间</b>'
                  '<input type="date" name="from" value="%s" aria-label="起始日期">'
                  '<span class="sb-sep">至</span>'
                  '<input type="date" name="to" value="%s" aria-label="结束日期">'
                  '</span>'
                  '<span class="sb-main"><button type="submit">筛选</button>'
                  '<a class="btn" href="%s">清空</a></span></form>' %
-                 (esc(what), esc(sort), kind_label, kind_sel, esc(dfrom), esc(dto),
+                 (esc(what), esc(sort), esc(kind), esc(kind_label), pick_html,
+                  esc(dfrom), esc(dto),
                   esc("/rank?" + urlencode({"what": what, "sort": sort}))))
     n_label = (("筛选后块数" if filt else "块总数") if what == "block"
                else ("筛选后调用数" if filt else "调用总数"))
