@@ -386,11 +386,14 @@ def main():
         n_label = int(re.search(r'(\d+) 天有活动', hm3).group(1))
         check(n_tip == 2 and n_label == 2,
               "窗口外活动日不计入「N 天有活动」（格子 %d / 标注 %d）" % (n_tip, n_label))
-        # 排版：4 行 × 18 列、列数由行数推出、补位格在末尾（今天落在最后一列）
-        check('class="hmw"' in hm3 and "--hmc:18" in hm3
-              and hm3.count('class="pad"') == 2
-              and '<i class="pad"></i><i class="pad"></i></div><div class="hm-lg">' in hm3,
-              "活动日历 4 行 × 18 列铺满容器，补位格补在右下角")
+        # 排版：7 行 = 周一..周日、26 列 = 26 周，星期标签占第一列，无补位格
+        check('class="hmw"' in hm3 and "--hmc:26" in hm3
+              and hm3.count('<i') == 26 * 7 + 5        # 182 格 + 5 个图例色块
+              and hm3.count('<b class="wk">') == 7
+              and 'class="pad"' not in hm3
+              and "最近 26 周" in hm3
+              and 'grid-column:2/span' in hm3,
+              "活动日历 7 行 × 26 列周对齐，星期标签占首列、无补位格")
         # 无 days 的旧索引 / 外部数据必须回退 mtime，不抛异常
         try:
             hm2 = T.activity_heatmap([_sess(0)])
@@ -753,8 +756,9 @@ def main():
         hm_rule = re.search(rb"\.hm\{[^}]*\}", stats_body)
         check(st == 200 and hm_rule is not None
               and b"overflow" not in hm_rule.group(0)
-              and b"grid-template-rows:repeat(4,auto)" in hm_rule.group(0),
-              "热力图容器不再裁切 tooltip，且显式声明 4 行")
+              and b"grid-template-rows:repeat(7,auto)" in hm_rule.group(0)
+              and b"grid-template-columns:18px repeat(var(--hmc)" in hm_rule.group(0),
+              "热力图容器不裁切气泡，显式 7 行且首列留给星期标签")
         # 色阶不能再用 opacity：它会把格子里的 ::after 气泡一起带淡
         check(b"color-mix(in srgb,var(--accent) 26%,var(--panel))" in stats_body
               and b"opacity:.3}.hm i.h2" not in stats_body,
