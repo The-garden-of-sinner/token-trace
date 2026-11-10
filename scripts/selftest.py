@@ -386,6 +386,11 @@ def main():
         n_label = int(re.search(r'(\d+) 天有活动', hm3).group(1))
         check(n_tip == 2 and n_label == 2,
               "窗口外活动日不计入「N 天有活动」（格子 %d / 标注 %d）" % (n_tip, n_label))
+        # 排版：4 行 × 18 列、列数由行数推出、补位格在末尾（今天落在最后一列）
+        check('class="hmw"' in hm3 and "--hmc:18" in hm3
+              and hm3.count('class="pad"') == 2
+              and '<i class="pad"></i><i class="pad"></i></div><div class="hm-lg">' in hm3,
+              "活动日历 4 行 × 18 列铺满容器，补位格补在右下角")
         # 无 days 的旧索引 / 外部数据必须回退 mtime，不抛异常
         try:
             hm2 = T.activity_heatmap([_sess(0)])
@@ -747,8 +752,15 @@ def main():
         st, stats_body = get("/stats")
         hm_rule = re.search(rb"\.hm\{[^}]*\}", stats_body)
         check(st == 200 and hm_rule is not None
-              and b"overflow" not in hm_rule.group(0),
-              "热力图容器不再裁切 tooltip")
+              and b"overflow" not in hm_rule.group(0)
+              and b"grid-template-rows:repeat(4,auto)" in hm_rule.group(0),
+              "热力图容器不再裁切 tooltip，且显式声明 4 行")
+        # 色阶不能再用 opacity：它会把格子里的 ::after 气泡一起带淡
+        check(b"color-mix(in srgb,var(--accent) 26%,var(--panel))" in stats_body
+              and b"opacity:.3}.hm i.h2" not in stats_body,
+              "色阶用 color-mix 混色，气泡不被格子 opacity 带淡")
+        check(b"width:max-content" in stats_body,
+              "气泡宽度用 max-content，不被小格子的包含块压成竖条")
         check(b"--ease-in:cubic-bezier(.4,0,.2,1)" in stats_body
               and b"::view-transition-new(root){animation:vt-in .46s" in stats_body,
               "入场用均衡缓动，跨页过渡只做透明度")

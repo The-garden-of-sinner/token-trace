@@ -1205,12 +1205,17 @@ CSS_VIZ = """
    按 CSS 规范会把 overflow-y 一并算成 auto，气泡上半截被容器直接切掉。 */
 [data-tip]{position:relative}
 [data-tip]:hover,[data-tip]:focus-visible{z-index:6}
+/* 气泡宽度必须 max-content：绝对定位元素的收缩宽度按「包含块宽度 - left」算，
+   挂在 19px 的小格子上会被压成两个字一行的竖条（之前误判成容器裁切）。 */
 [data-tip]:hover::after,[data-tip]:focus-visible::after{content:attr(data-tip);position:absolute;left:50%;bottom:calc(100% + 6px);
  transform:translateX(-50%);z-index:50;background:var(--fg);color:var(--bg);font-size:10.5px;line-height:1.45;
- padding:5px 8px;border-radius:5px;white-space:pre-line;max-width:250px;min-width:90px;box-shadow:var(--shadow);pointer-events:none}
-/* 首列 / 末列的格子让气泡贴边，避免横向越出卡片 */
-.hm i:nth-child(-n+7)::after{left:0;transform:none}
-.hm i:nth-last-child(-n+7)::after{left:auto;right:0;transform:none}
+ padding:5px 8px;border-radius:5px;white-space:pre-line;width:max-content;max-width:250px;min-width:90px;
+ box-shadow:var(--shadow);pointer-events:none}
+/* 首列 / 末列的格子让气泡贴边，避免横向越出卡片；最上面一行改为向下弹，
+   否则贴顶那一行会顶出卡片上沿。4 行是固定值，与 HM_ROWS 一致。 */
+.hm i:nth-child(-n+4)::after{left:0;transform:none}
+.hm i:nth-last-child(-n+4)::after{left:auto;right:0;transform:none}
+.hm i:nth-child(4n+1)::after{bottom:auto;top:calc(100% + 6px)}
 .donut-row{display:flex;align-items:center;gap:22px;flex-wrap:wrap}
 .donut-wrap{position:relative;width:112px;height:112px;flex:none}
 .donut{width:112px;height:112px;display:block;animation:tt-pop .62s var(--ease-in) backwards}
@@ -1242,16 +1247,40 @@ CSS_VIZ = """
 """
 
 CSS_HM = """
-/* 不设 overflow：这里是横向滚动容器会连带裁掉纵向气泡；10 周 = 147px，
-   远小于卡片宽度，本来也不需要滚动。 */
-.hm{display:grid;grid-auto-flow:column;grid-template-rows:repeat(7,12px);grid-auto-columns:12px;gap:3px;padding:2px 0}
-.hm i{border-radius:2px;background:var(--track)}
-.hm i.h1{background:var(--accent);opacity:.3}.hm i.h2{background:var(--accent);opacity:.5}
-.hm i.h3{background:var(--accent);opacity:.72}.hm i.h4{background:var(--accent);opacity:.95}
-.hm-lg{display:flex;gap:4px;align-items:center;font-size:10px;color:var(--faint);margin-top:8px}
+/* 4 行 × 18 列的方块图：列宽用 1fr 均分，格子 aspect-ratio:1 跟着容器放大。
+   旧的 7 行 × 12px 固定栅格只有 147px 宽，在半宽卡片里整块挤在左边、右边一大片空白。
+   .hmw 封顶 600px 后居中：卡片单栏铺满时（约 820px）18 列会被撑到 40px 以上，
+   格子大得像马赛克；封顶后稳定在 30px 上下，左右留白对称看着是「有边界的图」。
+   容器不能设 overflow：祖先链路上任何 overflow 都会把悬浮气泡裁掉（踩过一次）。 */
+.hmw{--hmc:18;--hmg:5px;max-width:600px;margin:0 auto}
+/* 行数必须显式声明：grid-auto-flow:column 下若没有模板行，网格只有 1 行，
+   72 个格子会各自占一列、横向冲出卡片。4 行与 HM_ROWS 一致；align-items:start
+   让 aspect-ratio 决定高度（默认 stretch 会忽略宽高比，格子被拉成横条）。 */
+.hm{display:grid;grid-auto-flow:column;grid-template-rows:repeat(4,auto);
+ grid-template-columns:repeat(var(--hmc),minmax(0,1fr));gap:var(--hmg);align-items:start}
+.hm-mon{display:grid;grid-template-columns:repeat(var(--hmc),minmax(0,1fr));gap:var(--hmg);margin:0 0 5px}
+.hm-mon span{grid-row:1;font-size:9.5px;line-height:1.2;color:var(--faint);white-space:nowrap}
+.hm i{aspect-ratio:1;border-radius:3px;background:var(--track);display:block;
+ transition:transform .16s var(--ease-in),box-shadow .16s var(--ease-in)}
+/* 色阶用 color-mix 把 accent 混进面板底色，而不是给整格加 opacity：
+   opacity 会连带把格子里的 ::after 气泡一起变淡（踩过），混色不会。
+   每条前面留一个 var(--track) 兜底：不认 color-mix 的浏览器退化成灰格子，
+   而不是整片透明。 */
+.hm i.h1{background:var(--track);background:color-mix(in srgb,var(--accent) 26%,var(--panel))}
+.hm i.h2{background:var(--track);background:color-mix(in srgb,var(--accent) 46%,var(--panel))}
+.hm i.h3{background:var(--track);background:color-mix(in srgb,var(--accent) 68%,var(--panel))}
+.hm i.h4{background:var(--track);background:color-mix(in srgb,var(--accent) 92%,var(--panel))}
+/* 补位的空格子（窗口天数除不尽时补在末尾），不占视觉 */
+.hm i.pad{background:none;pointer-events:none}
+.hm i:hover{transform:scale(1.18);box-shadow:0 2px 7px rgba(0,0,0,.18);position:relative;z-index:3}
+.hm-lg{display:flex;gap:4px;align-items:center;font-size:10px;color:var(--faint);margin-top:9px}
 .hm-lg i{width:10px;height:10px;border-radius:2px;background:var(--track)}
-.hm-lg i.l1{background:var(--accent);opacity:.3}.hm-lg i.l2{background:var(--accent);opacity:.5}
-.hm-lg i.l3{background:var(--accent);opacity:.72}.hm-lg i.l4{background:var(--accent);opacity:.95}
+.hm-lg i.l1{background:var(--track);background:color-mix(in srgb,var(--accent) 26%,var(--panel))}
+.hm-lg i.l2{background:var(--track);background:color-mix(in srgb,var(--accent) 46%,var(--panel))}
+.hm-lg i.l3{background:var(--track);background:color-mix(in srgb,var(--accent) 68%,var(--panel))}
+.hm-lg i.l4{background:var(--track);background:color-mix(in srgb,var(--accent) 92%,var(--panel))}
+/* 极窄屏（手机横屏以下）缩格子间距，18 列才不会被挤成一条线 */
+@media(max-width:520px){.hmw{--hmg:3px}}
 """
 
 CSS_MAP = """
@@ -1803,6 +1832,9 @@ def sparkline_svg(series):
             '<polygon points="0,38 %s 100,38"/><polyline points="%s"/></svg>' % (pts, pts))
 
 
+HM_ROWS = 4         # 活动日历行数：格子够大，又不至于把卡片撑得过高
+
+
 def activity_heatmap(ss, weeks=10):
     """活动日历：按每次调用的真实发生日分色，只消费已缓存的会话索引。
 
@@ -1810,7 +1842,14 @@ def activity_heatmap(ss, weeks=10):
     这里逐日聚合，不再把整个会话压到 mtime（文件最后修改日）那一天——长会话
     常跨多天，按 mtime 会让前几天全空、最后一天虚高。老索引 / 外部构造的
     sessions 没有 days 时退回 mtime + calls 兜底。
-    列 = 周，行 = 周一..周日；5 级色阶，无数据的格子只输出一个空 <i>。
+
+    排版是 4 行 × 18 列（HM_ROWS × HM_COLS），每日一格，列宽 1fr 均分卡片宽度，
+    格子 aspect-ratio:1，卡片多宽格子就多大。时间按「一列 4 天、逐列向右」推进
+    （GitHub 的走向：先竖后横），这样列号随时间单调递增，顶部才能按月打刻度。
+    早先的 7 行 × 12px 固定栅格宽度恒为 147px，在半宽卡片里整块贴在左边，
+    右边留下两三百像素空白；改成 4 行后同样的天数由 18 列摊开，格子从 12px
+    长到 19~33px，横向也不再留空。整除不了时在右下角补 pad 空格子（GitHub 的
+    末尾留白），今天永远落在最后一列，不会让左上角看起来缺一块。
     """
     agg = Counter()
     for s in ss:
@@ -1824,15 +1863,25 @@ def activity_heatmap(ss, weeks=10):
                 agg[day] += s["calls"]
     # 用 date 运算而不是 +i*86400：有夏令时的地区跨切换日不会错位一格。
     today = datetime.date.today()
-    end = today + datetime.timedelta(days=6 - today.weekday())
-    start = end - datetime.timedelta(days=weeks * 7 - 1)
+    days = weeks * 7
+    start = today - datetime.timedelta(days=days - 1)
     # 色阶只按窗口内的日期取峰值，否则窗口外某天的历史高值会把整张图压淡。
     window = [(start + datetime.timedelta(days=i)).strftime("%Y-%m-%d")
-              for i in range(weeks * 7)]
+              for i in range(days)]
     mx = max([agg.get(d, 0) for d in window], default=0) or 1
+    # 列数由行数推出来，换周数不用手改；CSS 的贴边规则只依赖行数 4。
+    cols = -(-days // HM_ROWS)
+    pad = max(0, cols * HM_ROWS - days)  # 补位格数，补在右下角（同 GitHub 末尾留白）
     cells = []
+    marks = []                          # [(起始列, 月份标签)]，用来画顶部刻度
     active = 0
-    for day in window:
+    last_mon = ""
+    for i, day in enumerate(window):
+        col = i // HM_ROWS
+        mon = day[5:7]
+        if mon != last_mon:
+            marks.append((col, "%d月" % int(mon)))
+            last_mon = mon
         v = agg.get(day, 0)
         if not v:
             cells.append("<i></i>")
@@ -1841,14 +1890,25 @@ def activity_heatmap(ss, weeks=10):
         lv = 1 if v / mx <= .25 else (2 if v / mx <= .5 else (3 if v / mx <= .75 else 4))
         cells.append('<i class="h%d" data-tip="%s · %s 次调用"></i>' %
                      (lv, esc(day), nfmt(v)))
+    cells.extend(['<i class="pad"></i>'] * pad)
+    # 月份刻度：每段从本月起始列一直占到下月起始列，避免刻度挤在一起。
+    mon_html = ""
+    if len(marks) > 1:
+        parts = []
+        for k, (col, label) in enumerate(marks):
+            end = marks[k + 1][0] if k + 1 < len(marks) else cols
+            parts.append('<span style="grid-column:%d/span %d">%s</span>'
+                         % (col + 1, max(1, end - col), label))
+        mon_html = '<div class="hm-mon">%s</div>' % "".join(parts)
     # 「N 天有活动」只数窗口里有色的格子：按真实日期分桶后，窗口外的历史
     # 日期会进 agg，用 len(agg) 会标出比画面更多的天数。
     return ('<div class="viz"><div class="viz-hd"><b>会话活动日历</b>'
-            '<small>最近 %d 周 · 按当日实际调用数分色</small></div>'
-            '<div class="hm">%s</div><div class="hm-lg">少 <i></i><i class="l1"></i>'
+            '<small>最近 %d 周 · 每格一天，按当日调用数分色</small></div>'
+            '<div class="hmw" style="--hmc:%d">%s<div class="hm">%s</div>'
+            '<div class="hm-lg">少 <i></i><i class="l1"></i>'
             '<i class="l2"></i><i class="l3"></i><i class="l4"></i> 多'
-            '<span style="margin-left:auto">%d 天有活动</span></div></div>' %
-            (weeks, "".join(cells), active))
+            '<span style="margin-left:auto">%d 天有活动</span></div></div></div>' %
+            (weeks, cols, mon_html, "".join(cells), active))
 
 
 # 子代理会话是独立的 agent-* jsonl。首选的父子关系键是子会话记录里的
