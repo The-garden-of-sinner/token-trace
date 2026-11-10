@@ -891,6 +891,8 @@ def tool_calls(sid, tool, offset=0, limit=40):
 # 深浅色只在 CSS 末尾的 media 里切换一次；估算值统一带 ≈ 前缀。
 CSS = """
 :root{
+/* 让原生控件（日期选择器、下拉弹层、滚动条）跟随页面明暗，而不是永远按浅色绘制 */
+color-scheme:light;
 --bg:#fff;--fg:#2C2C2A;--panel:#F7F6F2;--panel2:#FAFAF7;--track:#F1EFE8;
 --line:#E3E1D9;--line2:#EDEBE3;--border:#D3D1C7;--muted:#5F5E5A;--faint:#888780;--dim:#B4B2A9;
 /* 主色是低饱和墨青，与五类数据色分开一档；文字链接用近墨灰，
@@ -980,7 +982,7 @@ form.searchbox select:focus{outline:none;border-color:var(--accent);color:var(--
 .pick>summary::-webkit-details-marker{display:none}
 .pick>summary::after{content:"";position:absolute;right:11px;top:50%;width:6px;height:6px;
  border-right:1.4px solid currentColor;border-bottom:1.4px solid currentColor;
- transform:translateY(-70%) rotate(45deg);transition:transform .18s var(--ease)}
+ transform:translateY(-70%) rotate(45deg);transition:transform .24s var(--ease)}
 .pick[open]>summary::after{transform:translateY(-30%) rotate(-135deg)}
 .pick>summary:hover{border-color:var(--line);color:var(--fg)}
 .pick[open]>summary{border-color:var(--accent);color:var(--fg);background:var(--bg)}
@@ -993,6 +995,8 @@ form.searchbox select:focus{outline:none;border-color:var(--accent);color:var(--
  text-decoration:none;font-size:12px;white-space:nowrap}
 .pickmenu a:hover{background:var(--accent-bg);color:var(--accent-fg)}
 .pickmenu a.on{background:var(--accent);color:var(--bg);font-weight:500}
+@keyframes pick-in{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:none}}
+.pick[open] .pickmenu{animation:pick-in .28s var(--ease) both}
 .modepick{display:inline-flex;gap:2px;background:var(--track);border-radius:999px;padding:3px}
 .modepick label{position:relative;cursor:pointer}
 .modepick input{position:absolute;opacity:0;width:0;height:0}
@@ -1003,11 +1007,19 @@ form.searchbox select:focus{outline:none;border-color:var(--accent);color:var(--
 form.searchbox button{background:var(--accent);color:var(--bg);border:1px solid var(--accent);
  padding:10px 22px;border-radius:11px;font:12px inherit;font-weight:500}
 form.searchbox button:hover{background:var(--link-h);border-color:var(--link-h);color:var(--bg)}
-form.searchbox input[type=date]{padding:6px 10px;border:1px solid transparent;border-radius:999px;
- background:var(--track);color:var(--muted);font:11px inherit;cursor:pointer}
+form.searchbox input[type=date]{appearance:none;-webkit-appearance:none;
+ padding:6px 11px;border:1px solid transparent;border-radius:999px;
+ background-color:var(--track);color:var(--muted);font-size:11px;cursor:pointer;
+ font-variant-numeric:tabular-nums;line-height:1.5;min-height:29px}
 form.searchbox input[type=date]:hover{border-color:var(--line)}
-form.searchbox input[type=date]:focus{outline:none;border-color:var(--accent);color:var(--fg)}
-form.searchbox input[type=date]::-webkit-calendar-picker-indicator{opacity:.55;cursor:pointer}
+form.searchbox input[type=date]:focus{outline:none;border-color:var(--accent);
+ color:var(--fg);background-color:var(--bg)}
+form.searchbox input[type=date]::-webkit-datetime-edit{padding:0;border:0}
+form.searchbox input[type=date]::-webkit-calendar-picker-indicator{
+ opacity:.5;cursor:pointer;margin-left:2px;padding:0;border:0;background:transparent}
+form.searchbox input[type=date]::-webkit-calendar-picker-indicator:hover{opacity:.85}
+form.searchbox input[type=date]::-webkit-inner-spin-button,
+form.searchbox input[type=date]::-webkit-clear-button{display:none}
 .sb-sep{color:var(--faint);font-size:11px}
 button,.btn{display:inline-block;padding:6px 13px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--fg);font:12px inherit;text-decoration:none;cursor:pointer}
 button:hover,.btn:hover{border-color:var(--accent);color:var(--link-h);background:var(--accent-bg)}
@@ -1089,26 +1101,26 @@ code{font:11.5px ui-monospace,monospace;background:var(--track);padding:1px 4px;
 @view-transition{navigation:auto}
 /* 统一缓动 --ease：起步利落、收尾缓，避免「啪」一下硬切。
    淡出短于淡入，两层不叠出拖影；入场错峰拉到 50ms 一档。 */
-::view-transition-old(root){animation:vt-out .14s cubic-bezier(.4,0,.8,.6) both}
-::view-transition-new(root){animation:vt-in .22s var(--ease) both}
-@keyframes vt-out{to{opacity:0;transform:translateY(-4px)}}
-@keyframes vt-in{from{opacity:.32;transform:translateY(7px)}}
+::view-transition-old(root){animation:vt-out .26s cubic-bezier(.4,0,.8,.6) both}
+::view-transition-new(root){animation:vt-in .52s var(--ease) both}
+@keyframes vt-out{to{opacity:0;transform:translateY(-5px)}}
+@keyframes vt-in{from{opacity:.22;transform:translateY(10px)}}
 /* KPI 单独命名：跨页时数字区局部变形 + 聚焦淡入，而不是整页一起淡。
    每个视图最多一个 .kpi，名字不会在同一文档里重复。 */
 .kpi{view-transition-name:trace-kpi}
-::view-transition-group(trace-kpi){animation-duration:.24s}
-::view-transition-old(trace-kpi){animation:vt-fade .12s ease both}
-::view-transition-new(trace-kpi){animation:vt-kpi .24s var(--ease) both}
+::view-transition-group(trace-kpi){animation-duration:.6s}
+::view-transition-old(trace-kpi){animation:vt-fade .24s ease both}
+::view-transition-new(trace-kpi){animation:vt-kpi .6s var(--ease) both}
 @keyframes vt-fade{to{opacity:0}}
-@keyframes vt-kpi{from{opacity:.55;transform:translateY(4px)}to{opacity:1;transform:none}}
+@keyframes vt-kpi{from{opacity:.3;transform:translateY(7px)}to{opacity:1;transform:none}}
 /* 入场动画的起始透明度抬到接近实色：动效主要靠位移与轻微模糊表达。
    慢设备、打印或 headless 快照如果没跑完动画，内容也不会看起来是空白的。 */
-@keyframes tt-in{from{opacity:.88;transform:translateY(7px)}to{opacity:1;transform:none}}
-@keyframes tt-num{from{opacity:.92;transform:translateY(4px)}to{opacity:1;transform:none}}
+@keyframes tt-in{from{opacity:.72;transform:translateY(10px)}to{opacity:1;transform:none}}
+@keyframes tt-num{from{opacity:.7;transform:translateY(6px)}to{opacity:1;transform:none}}
 /* 分区入场：数字带、图表卡、工具条、检索区、入口卡、会话分组都用同一段位移淡入。
    按文档顺序给 40–140ms 的错峰，页面从上往下「落」下来，而不是整块同时闪出。 */
-.kpi>div,.viz,.toolbar,.segrow,.tkfilter,.tabs,
-.navcard,details.grp,.chart,.warn,.note{animation:tt-in .36s var(--ease) both}
+.kpi>div,.viz,.toolbar,form.searchbox,.segrow,.tkfilter,.tabs,
+.navcard,details.grp,.chart,.warn,.note{animation:tt-in .56s var(--ease) both}
 /* hero 只做透明度：它带着 view-transition-name 的 KPI，若整体位移，
    跨文档 morph 的起始快照会被垫高几像素，看起来像数字跳了一下。 */
 .hero{animation:tt-soft .5s var(--ease) both}
@@ -1120,23 +1132,23 @@ code{font:11.5px ui-monospace,monospace;background:var(--track);padding:1px 4px;
 details.grp:nth-of-type(2){animation-delay:.05s}
 details.grp:nth-of-type(3){animation-delay:.1s}
 details.grp:nth-of-type(n+4){animation-delay:.14s}
-.kpi b{animation:tt-num .4s var(--ease) both}
+.kpi b{animation:tt-num .62s var(--ease) both}
 .kpi>div:nth-child(2){animation-delay:.05s}.kpi>div:nth-child(3){animation-delay:.1s}
 .kpi>div:nth-child(4){animation-delay:.15s}.kpi>div:nth-child(5){animation-delay:.2s}
 .kpi>div:nth-child(6){animation-delay:.25s}.kpi>div:nth-child(n+7){animation-delay:.3s}
 .row,.btn,button,.chip,footer a,.crumb a{transition-property:border-color,background-color,color,transform,opacity;
- transition-duration:.28s;transition-timing-function:var(--ease)}
+ transition-duration:.32s;transition-timing-function:var(--ease)}
 .btn:active,button:active{transform:translateY(1px)}
 @supports (interpolate-size:allow-keywords){
  details.grp{interpolate-size:allow-keywords}
- details.grp::details-content{block-size:0;overflow:hidden;transition:block-size .4s var(--ease),content-visibility .4s var(--ease) allow-discrete}
+ details.grp::details-content{block-size:0;overflow:hidden;transition:block-size .48s var(--ease),content-visibility .48s var(--ease) allow-discrete}
  details.grp[open]::details-content{block-size:auto}
 }
 /* 返回上一层：链接从面包屑倒数第二项自动推导，长内容页也始终可见 */
 .back{position:fixed;right:20px;bottom:20px;z-index:20;display:inline-flex;align-items:center;gap:8px;
  padding:9px 16px;border-radius:999px;background:var(--fg);color:var(--bg);border:1px solid var(--line);
  font-size:12px;font-weight:500;text-decoration:none;box-shadow:0 4px 16px #0000002e;opacity:.94;
- transition:transform .28s var(--ease),opacity .28s var(--ease)}
+ transition:transform .32s var(--ease),opacity .32s var(--ease)}
 .back:hover{opacity:1;transform:translateY(-2px);color:var(--bg)}
 .back:active{transform:translateY(0)}
 .back .ar{font-size:15px;line-height:1}
@@ -1146,6 +1158,7 @@ details.grp:nth-of-type(n+4){animation-delay:.14s}
  ::view-transition-group(*),::view-transition-old(*),::view-transition-new(*){animation:none!important}
 }
 @media(prefers-color-scheme:dark){:root{
+color-scheme:dark;
 --bg:#15171A;--fg:#E4E6E8;--panel:#1C1F23;--panel2:#202429;--track:#262A30;
 --line:#33383F;--line2:#2B3036;--border:#3A4048;--muted:#A7ACB3;--faint:#838B93;--dim:#666E77;
 --accent:#6FC2B4;--accent-d:#9EDBD0;--accent-bg:#1A302D;--accent-fg:#A9DDD4;
@@ -1663,18 +1676,21 @@ def search_box(action, term="", mode="text", scope="all", placeholder="关键词
                  '<label><input type="radio" name="mode" value="blocks" %s><span>按块匹配</span></label>'
                  '</span>' % ("checked" if mode == "text" else "",
                               "checked" if mode == "blocks" else ""))
-    scope_sel = ""
+    scope_pick = ""
     if mode == "text":
-        scope_sel = '<select name="scope" aria-label="检索范围">' + "".join(
-            '<option value="%s" %s>%s</option>' %
-            (k, "selected" if scope == k else "", lab)
-            for k, lab in (("all", "全部范围"), ("blocks", "只看上下文块"),
-                           ("outputs", "只看模型输出"), ("turns", "只看提问"))) + '</select>'
+        scope_pick = ('<span class="modepick" role="group" aria-label="检索范围">' +
+                      "".join(
+                          '<label><input type="radio" name="scope" value="%s" %s>'
+                          '<span>%s</span></label>' %
+                          (k, "checked" if scope == k else "", lab)
+                          for k, lab in (("all", "全部"), ("blocks", "上下文块"),
+                                         ("outputs", "模型输出"), ("turns", "提问")))
+                      + '</span>')
     return ('<form class="searchbox" method="get" action="%s">'
             '<span class="sb-tools">%s%s</span>'
             '<span class="sb-main"><input type="text" name="q" value="%s" placeholder="%s">'
             '<button type="submit">%s</button></span></form>' %
-            (esc(action), mode_pick, scope_sel, esc(term), esc(placeholder),
+            (esc(action), mode_pick, scope_pick, esc(term), esc(placeholder),
              "检索" if mode == "blocks" else "搜索"))
 
 

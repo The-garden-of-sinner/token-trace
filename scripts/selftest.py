@@ -719,6 +719,16 @@ def main():
                           "to": ["2099-12-31"]})
         check("没有匹配当前筛选条件" in hnone,
               "空结果给出提示而不是空白表格")
+        # 原生控件统一：搜索范围改 radio、color-scheme 跟随主题、日期框去原生外观
+        st, sbody = get("/search?q=token")
+        check(st == 200 and b'name="scope"' in sbody
+              and b'<select name="scope"' not in sbody,
+              "检索范围用 radio 分段控件，不再出现原生 select")
+        check(b"color-scheme:light" in sbody and b"color-scheme:dark" in sbody,
+              "页面声明 color-scheme，原生控件跟随明暗主题")
+        st, rbody = get("/rank?what=block")
+        check(b"appearance:none" in rbody and b"-webkit-datetime-edit" in rbody,
+              "日期框去掉原生外观与内层边框")
         # 性能：索引增量复用 + 已排序缓存
         a1 = G.scan_all()
         a2 = G.scan_all()
