@@ -644,36 +644,46 @@ def main():
               and all(x["cost"] == x["est"] * x["users"] for x in cb),
               "最贵的块按「估算 token × 被携带次数」降序（20 条）")
 
-        print("== 统计排序 /rank ==")
-        for by in ("session", "day"):
-            for what in ("call", "block"):
-                st, body = get("/rank?by=%s&what=%s" % (by, what))
+        print("== 逐块 / 逐调用排行 /rank ==")
+        for what in ("block", "call"):
+            st, body = get("/rank?what=%s" % what)
+            check(st == 200 and b"<script" not in body and len(body) <= MAX_HTML,
+                  "/rank what=%s 200 / 零脚本 / 未越 80KB" % what)
+        for what, sorts in (("block", ("token", "count", "product")),
+                            ("call", ("token", "in", "out"))):
+            for sk in sorts:
+                st, body = get("/rank?what=%s&sort=%s" % (what, sk))
                 check(st == 200 and b"<script" not in body
                       and len(body) <= MAX_HTML,
-                      "/rank by=%s what=%s 200 / 零脚本 / 未越 80KB" % (by, what))
-        h = T.v_rank({"by": ["../../x"], "what": ["<script>"],
-                      "sort": ["x"], "p": ["999999"]})
-        check("<script" not in h and "按 token" in h and "按会话" in h
+                      "/rank what=%s sort=%s 200 / 零脚本 / 未越 80KB" % (what, sk))
+        h = T.v_rank({"what": ["../../x"], "sort": ["<script>"], "p": ["999999"]})
+        check("<script" not in h and "按块 token" in h and "对象" in h
               and 'class="pager"' in h,
-              "非法 by/what/sort 与越界分页回落白名单，不回显注入串")
-        for sk in ("token", "count", "product"):
-            rr = sorted(T.rank_rows("day", "call"), key=lambda r: -r[sk])
-            check(all(rr[i][sk] >= rr[i + 1][sk] for i in range(len(rr) - 1)),
-                  "按 %s 排序结果单调不增（%d 组）" % (sk, len(rr)))
-        srows = T.rank_rows("session", "block")
-        check(sum(r["token"] for r in srows) > 0
-              and all(r["product"] == r["token"] * r["count"] for r in srows),
-              "块统计口径自洽：乘积 = token 合计 × 次数合计（%d 组）"
-              % len(srows))
-        before = T.rank_rows("day", "call")
+              "非法 what/sort 与越界分页回落白名单，不回显注入串")
+        # 每一行就是一个对象：块行数 = 全库块数，调用行数 = 全库调用数，不做聚合
+        nb = sum(len(T.STORE.get(s["id"])["ctx"]) for s in T.STORE.sessions())
+        nc = sum(len(T.STORE.get(s["id"])["calls"]) for s in T.STORE.sessions())
+        brows = T.rank_rows("block")
+        crows = T.rank_rows("call")
+        check(len(brows) == nb and len(crows) == nc,
+              "逐块 / 逐调用行数与全库对象数一致（%d 块 / %d 次）" % (nb, nc))
+        check(all(r[4] >= 0 and r[5] >= 0 for r in brows)
+              and all(r[2]["pin"] >= 0 and r[2]["pout"] >= 0 for r in crows),
+              "块 token / 携带次数、调用输入 / 输出均非负")
+        for what, sorts, rows in (("block", ("token", "count", "product"), brows),
+                                  ("call", ("token", "in", "out"), crows)):
+            for sk in sorts:
+                rr = sorted(rows, key=T.rank_sort_key(what, sk))
+                vals = [T.rank_metric(what, sk, r) for r in rr]
+                check(all(vals[i] >= vals[i + 1] for i in range(len(vals) - 1)),
+                      "%s 按 %s 排序结果单调不增（%d 行）" % (what, sk, len(rr)))
+        before = T.rank_rows("block")
         T.STORE.sessions(refresh=True)
-        after = T.rank_rows("day", "call")
+        after = T.rank_rows("block")
         check(after is not before and len(after) > 0,
-              "索引刷新后聚合重算，缓存不误命中复用的 id")
-        hj = T.v_rank({"by": ["<script>"], "what": ["x"],
-                       "sort": ["y"], "p": ["1"]})
-        check("%3Cscript" not in hj and "by=session" in hj
-              and "sort=token" in hj and "what=call" in hj,
+              "索引刷新后逐块排行重算，缓存不误命中复用的 id")
+        hj = T.v_rank({"what": ["<script>"], "sort": ["y"], "p": ["1"]})
+        check("%3Cscript" not in hj and "what=block" in hj and "sort=" in hj,
               "分页链接改用白名单值，不继续传播原始非法参数")
 
         print("== 运行期零写盘 ==")

@@ -131,7 +131,7 @@
 **Linux（Debian / Ubuntu / 银河麒麟 / 统信 UOS / Deepin）**
 
 ```bash
-V=1.2.1   # 换成 Release 页上的最新版本号
+V=1.2.2   # 换成 Release 页上的最新版本号
 curl -fLO "https://github.com/The-garden-of-sinner/token-trace/releases/download/v$V/token-trace_${V}_all.deb"
 sudo dpkg -i "token-trace_${V}_all.deb"
 token-trace                     # 起服务并自动打开浏览器
@@ -294,6 +294,7 @@ tar 成员与 gzip 容器头的 `mtime` 都固定为 0（`GzipFile(..., mtime=0)
 
 | 版本 | 主要内容 |
 | --- | --- |
+| **v1.2.2** | 修正 `/rank` 的统计对象：原实现按会话 / 日期聚合，把块和调用压成桶；现改为**逐块 / 逐调用排行**，每一行就是一个上下文块或一次调用本身（块按块 token / 被携带次数 / 乘积，调用按合计 / 输入 / 输出 token）。行数分别等于全库块数与调用数；块乘积与 `/stats.costly_blocks` 同口径。自检 152 项 |
 | **v1.2.1** | 块级可观测性增强：块全文页与块清单新增「写入时间」「估算 token」（CJK 1 字≈1 token、其余 4 字符≈1 token，解析期算一次）；`/stats` 新增「成本最高的 20 个块」= 估算 token × 被携带次数，与「最大的块」区分；新增 `/rank` 统计排序页，按**会话 / 日期**分组统计**调用或上下文块**，排序键支持 token / 次数 / 二者乘积，零脚本、分页、非法参数白名单回落。用区间差分数组 `block_use_counts()` 把全库块被携带次数统计从逐块二分 `O(B log C)` 降到 `O(B+C)`。修 `/rank` 聚合缓存命中已回收索引对象、分页链接继续传播非法参数两处隐患。自检 144 项 |
 | **v1.2.0** | 保持运行期零写盘（对内存 / 冷启动 / SSD 写入寿命做了量化评估后决定不落盘，评估与演进建议见 `docs/API.md` §9）；新增 `/api/analytics/calls` 跨会话扁平调用宽表（`from/to/model/ws/tool/fields` 过滤、`offset/limit` 分页、Unix 毫秒时间戳并在 `meta` 声明单位、会话级粗筛 + 只物化当前页），并新增面向程序的接入文档 `docs/API.md`（字段字典、量纲、pandas 示例、已知口径）；修 `call_brief` 模型名漏归一、缺模型名占位符收敛为空串。同时合入时间统计改按**调用真实发生日**落桶（跨天会话不再压到 mtime）、`tok`→`token`、`in/out`→`输入/输出`、首页三栏备注精简、`/stats` 两卡片左右两栏。自检 127 项 |
 | **v1.1.8** | 修复首页「按模型 · 输入 token」环把同一模型按 `requestModelName` 大小写变体拆成多份（改为按 `providerData.model` 分组、全库投票统一展示名；`sum(models)==sum(pin)` 不变），环心数字按字数收字号不再压环；首页子代理改为「父会话行 → 缩进子树」展示隶属关系（原生 `<details>` 折叠、零脚本，子行标「派生自」，跨页 / 未能定位父级时在行内注明），不再作为孤立工作区分组平铺。README 口径同步。自检 102 项 |
@@ -326,7 +327,7 @@ tar 成员与 gzip 容器头的 `mtime` 都固定为 0（`GzipFile(..., mtime=0)
 | --- | --- |
 | `/` | 会话索引；`?sort=mtime\|credit\|calls`、`?ws=`、`?refresh=1` |
 | `/stats` | 跨会话聚合、最贵 20 次调用、最大 20 个块、**成本最高的 20 个块**（≈ 估算 token × 被携带次数）、冷启动断点 |
-| `/rank?by=&what=&sort=&p=` | **统计与排序**：按会话 / 日期分组统计调用或上下文块，按 token / 次数 / 二者乘积排序；`by=session\|day`、`what=call\|block`、`sort=token\|count\|product` |
+| `/rank?what=&sort=&p=` | **逐块 / 逐调用排行**：每一行就是一个上下文块或一次调用本身，不做会话 / 日期聚合；`what=block\|call`，块按 `sort=token\|count\|product`（块 token / 被携带次数 / 乘积），调用按 `sort=token\|in\|out`（合计 / 输入 / 输出） |
 | `/search?q=&scope=&mode=` | 全文搜索；`scope=blocks\|outputs\|turns\|all`；`mode=blocks` 由服务端转交按块检索；会话内为 `/s/<sid>/search` |
 | `/find?q=&p=` | **按块精确检索**（跨会话）；`/s/<sid>/find?q=` 为会话内；也可从搜索框切「按块匹配」进入 |
 | `/tools?tool=&view=&q=&p=` | **工具与命令聚合**；`view=tools\|progs` 切换，`tool=` 下钻到该工具全部调用；会话内为 `/s/<sid>/tools` |
@@ -1011,7 +1012,7 @@ p95 回落到 16.8 ms；run1 的 P/S 低帧是脚本在冷加载末尾强制 `ca
     真实计费还受系统提示、工具 schema、BPE 切分与缓存命中影响。「成本最高的块」=
     估算 token × 被携带次数，衡量**重复携带的累计量**而非某次请求的真实输入量；
     `/api/stats` 的 `costly_blocks` 是同一口径。块的时间戳取该块写入上下文那行 jsonl 的
-    `timestamp`，与调用时间不是一回事；`/rank` 按日期统计块时也用它落桶。
+    `timestamp`，与调用时间不是一回事；块全文页与 `/rank` 的「写入时间」列直接展示它。
 
 ---
 

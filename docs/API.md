@@ -309,4 +309,5 @@ by_model = df.groupby("model").agg(
 | 日期 | 变更 |
 | --- | --- |
 | 2026-11-09 | 新增 `/api/analytics/calls` 扁平宽表（`from/to/model/ws/tool/fields` + 分页）；`call_brief()` 模型名归一、`?` → 空串；`ROUTE_SPEC` 18 个 JSON 端点；固化自检 113 → 127 项 |
-| 2026-11-09（未发布） | `/api/stats` 新增 `costly_blocks`（估算 token × 被携带次数）；HTML 页面增至 19 个（新增 `/rank`，纯页面无对应 JSON 端点），JSON 端点仍 18 个；块级 `ts` / `e` 仅供 HTML 展示，原有块端点返回结构不变；自检 127 → 144 项 |
+| 2026-11-09 v1.2.1 | `/api/stats` 新增 `costly_blocks`（估算 token × 被携带次数）；HTML 页面增至 19 个（新增 `/rank`，纯页面无对应 JSON 端点），JSON 端点仍 18 个；块级 `ts` / `e` 仅供 HTML 展示，原有块端点返回结构不变；自检 127 → 144 项 |
+| 2026-11-10 v1.2.2 | 修正 `/rank` 的统计对象为**逐块 / 逐调用排行**（去掉按会话 / 日期聚合）：每一行就是一个上下文块或一次调用本身；纯 HTML 改动，JSON 端点与返回结构不变；自检 144 → 152 项 |
