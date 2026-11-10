@@ -708,8 +708,9 @@ def main():
         hf = T.v_rank({"what": ["block"], "k": [kk], "from": ["2026-13-99"],
                        "to": ["<script>"], "p": ["999999"]})
         check("<script" not in hf and "全部种类" in hf and 'class="on"' in hf
-              and 'type="date"' in hf and 'value="%s"' % kk in hf,
-              "筛选表单回显种类与日期，非法日期被忽略且不回显注入串")
+              and 'class="datepick"' in hf and 'name="from" value=""' in hf
+              and 'value="%s"' % kk in hf,
+              "筛选表单回显种类、非法日期被忽略，日期改自绘日历")
         check('<details class="pick">' in hf and '<select name=' not in hf,
               "种类筛选用自绘 details 菜单，不再出现原生 select")
         hc = T.v_rank({"what": ["call"], "k": [mk], "from": [day], "to": [day]})
@@ -719,7 +720,7 @@ def main():
                           "to": ["2099-12-31"]})
         check("没有匹配当前筛选条件" in hnone,
               "空结果给出提示而不是空白表格")
-        # 原生控件统一：搜索范围改 radio、color-scheme 跟随主题、日期框去原生外观
+        # 原生控件统一：搜索范围改 radio、color-scheme 跟随主题、日历改自绘
         st, sbody = get("/search?q=token")
         check(st == 200 and b'name="scope"' in sbody
               and b'<select name="scope"' not in sbody,
@@ -727,8 +728,30 @@ def main():
         check(b"color-scheme:light" in sbody and b"color-scheme:dark" in sbody,
               "页面声明 color-scheme，原生控件跟随明暗主题")
         st, rbody = get("/rank?what=block")
-        check(b"appearance:none" in rbody and b"-webkit-datetime-edit" in rbody,
-              "日期框去掉原生外观与内层边框")
+        check(st == 200 and b'class="datepick"' in rbody
+              and b'class="calgrid"' in rbody and b'type="date"' not in rbody,
+              "日期改自绘日历，页面不再有原生 date 弹层")
+        hcal = T.v_rank({"what": ["block"], "k": [kk], "from": ["2026-11-01"],
+                         "to": ["2026-11-30"], "cal": ["2026-10"],
+                         "calfield": ["from"]})
+        check("2026 年 10 月" in hcal and 'class="datepick" open' in hcal
+              and "calfield=from" in hcal and "cal=2026-09" in hcal
+              and "cal=2026-11" in hcal
+              and "from=2026-11-01" in hcal and "to=2026-11-30" in hcal
+              and "k=" + kk in hcal,
+              "自绘日历翻月保持展开，日期链接保留全部筛选参数")
+        check("筛选后块数" not in T.v_rank({"what": ["block"],
+                                          "cal": ["2026-10"],
+                                          "calfield": ["from"]}),
+              "日历翻页参数不参与筛选口径")
+        st, stats_body = get("/stats")
+        hm_rule = re.search(rb"\.hm\{[^}]*\}", stats_body)
+        check(st == 200 and hm_rule is not None
+              and b"overflow" not in hm_rule.group(0),
+              "热力图容器不再裁切 tooltip")
+        check(b"--ease-in:cubic-bezier(.4,0,.2,1)" in stats_body
+              and b"::view-transition-new(root){animation:vt-in .46s" in stats_body,
+              "入场用均衡缓动，跨页过渡只做透明度")
         # 性能：索引增量复用 + 已排序缓存
         a1 = G.scan_all()
         a2 = G.scan_all()

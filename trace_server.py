@@ -891,7 +891,7 @@ def tool_calls(sid, tool, offset=0, limit=40):
 # 深浅色只在 CSS 末尾的 media 里切换一次；估算值统一带 ≈ 前缀。
 CSS = """
 :root{
-/* 让原生控件（日期选择器、下拉弹层、滚动条）跟随页面明暗，而不是永远按浅色绘制 */
+/* 让仍由浏览器绘制的控件（滚动条等）跟随页面明暗；日期 / 下拉已改为自绘 */
 color-scheme:light;
 --bg:#fff;--fg:#2C2C2A;--panel:#F7F6F2;--panel2:#FAFAF7;--track:#F1EFE8;
 --line:#E3E1D9;--line2:#EDEBE3;--border:#D3D1C7;--muted:#5F5E5A;--faint:#888780;--dim:#B4B2A9;
@@ -905,8 +905,11 @@ color-scheme:light;
 --p0:#1FA39A;--p1:#EF9F27;--p2:#3B82D6;
 --p3:#8A63D2;--p4:#D26A9B;
 --shadow:0 1px 2px #0000000a,0 2px 8px #00000008;
-/* 全局缓动：起步利落、收尾缓，所有过渡共用一条曲线 */
---ease:cubic-bezier(.22,.68,.24,1)
+/* 交互缓动：起步利落、收尾缓，hover / 点击反馈共用这条曲线 */
+--ease:cubic-bezier(.22,.68,.24,1);
+/* 入场缓动：交互曲线起步过猛（前 20% 就走完大半），用在 0.5s 的入场
+   动画上会看成「啪一下就结束」。入场改用整段都有可见变化的标准曲线。 */
+--ease-in:cubic-bezier(.4,0,.2,1)
 }
 *{box-sizing:border-box}
 body{margin:0;padding:0 0 84px;font:14px/1.65 system-ui,-apple-system,"Noto Sans CJK SC",sans-serif;color:var(--fg);background:var(--bg)}
@@ -944,7 +947,7 @@ h3{font-size:12.5px;font-weight:500;margin:18px 0 7px;color:var(--fg)}
 @media(max-width:980px){.kpi{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}}
 @media(max-width:640px){.kpi{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .compose{display:flex;height:19px;border-radius:5px;overflow:hidden;background:var(--track);margin-bottom:6px}
-.compose i{display:block;height:100%;transform-origin:left center;animation:tt-bar .62s var(--ease) both}
+.compose i{display:block;height:100%;transform-origin:left center;animation:tt-bar .62s var(--ease-in) backwards}
 @keyframes tt-bar{from{transform:scaleX(.02)}}
 .legend{font-size:11px;color:var(--muted);margin-bottom:12px;display:flex;gap:12px;flex-wrap:wrap}
 .legend span{display:inline-flex;align-items:center;gap:5px}
@@ -996,7 +999,7 @@ form.searchbox select:focus{outline:none;border-color:var(--accent);color:var(--
 .pickmenu a:hover{background:var(--accent-bg);color:var(--accent-fg)}
 .pickmenu a.on{background:var(--accent);color:var(--bg);font-weight:500}
 @keyframes pick-in{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:none}}
-.pick[open] .pickmenu{animation:pick-in .28s var(--ease) both}
+.pick[open] .pickmenu{animation:pick-in .28s var(--ease-in) backwards}
 .modepick{display:inline-flex;gap:2px;background:var(--track);border-radius:999px;padding:3px}
 .modepick label{position:relative;cursor:pointer}
 .modepick input{position:absolute;opacity:0;width:0;height:0}
@@ -1007,19 +1010,41 @@ form.searchbox select:focus{outline:none;border-color:var(--accent);color:var(--
 form.searchbox button{background:var(--accent);color:var(--bg);border:1px solid var(--accent);
  padding:10px 22px;border-radius:11px;font:12px inherit;font-weight:500}
 form.searchbox button:hover{background:var(--link-h);border-color:var(--link-h);color:var(--bg)}
-form.searchbox input[type=date]{appearance:none;-webkit-appearance:none;
- padding:6px 11px;border:1px solid transparent;border-radius:999px;
- background-color:var(--track);color:var(--muted);font-size:11px;cursor:pointer;
- font-variant-numeric:tabular-nums;line-height:1.5;min-height:29px}
-form.searchbox input[type=date]:hover{border-color:var(--line)}
-form.searchbox input[type=date]:focus{outline:none;border-color:var(--accent);
- color:var(--fg);background-color:var(--bg)}
-form.searchbox input[type=date]::-webkit-datetime-edit{padding:0;border:0}
-form.searchbox input[type=date]::-webkit-calendar-picker-indicator{
- opacity:.5;cursor:pointer;margin-left:2px;padding:0;border:0;background:transparent}
-form.searchbox input[type=date]::-webkit-calendar-picker-indicator:hover{opacity:.85}
-form.searchbox input[type=date]::-webkit-inner-spin-button,
-form.searchbox input[type=date]::-webkit-clear-button{display:none}
+/* 自绘日期选择：原生 <input type=date> 的日历弹层由浏览器绘制，
+   那圈直角黑边是浏览器 UI 层，color-scheme 只能改配色、改不掉边框。
+   改成 details + 链接日历：零脚本，圆角 / 阴影 / 选中态完全可控。 */
+.datepick{position:relative;display:inline-block}
+.datepick[open]{z-index:40}
+.datepick>summary{list-style:none;cursor:pointer;padding:6px 12px;
+ border:1px solid transparent;border-radius:999px;background:var(--track);
+ color:var(--muted);font-size:11px;white-space:nowrap;user-select:none;
+ font-variant-numeric:tabular-nums;line-height:1.5}
+.datepick>summary::-webkit-details-marker{display:none}
+.datepick>summary:hover{border-color:var(--line);color:var(--fg)}
+.datepick[open]>summary{border-color:var(--accent);color:var(--fg);background:var(--bg)}
+.calpop{position:absolute;z-index:40;top:calc(100% + 6px);left:0;width:226px;
+ padding:10px;background:var(--panel);border:1px solid var(--line);
+ border-radius:11px;box-shadow:0 10px 28px #00000024,0 2px 6px #00000014;
+ animation:pick-in .24s var(--ease-in) backwards}
+.calhd{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.calhd b{font-size:11.5px;font-weight:600}
+.calhd a{display:inline-flex;align-items:center;justify-content:center;
+ width:22px;height:22px;border-radius:6px;color:var(--muted);text-decoration:none;font-size:15px}
+.calhd a:hover{background:var(--accent-bg);color:var(--accent-fg)}
+.calgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
+.calw,.cald{display:flex;align-items:center;justify-content:center;height:26px;
+ font-size:11px;border-radius:6px}
+.calw{color:var(--faint);font-size:10px}
+.cald{color:var(--fg);text-decoration:none;font-variant-numeric:tabular-nums}
+.cald:hover{background:var(--accent-bg);color:var(--accent-fg)}
+.cald.out{color:var(--dim);opacity:.55}
+.cald.today{box-shadow:inset 0 0 0 1px var(--accent)}
+.cald.on{background:var(--accent);color:var(--bg);font-weight:600}
+.cald.on:hover{background:var(--accent-d);color:var(--bg)}
+.calft{display:flex;justify-content:space-between;margin-top:8px;padding-top:7px;
+ border-top:1px solid var(--line2)}
+.calft a{font-size:11px;color:var(--link);text-decoration:none}
+.calft a:hover{color:var(--link-h)}
 .sb-sep{color:var(--faint);font-size:11px}
 button,.btn{display:inline-block;padding:6px 13px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--fg);font:12px inherit;text-decoration:none;cursor:pointer}
 button:hover,.btn:hover{border-color:var(--accent);color:var(--link-h);background:var(--accent-bg)}
@@ -1096,43 +1121,33 @@ details.grp .in{padding:8px 11px 3px}
 code{font:11.5px ui-monospace,monospace;background:var(--track);padding:1px 4px;border-radius:3px}
 .apirow{display:grid;grid-template-columns:minmax(260px,1fr) 2fr;gap:10px;padding:7px 10px;border-bottom:1px solid var(--line2);font-size:12px}
 .apirow code{background:none;padding:0;color:var(--link)}
-/* 跨文档视图过渡：同源跳转整页 cross-fade，纯 CSS 声明，不支持的浏览器直接忽略，
-   页面照常跳转。数字 / 卡片只动 opacity 与 transform，不触发重排。 */
+/* 跨文档视图过渡：同源跳转整页淡入淡出，纯 CSS 声明，不支持的浏览器直接忽略。
+   root 只动 opacity——整页快照纹理做位移要在集显上重采样两层全屏位图，
+   是「切页发涩」的主要开销；位移感留给少量页内元素表达。
+   入场一律换用 --ease-in：交互曲线起步过猛，0.5s 的过渡会看成 100ms 硬切。 */
 @view-transition{navigation:auto}
-/* 统一缓动 --ease：起步利落、收尾缓，避免「啪」一下硬切。
-   淡出短于淡入，两层不叠出拖影；入场错峰拉到 50ms 一档。 */
-::view-transition-old(root){animation:vt-out .26s cubic-bezier(.4,0,.8,.6) both}
-::view-transition-new(root){animation:vt-in .52s var(--ease) both}
-@keyframes vt-out{to{opacity:0;transform:translateY(-5px)}}
-@keyframes vt-in{from{opacity:.22;transform:translateY(10px)}}
-/* KPI 单独命名：跨页时数字区局部变形 + 聚焦淡入，而不是整页一起淡。
-   每个视图最多一个 .kpi，名字不会在同一文档里重复。 */
+::view-transition-old(root){animation:vt-out .2s var(--ease-in) both}
+::view-transition-new(root){animation:vt-in .46s var(--ease-in) both}
+@keyframes vt-out{to{opacity:0}}
+@keyframes vt-in{from{opacity:.35}}
+/* KPI 局部命名：跨页时数字区独立淡入，不与整页一起糊成一片。 */
 .kpi{view-transition-name:trace-kpi}
-::view-transition-group(trace-kpi){animation-duration:.6s}
-::view-transition-old(trace-kpi){animation:vt-fade .24s ease both}
-::view-transition-new(trace-kpi){animation:vt-kpi .6s var(--ease) both}
+::view-transition-group(trace-kpi){animation-duration:.46s}
+::view-transition-old(trace-kpi){animation:vt-fade .2s ease both}
+::view-transition-new(trace-kpi){animation:vt-kpi .46s var(--ease-in) both}
 @keyframes vt-fade{to{opacity:0}}
-@keyframes vt-kpi{from{opacity:.3;transform:translateY(7px)}to{opacity:1;transform:none}}
-/* 入场动画的起始透明度抬到接近实色：动效主要靠位移与轻微模糊表达。
-   慢设备、打印或 headless 快照如果没跑完动画，内容也不会看起来是空白的。 */
-@keyframes tt-in{from{opacity:.72;transform:translateY(10px)}to{opacity:1;transform:none}}
-@keyframes tt-num{from{opacity:.7;transform:translateY(6px)}to{opacity:1;transform:none}}
-/* 分区入场：数字带、图表卡、工具条、检索区、入口卡、会话分组都用同一段位移淡入。
-   按文档顺序给 40–140ms 的错峰，页面从上往下「落」下来，而不是整块同时闪出。 */
-.kpi>div,.viz,.toolbar,form.searchbox,.segrow,.tkfilter,.tabs,
-.navcard,details.grp,.chart,.warn,.note{animation:tt-in .56s var(--ease) both}
-/* hero 只做透明度：它带着 view-transition-name 的 KPI，若整体位移，
-   跨文档 morph 的起始快照会被垫高几像素，看起来像数字跳了一下。 */
-.hero{animation:tt-soft .5s var(--ease) both}
-@keyframes tt-soft{from{opacity:.62}to{opacity:1}}
-.toolbar{animation-delay:.06s}form.searchbox{animation-delay:.1s}
-.segrow,.tkfilter{animation-delay:.04s}.warn,.note{animation-delay:.02s}
+@keyframes vt-kpi{from{opacity:.4}to{opacity:1}}
+/* 页内入场：错峰层次只留给数字带、导航卡、会话分组三处。
+   实测首页 34 个活动动画与首次布局争主线程，触发 250~320ms 长帧，
+   把动画前一半整段吃掉；削到约 12 个后帧率与可见动画时长都明显恢复。
+   用 backwards 而非 both：动画一结束就释放合成层，不长期占着显存。 */
+@keyframes tt-in{from{opacity:.78;transform:translateY(8px)}to{opacity:1;transform:none}}
+.kpi>div,.navcard,details.grp{animation:tt-in .52s var(--ease-in) backwards}
 .navcard:nth-child(2){animation-delay:.05s}.navcard:nth-child(3){animation-delay:.1s}
 .navcard:nth-child(4){animation-delay:.15s}
 details.grp:nth-of-type(2){animation-delay:.05s}
 details.grp:nth-of-type(3){animation-delay:.1s}
 details.grp:nth-of-type(n+4){animation-delay:.14s}
-.kpi b{animation:tt-num .62s var(--ease) both}
 .kpi>div:nth-child(2){animation-delay:.05s}.kpi>div:nth-child(3){animation-delay:.1s}
 .kpi>div:nth-child(4){animation-delay:.15s}.kpi>div:nth-child(5){animation-delay:.2s}
 .kpi>div:nth-child(6){animation-delay:.25s}.kpi>div:nth-child(n+7){animation-delay:.3s}
@@ -1186,18 +1201,24 @@ CSS_VIZ = """
 .viz-hd b{font-size:12.5px;font-weight:600}.viz-hd small{font-size:10.5px;color:var(--faint)}
 .viz-hd .fine{margin-left:auto}
 .empty{padding:16px;text-align:center;color:var(--faint);font-size:11.5px;background:var(--track);border-radius:6px}
+/* 悬浮说明：祖先链路不能有任何 overflow 裁切。.hm 早期写了 overflow-x:auto，
+   按 CSS 规范会把 overflow-y 一并算成 auto，气泡上半截被容器直接切掉。 */
 [data-tip]{position:relative}
+[data-tip]:hover,[data-tip]:focus-visible{z-index:6}
 [data-tip]:hover::after,[data-tip]:focus-visible::after{content:attr(data-tip);position:absolute;left:50%;bottom:calc(100% + 6px);
- transform:translateX(-50%);z-index:5;background:var(--fg);color:var(--bg);font-size:10.5px;line-height:1.45;
+ transform:translateX(-50%);z-index:50;background:var(--fg);color:var(--bg);font-size:10.5px;line-height:1.45;
  padding:5px 8px;border-radius:5px;white-space:pre-line;max-width:250px;min-width:90px;box-shadow:var(--shadow);pointer-events:none}
+/* 首列 / 末列的格子让气泡贴边，避免横向越出卡片 */
+.hm i:nth-child(-n+7)::after{left:0;transform:none}
+.hm i:nth-last-child(-n+7)::after{left:auto;right:0;transform:none}
 .donut-row{display:flex;align-items:center;gap:22px;flex-wrap:wrap}
 .donut-wrap{position:relative;width:112px;height:112px;flex:none}
-.donut{width:112px;height:112px;display:block;animation:tt-pop .62s var(--ease) both}
+.donut{width:112px;height:112px;display:block;animation:tt-pop .62s var(--ease-in) backwards}
 .donut circle{fill:none;stroke-width:5.2}
 .donut .trk{stroke:var(--track)}
 /* 环的唤起：底盘先轻微放大浮起，各段按自己的起始角度错峰「长」出来，
    读起来是一圈顺时针扫过，而不是整张图一起淡入。 */
-.donut circle:not(.trk){animation:tt-arc .72s var(--ease) both}
+.donut circle:not(.trk){animation:tt-arc .72s var(--ease-in) backwards}
 @keyframes tt-pop{from{opacity:.55;transform:scale(.93)}to{opacity:1;transform:none}}
 @keyframes tt-arc{from{stroke-dasharray:0 100}}
 .donut-wrap .ctr{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:none}
@@ -1214,14 +1235,16 @@ CSS_VIZ = """
 .reserve .retired{background:repeating-linear-gradient(45deg,var(--dim) 0 4px,var(--track) 4px 8px)}
 /* 折线图的拉起：从左往右用 clip 逐步揭开，折线与面积一起「画」出来。
    clip-path 只影响合成层，不触发重排；不支持 inset 的浏览器直接显示整条线。 */
-.spark{width:100%;height:38px;display:block;animation:tt-draw .8s var(--ease) both}
+.spark{width:100%;height:38px;display:block;animation:tt-draw .8s var(--ease-in) backwards}
 @keyframes tt-draw{from{clip-path:inset(0 100% 0 0);opacity:.55}to{clip-path:inset(0 0 0 0);opacity:1}}
 .spark polyline{fill:none;stroke:var(--accent);stroke-width:1.6;vector-effect:non-scaling-stroke}
 .spark polygon{fill:var(--accent);opacity:.11}
 """
 
 CSS_HM = """
-.hm{display:grid;grid-auto-flow:column;grid-template-rows:repeat(7,12px);grid-auto-columns:12px;gap:3px;overflow-x:auto;padding:2px 0}
+/* 不设 overflow：这里是横向滚动容器会连带裁掉纵向气泡；10 周 = 147px，
+   远小于卡片宽度，本来也不需要滚动。 */
+.hm{display:grid;grid-auto-flow:column;grid-template-rows:repeat(7,12px);grid-auto-columns:12px;gap:3px;padding:2px 0}
 .hm i{border-radius:2px;background:var(--track)}
 .hm i.h1{background:var(--accent);opacity:.3}.hm i.h2{background:var(--accent);opacity:.5}
 .hm i.h3{background:var(--accent);opacity:.72}.hm i.h4{background:var(--accent);opacity:.95}
@@ -1247,14 +1270,14 @@ CSS_TREND = """
 .trend{position:relative;display:flex;align-items:flex-end;gap:2px;height:172px;border-bottom:1px solid var(--line);
  background:repeating-linear-gradient(to top,transparent 0,transparent 24.6%,var(--line2) 24.6%,var(--line2) 25%)}
 .trend a{flex:1;min-width:3px;height:100%;display:flex;flex-direction:column-reverse;justify-content:flex-start;
- text-decoration:none;position:relative;transform-origin:bottom;animation:tt-rise .55s var(--ease) backwards}
+ text-decoration:none;position:relative;transform-origin:bottom;animation:tt-rise .55s var(--ease-in) backwards}
 .trend a i{display:block;width:100%;min-height:0;border-radius:2px 2px 0 0;background:var(--track);
  background:linear-gradient(to top,var(--p0) 0,var(--p0) var(--s0),var(--p1) var(--s0),var(--p1) var(--s1),var(--p2) var(--s1),var(--p2) var(--s2),var(--p3) var(--s2),var(--p3) var(--s3),var(--p4) var(--s3),var(--p4) var(--s4))}
 .trend a:hover,.trend a:focus-visible{outline:1px solid var(--accent);outline-offset:1px}
 .trend a .mk{position:absolute;top:-3px;left:50%;transform:translateX(-50%);font-size:9px;line-height:1;color:var(--neg2)}
 .trend a .mk.c{color:var(--warn-fg)}
 .trend .ovl{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;
- animation:tt-line .9s .2s var(--ease) both}
+ animation:tt-line .9s .2s var(--ease-in) backwards}
 @keyframes tt-line{from{clip-path:inset(0 100% 0 0);opacity:0}to{clip-path:inset(0 0 0 0);opacity:1}}
 .trend .ovl polyline{fill:none;stroke:var(--fg);stroke-width:1.2;opacity:.42;vector-effect:non-scaling-stroke}
 @keyframes tt-rise{from{transform:scaleY(.02);opacity:.35}to{transform:scaleY(1);opacity:1}}
@@ -3423,21 +3446,88 @@ def v_rank(q):
     pick_html = ('<details class="pick"><summary>%s</summary>'
                  '<div class="pickmenu">%s</div></details>' %
                  (esc(cur_kind), kind_menu))
+    # 自绘日历：原生 <input type=date> 的日历弹层同样由浏览器绘制，那圈
+    # 直角黑边在浏览器 UI 层，color-scheme 只能改配色、改不掉边框。改成
+    # details + 链接日历，零脚本；每个日期都是带完整筛选条件的链接。
+    today = datetime.date.today()
+    cal_raw = qstr(q, "cal", "")
+    cal_field = qstr(q, "calfield", "")
+    if cal_field not in ("from", "to"):
+        cal_field = ""
+    try:
+        cy, cm = (int(x) for x in cal_raw.split("-")[:2])
+        datetime.date(cy, cm, 1)
+    except (ValueError, TypeError):
+        cy, cm = today.year, today.month
+    first_wd = datetime.date(cy, cm, 1).weekday()          # 周一 = 0
+    days_in = (datetime.date(cy + (cm == 12), cm % 12 + 1, 1)
+               - datetime.timedelta(days=1)).day
+    prev_last = (datetime.date(cy, cm, 1) - datetime.timedelta(days=1)).day
+    prev_ym = "%04d-%02d" % (cy - (cm == 1), 12 if cm == 1 else cm - 1)
+    next_ym = "%04d-%02d" % (cy + (cm == 12), 1 if cm == 12 else cm + 1)
+
+    def date_href(field, val):
+        d = dict(filt)
+        if val:
+            d[field] = val
+        else:
+            d.pop(field, None)
+        return url(what, sort, d)
+
+    def cal_href(ym, field):
+        d = dict(filt)
+        d["cal"] = ym
+        d["calfield"] = field
+        return url(what, sort, d)
+
+    def date_pick(field, label, cur):
+        cells = ['<span class="cald out">%d</span>' % (prev_last - first_wd + 1 + i)
+                 for i in range(first_wd)]
+        for day in range(1, days_in + 1):
+            ds = "%04d-%02d-%02d" % (cy, cm, day)
+            cls = "cald"
+            if ds == cur:
+                cls += " on"
+            if ds == today.isoformat():
+                cls += " today"
+            cells.append('<a class="%s" href="%s">%d</a>' %
+                         (cls, date_href(field, ds), day))
+        tail = (7 - len(cells) % 7) % 7
+        cells.extend('<span class="cald out">%d</span>' % i
+                     for i in range(1, tail + 1))
+        week = "".join('<span class="calw">%s</span>' % w for w in "一二三四五六日")
+        # 切月份是链接跳转；带 cal/calfield 回来时让对应弹层保持展开，
+        # 连点几个月不用反复打开。
+        opened = " open" if (cal_field == field and cal_raw) else ""
+        return ('<details class="datepick"%s><summary>%s</summary>'
+                '<div class="calpop">'
+                '<div class="calhd"><a href="%s" aria-label="上个月">‹</a>'
+                '<b>%d 年 %d 月</b><a href="%s" aria-label="下个月">›</a></div>'
+                '<div class="calgrid">%s%s</div>'
+                '<div class="calft"><a href="%s">今天</a><a href="%s">清除</a></div>'
+                '</div></details>' %
+                (opened, esc(cur or label),
+                 cal_href(prev_ym, field), cy, cm, cal_href(next_ym, field),
+                 week, "".join(cells),
+                 date_href(field, today.isoformat()), date_href(field, "")))
+
     filt_html = ('<form class="searchbox" method="get" action="/rank">'
                  '<input type="hidden" name="what" value="%s">'
                  '<input type="hidden" name="sort" value="%s">'
                  '<input type="hidden" name="k" value="%s">'
+                 '<input type="hidden" name="from" value="%s">'
+                 '<input type="hidden" name="to" value="%s">'
                  '<span class="sb-tools">'
                  '<b class="sb-lab">%s</b>%s'
                  '<b class="sb-lab">时间</b>'
-                 '<input type="date" name="from" value="%s" aria-label="起始日期">'
-                 '<span class="sb-sep">至</span>'
-                 '<input type="date" name="to" value="%s" aria-label="结束日期">'
+                 '%s<span class="sb-sep">至</span>%s'
                  '</span>'
                  '<span class="sb-main"><button type="submit">筛选</button>'
                  '<a class="btn" href="%s">清空</a></span></form>' %
-                 (esc(what), esc(sort), esc(kind), esc(kind_label), pick_html,
-                  esc(dfrom), esc(dto),
+                 (esc(what), esc(sort), esc(kind), esc(dfrom), esc(dto),
+                  esc(kind_label), pick_html,
+                  date_pick("from", "起始日期", dfrom),
+                  date_pick("to", "结束日期", dto),
                   esc("/rank?" + urlencode({"what": what, "sort": sort}))))
     n_label = (("筛选后块数" if filt else "块总数") if what == "block"
                else ("筛选后调用数" if filt else "调用总数"))
@@ -3445,11 +3535,15 @@ def v_rank(q):
     for a, b in filt.items():
         pager_q[a] = [b]
 
+    # 筛选栏放最上面：自绘日历向下展开约 300px，若夹在 KPI / 说明 / 两行
+    # tabs 之后，弹层会越过视口底部，末行与「今天 / 清除」被截掉。
+    body = filt_html
+
     if what == "block":
         arch = sum(r[4] for r in rows)
         carried = sum(r[4] * r[5] for r in rows)
         uses = sum(r[5] for r in rows)
-        body = kpi([(n_label, nfmt(len(rows))),
+        body += kpi([(n_label, nfmt(len(rows))),
                     ("归档 token 合计", "≈ " + kh(arch)),
                     ("承载 token 合计", "≈ " + kh(carried)),
                     ("被携带合计", nfmt(uses)),
@@ -3466,7 +3560,6 @@ def v_rank(q):
         body += ('<div class="tabs"><b>排序</b>%s</div>' %
                  tabs((("token", "按块 token"), ("count", "按被携带次数"),
                        ("product", "按乘积")), sort, tab_sort))
-        body += filt_html
         if not rows:
             body += '<div class="note">没有匹配当前筛选条件的块，换个种类或时间范围试试。</div>'
         else:
@@ -3501,7 +3594,7 @@ def v_rank(q):
         total = sum(r[2]["pin"] + r[2]["pout"] for r in rows)
         tin = sum(r[2]["pin"] for r in rows)
         tout = sum(r[2]["pout"] for r in rows)
-        body = kpi([(n_label, nfmt(len(rows))),
+        body += kpi([(n_label, nfmt(len(rows))),
                     ("token 合计", kh(total)),
                     ("输入 / 输出", "%s / %s" % (kh(tin), kh(tout))),
                     ("当前排序", {"token": "合计 token", "in": "输入 token",
@@ -3517,7 +3610,6 @@ def v_rank(q):
         body += ('<div class="tabs"><b>排序</b>%s</div>' %
                  tabs((("token", "按合计"), ("in", "按输入"),
                        ("out", "按输出")), sort, tab_sort))
-        body += filt_html
         if not rows:
             body += '<div class="note">没有匹配当前筛选条件的调用，换个模型或时间范围试试。</div>'
         else:
