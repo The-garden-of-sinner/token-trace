@@ -677,6 +677,46 @@ def main():
                 vals = [T.rank_metric(what, sk, r) for r in rr]
                 check(all(vals[i] >= vals[i + 1] for i in range(len(vals) - 1)),
                       "%s 按 %s 排序结果单调不增（%d 行）" % (what, sk, len(rr)))
+        # 筛选：种类 / 时间 / 任意组合
+        kk = next((x for x in T.ORDER if any(r[3]["k"] == x for r in brows)),
+                  brows[0][3]["k"])
+        f1 = T.rank_filter("block", brows, kk, "", "")
+        check(len(f1) > 0 and all(r[3]["k"] == kk for r in f1),
+              "块种类筛选只保留该类型（%s，%d 行）" % (kk, len(f1)))
+        day = next((T.G.day_key(r[3].get("ts")) for r in brows
+                    if T.G.day_key(r[3].get("ts"))), "")
+        f2 = T.rank_filter("block", brows, "", day, day)
+        check(len(f2) > 0 and all(T.G.day_key(r[3].get("ts")) == day for r in f2),
+              "块时间筛选只保留该日期（%s，%d 行）" % (day, len(f2)))
+        f3 = T.rank_filter("block", brows, kk, day, day)
+        check(all(r[3]["k"] == kk and T.G.day_key(r[3].get("ts")) == day
+                  for r in f3),
+              "块种类 + 时间组合筛选（%d 行）" % len(f3))
+        mk = T.G.canon_model(crows[0][2]["model"])
+        cday = next((T.G.day_key(r[2].get("ts")) for r in crows
+                     if T.G.canon_model(r[2]["model"]) == mk
+                     and T.G.day_key(r[2].get("ts"))), "")
+        f4 = T.rank_filter("call", crows, mk, "", "")
+        check(len(f4) > 0 and all(T.G.canon_model(r[2]["model"]) == mk
+                                  for r in f4),
+              "调用模型筛选（%s，%d 行）" % (mk, len(f4)))
+        f5 = T.rank_filter("call", crows, mk, cday, cday)
+        check(bool(cday) and len(f5) > 0
+              and all(T.G.canon_model(r[2]["model"]) == mk
+                      and T.G.day_key(r[2].get("ts")) == cday for r in f5),
+              "调用模型 + 时间组合筛选（%d 行）" % len(f5))
+        hf = T.v_rank({"what": ["block"], "k": [kk], "from": ["2026-13-99"],
+                       "to": ["<script>"], "p": ["999999"]})
+        check("<script" not in hf and "全部种类" in hf and "selected" in hf
+              and 'type="date"' in hf and 'value="%s"' % kk in hf,
+              "筛选表单回显种类与日期，非法日期被忽略且不回显注入串")
+        hc = T.v_rank({"what": ["call"], "k": [mk], "from": [day], "to": [day]})
+        check("全部模型" in hc and "selected" in hc and day in hc,
+              "调用筛选表单回显模型与日期")
+        hnone = T.v_rank({"what": ["block"], "k": [kk], "from": ["2099-01-01"],
+                          "to": ["2099-12-31"]})
+        check("没有匹配当前筛选条件" in hnone,
+              "空结果给出提示而不是空白表格")
         before = T.rank_rows("block")
         T.STORE.sessions(refresh=True)
         after = T.rank_rows("block")

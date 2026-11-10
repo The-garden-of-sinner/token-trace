@@ -973,6 +973,12 @@ form.searchbox select:hover{border-color:var(--line)}
 form.searchbox button{background:var(--accent);color:var(--bg);border:1px solid var(--accent);
  padding:10px 22px;border-radius:11px;font:12px inherit;font-weight:500}
 form.searchbox button:hover{background:var(--link-h);border-color:var(--link-h);color:var(--bg)}
+form.searchbox input[type=date]{padding:6px 10px;border:1px solid transparent;border-radius:999px;
+ background:var(--track);color:var(--muted);font:11px inherit;cursor:pointer}
+form.searchbox input[type=date]:hover{border-color:var(--line)}
+form.searchbox input[type=date]:focus{outline:none;border-color:var(--accent);color:var(--fg)}
+form.searchbox input[type=date]::-webkit-calendar-picker-indicator{opacity:.55;cursor:pointer}
+.sb-sep{color:var(--faint);font-size:11px}
 button,.btn{display:inline-block;padding:6px 13px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--fg);font:12px inherit;text-decoration:none;cursor:pointer}
 button:hover,.btn:hover{border-color:var(--accent);color:var(--link-h);background:var(--accent-bg)}
 .btn.on{background:var(--accent);color:var(--bg);border-color:var(--accent)}
@@ -3238,6 +3244,25 @@ def rank_metric(what, sort, r):
     return c["pin"] + c["pout"]
 
 
+def rank_filter(what, rows, kind, dfrom, dto):
+    """按种类 / 时间筛选排行行，各维可单独或任意组合。
+
+    块按块类型（k）筛选，调用按模型归一键筛选（大小写变体不会漏）；
+    时间按对象时间戳的本地日期做闭区间比较，任一端为空表示该侧不限。
+    """
+    if kind:
+        if what == "block":
+            rows = [r for r in rows if r[3]["k"] == kind]
+        else:
+            rows = [r for r in rows if G.canon_model(r[2]["model"]) == kind]
+    if dfrom or dto:
+        def ok(r):
+            d = G.day_key((r[3] if what == "block" else r[2]).get("ts"))
+            return bool(d) and (not dfrom or d >= dfrom) and (not dto or d <= dto)
+        rows = [r for r in rows if ok(r)]
+    return rows
+
+
 def v_rank(q):
     what = qstr(q, "what", "block")
     if what not in RANK_WHAT:
@@ -3247,27 +3272,95 @@ def v_rank(q):
     if sort not in sorts:
         sort = sorts[0]          # 白名单：非法值一律回落，不拼进 HTML / 排序键
 
-    rows = sorted(rank_rows(what), key=rank_sort_key(what, sort))
+    # ---- 筛选：种类（块类型 / 模型归一键）+ 时间闭区间，可任意组合 ----
+    kind = qstr(q, "k", "")
+    if what == "block":
+        if kind not in TYPES:
+            kind = ""
+    elif kind not in model_display_map():
+        kind = ""
+
+    def _norm_date(s):
+        s = (s or "").strip()
+        if not s:
+            return ""
+        try:
+            return datetime.datetime.strptime(s, "%Y-%m-%d").strftime("%Y-%m-%d")
+        except ValueError:
+            return ""
+
+    dfrom = _norm_date(qstr(q, "from", ""))
+    dto = _norm_date(qstr(q, "to", ""))
+
+    rows = rank_filter(what, rank_rows(what), kind, dfrom, dto)
+    rows = sorted(rows, key=rank_sort_key(what, sort))
     size = PAGE_BLOCKS
     p = clamp_p(q, len(rows), size)
     shown = rows[p * size:(p + 1) * size]
     mx = max((rank_metric(what, sort, r) for r in rows), default=0) or 1
 
-    def link(**kw):
-        d = {"what": what, "sort": sort}
-        d.update(kw)
+    filt = {}
+    if kind:
+        filt["k"] = kind
+    if dfrom:
+        filt["from"] = dfrom
+    if dto:
+        filt["to"] = dto
+
+    def url(what_, sort_, extra=None):
+        d = {"what": what_, "sort": sort_}
+        if extra:
+            d.update(extra)
         return esc("/rank?" + urlencode(d))
 
-    def tabs(opts, cur, key):
+    def tab_obj(k2):
+        # 切换对象时丢掉对象专属的种类，保留时间范围，排序回到新对象默认键
+        d = {a: b for a, b in filt.items() if a != "k"}
+        return url(k2, RANK_SORT[k2][0], d)
+
+    def tab_sort(sk):
+        return url(what, sk, filt)
+
+    def tabs(opts, cur, href_fn):
         return "".join('<a class="btn %s" href="%s">%s</a>' %
-                       ("on" if k == cur else "", link(**{key: k}), lab)
-                       for k, lab in opts)
+                       ("on" if v == cur else "", href_fn(v), lab)
+                       for v, lab in opts)
+
+    if what == "block":
+        kind_opts = [("", "全部种类")] + [(x, TYPES[x]) for x in ORDER]
+        kind_label = "种类"
+    else:
+        kind_opts = ([("", "全部模型")] +
+                     sorted(((a, b) for a, b in model_display_map().items()),
+                            key=lambda x: x[1].lower()))
+        kind_label = "模型"
+    kind_sel = "".join('<option value="%s"%s>%s</option>' %
+                       (esc(v), " selected" if v == kind else "", esc(lab))
+                       for v, lab in kind_opts)
+    filt_html = ('<form class="searchbox" method="get" action="/rank">'
+                 '<input type="hidden" name="what" value="%s">'
+                 '<input type="hidden" name="sort" value="%s">'
+                 '<span class="sb-tools">'
+                 '<select name="k" aria-label="%s">%s</select>'
+                 '<input type="date" name="from" value="%s" aria-label="起始日期">'
+                 '<span class="sb-sep">至</span>'
+                 '<input type="date" name="to" value="%s" aria-label="结束日期">'
+                 '</span>'
+                 '<span class="sb-main"><button type="submit">筛选</button>'
+                 '<a class="btn" href="%s">清空</a></span></form>' %
+                 (esc(what), esc(sort), kind_label, kind_sel, esc(dfrom), esc(dto),
+                  esc("/rank?" + urlencode({"what": what, "sort": sort}))))
+    n_label = (("筛选后块数" if filt else "块总数") if what == "block"
+               else ("筛选后调用数" if filt else "调用总数"))
+    pager_q = {"what": [what], "sort": [sort]}
+    for a, b in filt.items():
+        pager_q[a] = [b]
 
     if what == "block":
         arch = sum(r[4] for r in rows)
         carried = sum(r[4] * r[5] for r in rows)
         uses = sum(r[5] for r in rows)
-        body = kpi([("块总数", nfmt(len(rows))),
+        body = kpi([(n_label, nfmt(len(rows))),
                     ("归档 token 合计", "≈ " + kh(arch)),
                     ("承载 token 合计", "≈ " + kh(carried)),
                     ("被携带合计", nfmt(uses)),
@@ -3277,45 +3370,49 @@ def v_rank(q):
                  '日期聚合出来的桶。<b>块 token</b> 是这块原文的估算量（<b>≈ 估算</b>，'
                  '非官方 tokenizer、非真实账单）；<b>被携带</b> 是它被后续请求带进上下文的'
                  '次数；<b>乘积</b> = 块 token × 被携带次数，也就是「成本最高的块」的口径。'
-                 '整个上下文的归档量与真正被反复承载的量分列在上方 KPI，两者相差多少一眼可见。'
+                 '「种类」与「时间」可任意组合，时间按块<b>写入</b>的本地日期闭区间筛选。'
                  '</div>')
         body += ('<div class="tabs"><b>对象</b>%s</div>' %
-                 tabs((("block", "上下文块"), ("call", "调用")), what, "what"))
+                 tabs((("block", "上下文块"), ("call", "调用")), what, tab_obj))
         body += ('<div class="tabs"><b>排序</b>%s</div>' %
                  tabs((("token", "按块 token"), ("count", "按被携带次数"),
-                       ("product", "按乘积")), sort, "sort"))
-        cols = "52px 1fr 150px 118px 84px 76px 92px 48px"
-        body += ('<div class="row" style="grid-template-columns:%s">'
-                 '<span class="idx">#</span><span class="grow">块</span>'
-                 '<span>来源会话</span><span>写入时间</span>'
-                 '<span class="num">块 token</span><span class="num">被携带</span>'
-                 '<span class="num">乘积</span><span class="num">占比</span></div>' % cols)
-        for n, r in enumerate(shown, p * size + 1):
-            sid, title, i, b, est, u = r
+                       ("product", "按乘积")), sort, tab_sort))
+        body += filt_html
+        if not rows:
+            body += '<div class="note">没有匹配当前筛选条件的块，换个种类或时间范围试试。</div>'
+        else:
+            cols = "52px 1fr 150px 118px 84px 76px 92px 48px"
             body += ('<div class="row" style="grid-template-columns:%s">'
-                     '<span class="idx">#%d</span>'
-                     '<span class="grow"><a href="/s/%s/b/%d">'
-                     '<span class="chip t">%s</span>'
-                     '<b style="font-weight:500">%s</b></a>%s</span>'
-                     '<span><a href="/s/%s" title="%s">%s</a></span>'
-                     '<span>%s</span>'
-                     '<span class="num">≈ %s</span><span class="num">%s</span>'
-                     '<span class="num credit">%s</span>'
-                     '<span class="num">%.0f%%</span></div>' %
-                     (cols, n, esc(sid), i, TYPES.get(b["k"], b["k"]),
-                      esc(b["l"]), G.cmd_html(b, 72),
-                      esc(sid), esc(title), esc(title[:26]),
-                      esc(fmt_ts(b.get("ts"), "%Y-%m-%d %H:%M", "时间未知")),
-                      kh(est), nfmt(u), kh(est * u),
-                      rank_metric(what, sort, r) / mx * 100))
-        body += pager("/rank", {"what": [what], "sort": [sort]},
-                      p, size, len(rows), "块")
-        sub = "逐块排行 · 每行一个上下文块 · 按 token / 被携带次数 / 乘积排序 · 零脚本"
+                     '<span class="idx">#</span><span class="grow">块</span>'
+                     '<span>来源会话</span><span>写入时间</span>'
+                     '<span class="num">块 token</span><span class="num">被携带</span>'
+                     '<span class="num">乘积</span><span class="num">占比</span></div>' % cols)
+            for n, r in enumerate(shown, p * size + 1):
+                sid, title, i, b, est, u = r
+                body += ('<div class="row" style="grid-template-columns:%s">'
+                         '<span class="idx">#%d</span>'
+                         '<span class="grow"><a href="/s/%s/b/%d">'
+                         '<span class="chip t">%s</span>'
+                         '<b style="font-weight:500">%s</b></a>%s</span>'
+                         '<span><a href="/s/%s" title="%s">%s</a></span>'
+                         '<span>%s</span>'
+                         '<span class="num">≈ %s</span><span class="num">%s</span>'
+                         '<span class="num credit">%s</span>'
+                         '<span class="num">%.0f%%</span></div>' %
+                         (cols, n, esc(sid), i, TYPES.get(b["k"], b["k"]),
+                          esc(b["l"]), G.cmd_html(b, 72),
+                          esc(sid), esc(title), esc(title[:26]),
+                          esc(fmt_ts(b.get("ts"), "%Y-%m-%d %H:%M", "时间未知")),
+                          kh(est), nfmt(u), kh(est * u),
+                          rank_metric(what, sort, r) / mx * 100))
+            body += pager("/rank", pager_q, p, size, len(rows), "块")
+        sub = ("逐块排行 · 每行一个上下文块 · 支持种类 / 时间筛选 · "
+               "按 token / 被携带次数 / 乘积排序 · 零脚本")
     else:
         total = sum(r[2]["pin"] + r[2]["pout"] for r in rows)
         tin = sum(r[2]["pin"] for r in rows)
         tout = sum(r[2]["pout"] for r in rows)
-        body = kpi([("调用总数", nfmt(len(rows))),
+        body = kpi([(n_label, nfmt(len(rows))),
                     ("token 合计", kh(total)),
                     ("输入 / 输出", "%s / %s" % (kh(tin), kh(tout))),
                     ("当前排序", {"token": "合计 token", "in": "输入 token",
@@ -3323,38 +3420,43 @@ def v_rank(q):
         body += ('<div class="note">每一行就是<b>一次调用本身</b>。token 取自接口 '
                  '<code>rawUsage</code> 的真实用量，不做估算；<b>输入 + 输出 = 合计</b>。'
                  '一次调用只有一个「次数」，所以没有次数 / 乘积排序，改为在合计 / 输入 / '
-                 '输出三个 token 口径间切换。占比按当前排序键归一化到全库最大值。'
+                 '输出三个 token 口径间切换。「模型」与「时间」可任意组合，时间按调用'
+                 '<b>发生</b>的本地日期闭区间筛选。'
                  '</div>')
         body += ('<div class="tabs"><b>对象</b>%s</div>' %
-                 tabs((("block", "上下文块"), ("call", "调用")), what, "what"))
+                 tabs((("block", "上下文块"), ("call", "调用")), what, tab_obj))
         body += ('<div class="tabs"><b>排序</b>%s</div>' %
                  tabs((("token", "按合计"), ("in", "按输入"),
-                       ("out", "按输出")), sort, "sort"))
-        cols = "52px 1fr 150px 128px 82px 82px 92px 48px"
-        body += ('<div class="row" style="grid-template-columns:%s">'
-                 '<span class="idx">#</span><span class="grow">会话 · 轮次</span>'
-                 '<span>模型</span><span>时间</span>'
-                 '<span class="num">输入</span><span class="num">输出</span>'
-                 '<span class="num">合计</span><span class="num">占比</span></div>' % cols)
-        for n, r in enumerate(shown, p * size + 1):
-            sid, title, c = r
+                       ("out", "按输出")), sort, tab_sort))
+        body += filt_html
+        if not rows:
+            body += '<div class="note">没有匹配当前筛选条件的调用，换个模型或时间范围试试。</div>'
+        else:
+            cols = "52px 1fr 150px 128px 82px 82px 92px 48px"
             body += ('<div class="row" style="grid-template-columns:%s">'
-                     '<span class="idx">#%d</span>'
-                     '<span class="grow"><a href="/s/%s" title="%s">%s</a> '
-                     '<a href="/s/%s/c/%d">#%d</a></span>'
-                     '<span>%s</span><span>%s</span>'
-                     '<span class="num">%s</span><span class="num">%s</span>'
-                     '<span class="num credit">%s</span>'
-                     '<span class="num">%.0f%%</span></div>' %
-                     (cols, n, esc(sid), esc(title), esc(title[:34]),
-                      esc(sid), c["seq"], c["seq"],
-                      esc(c.get("model") or "—"),
-                      esc(fmt_ts(c.get("ts"), "%Y-%m-%d %H:%M", "时间未知")),
-                      nfmt(c["pin"]), nfmt(c["pout"]), nfmt(c["pin"] + c["pout"]),
-                      rank_metric(what, sort, r) / mx * 100))
-        body += pager("/rank", {"what": [what], "sort": [sort]},
-                      p, size, len(rows), "次")
-        sub = "逐调用排行 · 每行一次调用 · 按合计 / 输入 / 输出 token 排序 · 零脚本"
+                     '<span class="idx">#</span><span class="grow">会话 · 轮次</span>'
+                     '<span>模型</span><span>时间</span>'
+                     '<span class="num">输入</span><span class="num">输出</span>'
+                     '<span class="num">合计</span><span class="num">占比</span></div>' % cols)
+            for n, r in enumerate(shown, p * size + 1):
+                sid, title, c = r
+                body += ('<div class="row" style="grid-template-columns:%s">'
+                         '<span class="idx">#%d</span>'
+                         '<span class="grow"><a href="/s/%s" title="%s">%s</a> '
+                         '<a href="/s/%s/c/%d">#%d</a></span>'
+                         '<span>%s</span><span>%s</span>'
+                         '<span class="num">%s</span><span class="num">%s</span>'
+                         '<span class="num credit">%s</span>'
+                         '<span class="num">%.0f%%</span></div>' %
+                         (cols, n, esc(sid), esc(title), esc(title[:34]),
+                          esc(sid), c["seq"], c["seq"],
+                          esc(c.get("model") or "—"),
+                          esc(fmt_ts(c.get("ts"), "%Y-%m-%d %H:%M", "时间未知")),
+                          nfmt(c["pin"]), nfmt(c["pout"]), nfmt(c["pin"] + c["pout"]),
+                          rank_metric(what, sort, r) / mx * 100))
+            body += pager("/rank", pager_q, p, size, len(rows), "次")
+        sub = ("逐调用排行 · 每行一次调用 · 支持模型 / 时间筛选 · "
+               "按合计 / 输入 / 输出 token 排序 · 零脚本")
 
     body += ('<div class="tabs"><a class="btn" href="/stats">← 全局统计</a>'
              '<a class="btn" href="/">← 回索引</a></div>')
@@ -3799,7 +3901,9 @@ ROUTE_SPEC = [
     H(r"^/$", lambda q, m: v_index(q), "GET /", "会话索引，按工作区分组", "/"),
     H(r"^/stats$", lambda q, m: v_stats(q), "GET /stats", "跨会话全量聚合、最贵调用 / 最贵块与最大块", "/stats"),
     H(r"^/rank$", lambda q, m: v_rank(q),
-      "GET /rank?what=&sort=&p=", "逐块 / 逐调用排行：每行一个块或一次调用，按 token / 次数 / 乘积排序", "/rank?what=block&sort=product"),
+      "GET /rank?what=&sort=&k=&from=&to=&p=",
+      "逐块 / 逐调用排行：每行一个块或一次调用，可按种类 / 模型与时间筛选，按 token / 次数 / 乘积排序",
+      "/rank?what=block&sort=product&k=tool_result"),
     H(r"^/api$", lambda q, m: v_api_doc(q), "GET /api", "API 文档", "/api"),
     H(r"^/search$", lambda q, m: v_search(q), "GET /search?q=&scope=", "全文搜索（跨会话）", "/search?q=token"),
     H(r"^/find$", lambda q, m: v_find(q), "GET /find?q=&p=", "按块精确检索（跨会话）", "/find?q=token"),
