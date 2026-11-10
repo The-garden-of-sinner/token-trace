@@ -4184,6 +4184,20 @@ def main():
     print("  纯 HTML 导航，无 JavaScript；每次请求只返回一屏。Ctrl+C 停止。")
     srv = ThreadingHTTPServer((a.host, a.port), Handler)
     srv.daemon_threads = True
+    if not a.warm:
+        # 后台预热全部会话：不阻塞监听，首页先走；/stats、/rank 这类全量页
+        # 几秒后即热。与请求并发解析同一会话时由 Store._loading 事件去重，
+        # 不会重复解析，也不改变零写盘契约。
+        def _warm_bg():
+            t0 = time.time()
+            try:
+                for s in STORE.sessions():
+                    STORE.get(s["id"])
+                print("后台预热完成 %.2fs" % (time.time() - t0), file=sys.stderr)
+            except Exception:
+                pass
+        threading.Thread(target=_warm_bg, daemon=True,
+                         name="warm-sessions").start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
