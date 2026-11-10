@@ -130,7 +130,10 @@ class Store(object):
     def sessions(self, refresh=False):
         with self.lock:
             if refresh or self._index is None or time.time() - self._index_at > 60:
-                self._index = G.scan_all()
+                # refresh=True 强制重建列表对象（即使数据未变），让下游缓存确定性
+                # 失效；自动刷新走签名快速路径，数据没变时复用同一个列表对象，
+                # rank_rows / rank_sorted 等缓存继续命中，避免每 60 秒一次全量重算。
+                self._index = G.scan_all(force=refresh)
                 self._index_at = time.time()
             if self.auto:
                 # 索引刷新后同步容量：让「全部会话」能同时驻留，避免抖动。
@@ -960,9 +963,13 @@ form.searchbox input[type=text]{flex:1;min-width:220px;padding:11px 16px;
  transition:border-color .28s var(--ease),background-color .28s var(--ease)}
 form.searchbox input[type=text]::placeholder{color:var(--faint)}
 form.searchbox input[type=text]:focus{outline:none;border-color:var(--accent);background:var(--bg)}
-form.searchbox select{padding:6px 11px;border:1px solid transparent;border-radius:999px;
- background:var(--track);color:var(--muted);font:11px inherit;cursor:pointer}
+form.searchbox select{appearance:none;-webkit-appearance:none;-moz-appearance:none;
+ padding:6px 26px 6px 11px;border:1px solid transparent;border-radius:999px;
+ background-color:var(--track);background-repeat:no-repeat;background-position:right 9px center;
+ background-image:url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='6' viewBox='0 0 9 6'%3E%3Cpath d='M1 1l3.5 3.5L8 1' fill='none' stroke='%238a8a86' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E");
+ color:var(--muted);font:11px inherit;cursor:pointer}
 form.searchbox select:hover{border-color:var(--line)}
+form.searchbox select:focus{outline:none;border-color:var(--accent);color:var(--fg)}
 .modepick{display:inline-flex;gap:2px;background:var(--track);border-radius:999px;padding:3px}
 .modepick label{position:relative;cursor:pointer}
 .modepick input{position:absolute;opacity:0;width:0;height:0}
@@ -1059,26 +1066,26 @@ code{font:11.5px ui-monospace,monospace;background:var(--track);padding:1px 4px;
 @view-transition{navigation:auto}
 /* 统一缓动 --ease：起步利落、收尾缓，避免「啪」一下硬切。
    淡出短于淡入，两层不叠出拖影；入场错峰拉到 50ms 一档。 */
-::view-transition-old(root){animation:vt-out .24s cubic-bezier(.4,0,.8,.6) both}
-::view-transition-new(root){animation:vt-in .46s var(--ease) both}
+::view-transition-old(root){animation:vt-out .14s cubic-bezier(.4,0,.8,.6) both}
+::view-transition-new(root){animation:vt-in .22s var(--ease) both}
 @keyframes vt-out{to{opacity:0;transform:translateY(-4px)}}
 @keyframes vt-in{from{opacity:.32;transform:translateY(7px)}}
 /* KPI 单独命名：跨页时数字区局部变形 + 聚焦淡入，而不是整页一起淡。
    每个视图最多一个 .kpi，名字不会在同一文档里重复。 */
 .kpi{view-transition-name:trace-kpi}
-::view-transition-group(trace-kpi){animation-duration:.54s}
-::view-transition-old(trace-kpi){animation:vt-fade .24s ease both}
-::view-transition-new(trace-kpi){animation:vt-kpi .54s var(--ease) both}
+::view-transition-group(trace-kpi){animation-duration:.24s}
+::view-transition-old(trace-kpi){animation:vt-fade .12s ease both}
+::view-transition-new(trace-kpi){animation:vt-kpi .24s var(--ease) both}
 @keyframes vt-fade{to{opacity:0}}
-@keyframes vt-kpi{from{opacity:.4;transform:translateY(6px);filter:blur(1.5px)}to{opacity:1;transform:none;filter:none}}
+@keyframes vt-kpi{from{opacity:.55;transform:translateY(4px)}to{opacity:1;transform:none}}
 /* 入场动画的起始透明度抬到接近实色：动效主要靠位移与轻微模糊表达。
    慢设备、打印或 headless 快照如果没跑完动画，内容也不会看起来是空白的。 */
 @keyframes tt-in{from{opacity:.88;transform:translateY(7px)}to{opacity:1;transform:none}}
-@keyframes tt-num{from{opacity:.92;transform:translateY(5px);filter:blur(1.2px)}to{opacity:1;transform:none;filter:none}}
+@keyframes tt-num{from{opacity:.92;transform:translateY(4px)}to{opacity:1;transform:none}}
 /* 分区入场：数字带、图表卡、工具条、检索区、入口卡、会话分组都用同一段位移淡入。
    按文档顺序给 40–140ms 的错峰，页面从上往下「落」下来，而不是整块同时闪出。 */
-.kpi>div,.viz,.toolbar,form.searchbox,.segrow,.tkfilter,.tabs,
-.navcard,details.grp,.chart,.warn,.note{animation:tt-in .5s var(--ease) both}
+.kpi>div,.viz,.toolbar,.segrow,.tkfilter,.tabs,
+.navcard,details.grp,.chart,.warn,.note{animation:tt-in .36s var(--ease) both}
 /* hero 只做透明度：它带着 view-transition-name 的 KPI，若整体位移，
    跨文档 morph 的起始快照会被垫高几像素，看起来像数字跳了一下。 */
 .hero{animation:tt-soft .5s var(--ease) both}
@@ -1090,7 +1097,7 @@ code{font:11.5px ui-monospace,monospace;background:var(--track);padding:1px 4px;
 details.grp:nth-of-type(2){animation-delay:.05s}
 details.grp:nth-of-type(3){animation-delay:.1s}
 details.grp:nth-of-type(n+4){animation-delay:.14s}
-.kpi b{animation:tt-num .6s var(--ease) both}
+.kpi b{animation:tt-num .4s var(--ease) both}
 .kpi>div:nth-child(2){animation-delay:.05s}.kpi>div:nth-child(3){animation-delay:.1s}
 .kpi>div:nth-child(4){animation-delay:.15s}.kpi>div:nth-child(5){animation-delay:.2s}
 .kpi>div:nth-child(6){animation-delay:.25s}.kpi>div:nth-child(n+7){animation-delay:.3s}
@@ -1502,7 +1509,7 @@ def page(title, crumbs, body, sub="", extra_head="", need=()):
            '<span>数据只读 · 全文由后端按需提供 · 无需 JavaScript</span>' +
            back_link(crumbs, footer=True) +
            '<a href="/">索引</a><a href="/stats">全局统计</a>'
-           '<a href="/rank">统计排序</a><a href="/api">API</a>' +
+           '<a href="/rank">筛选与排序</a><a href="/api">API</a>' +
            monitor_link("ext") + '</footer>' +
            back + '</div></html>')
     # 页脚口径与 80 KB 硬闸对齐：算整页响应字节（含内联 CSS 与 header），
@@ -2270,7 +2277,7 @@ def v_index(q):
     body += ('<div class="toolbar"><nav class="tb-nav">'
              '<a href="/tools">工具与命令</a>'
              '<a href="/stats">全局统计</a>'
-             '<a href="/rank">统计排序</a>'
+             '<a href="/rank">筛选与排序</a>'
              '<a href="/api">API 文档</a>'
              '<a href="/?refresh=1">刷新</a>%s</nav>'
              '<div class="tb-sort"><span class="tb-lab">排序</span>'
@@ -3200,13 +3207,17 @@ def rank_rows(what):
             title = s["title"] or s["id"]
             for i, b in enumerate(d["ctx"]):
                 est = b.get("e") or (b["n"] // 3)
-                rows.append((s["id"], title, i, b, est, uses[i]))
+                # 日期 / 归一键随行预计算：筛选时只做字符串比较，不再逐行调
+                # day_key（15k 次 localtime）或 canon_model（8k 次正则）。
+                rows.append((s["id"], title, i, b, est, uses[i],
+                             G.day_key(b.get("ts"))))
     else:
         for s in ss:
             d = STORE.get(s["id"])
             title = s["title"] or s["id"]
             for c in d["calls"]:
-                rows.append((s["id"], title, c))
+                rows.append((s["id"], title, c, G.day_key(c.get("ts")),
+                             G.canon_model(c.get("model"))))
     if len(_RANK_CACHE) > 8:
         _RANK_CACHE.clear()
     _RANK_CACHE[key] = (ss, rows)
@@ -3249,17 +3260,39 @@ def rank_filter(what, rows, kind, dfrom, dto):
 
     块按块类型（k）筛选，调用按模型归一键筛选（大小写变体不会漏）；
     时间按对象时间戳的本地日期做闭区间比较，任一端为空表示该侧不限。
+    日期与归一键已在 rank_rows() 里预计算，这里只做字符串比较。
     """
     if kind:
         if what == "block":
             rows = [r for r in rows if r[3]["k"] == kind]
         else:
-            rows = [r for r in rows if G.canon_model(r[2]["model"]) == kind]
+            rows = [r for r in rows if r[4] == kind]
     if dfrom or dto:
-        def ok(r):
-            d = G.day_key((r[3] if what == "block" else r[2]).get("ts"))
-            return bool(d) and (not dfrom or d >= dfrom) and (not dto or d <= dto)
-        rows = [r for r in rows if ok(r)]
+        di = 6 if what == "block" else 3
+        rows = [r for r in rows
+                if r[di] and (not dfrom or r[di] >= dfrom)
+                and (not dto or r[di] <= dto)]
+    return rows
+
+
+_RANK_SORTED = {}
+
+
+def rank_sorted(what, sort):
+    """按 (对象, 排序键) 缓存已排序的行，筛选只是在有序列表上过滤、不必重排。
+
+    15 879 块按乘积排序一次约 98 ms；缓存后筛选请求只剩一次 O(n) 过滤。
+    与 rank_rows() 一样用索引对象身份做失效判定。
+    """
+    ss = STORE.sessions()
+    key = (what, sort)
+    hit = _RANK_SORTED.get(key)
+    if hit is not None and hit[0] is ss:
+        return hit[1]
+    rows = sorted(rank_rows(what), key=rank_sort_key(what, sort))
+    if len(_RANK_SORTED) > 8:
+        _RANK_SORTED.clear()
+    _RANK_SORTED[key] = (ss, rows)
     return rows
 
 
@@ -3292,8 +3325,7 @@ def v_rank(q):
     dfrom = _norm_date(qstr(q, "from", ""))
     dto = _norm_date(qstr(q, "to", ""))
 
-    rows = rank_filter(what, rank_rows(what), kind, dfrom, dto)
-    rows = sorted(rows, key=rank_sort_key(what, sort))
+    rows = rank_filter(what, rank_sorted(what, sort), kind, dfrom, dto)
     size = PAGE_BLOCKS
     p = clamp_p(q, len(rows), size)
     shown = rows[p * size:(p + 1) * size]
@@ -3388,7 +3420,7 @@ def v_rank(q):
                      '<span class="num">块 token</span><span class="num">被携带</span>'
                      '<span class="num">乘积</span><span class="num">占比</span></div>' % cols)
             for n, r in enumerate(shown, p * size + 1):
-                sid, title, i, b, est, u = r
+                sid, title, i, b, est, u, _day = r
                 body += ('<div class="row" style="grid-template-columns:%s">'
                          '<span class="idx">#%d</span>'
                          '<span class="grow"><a href="/s/%s/b/%d">'
@@ -3439,7 +3471,7 @@ def v_rank(q):
                      '<span class="num">输入</span><span class="num">输出</span>'
                      '<span class="num">合计</span><span class="num">占比</span></div>' % cols)
             for n, r in enumerate(shown, p * size + 1):
-                sid, title, c = r
+                sid, title, c, _day, _canon = r
                 body += ('<div class="row" style="grid-template-columns:%s">'
                          '<span class="idx">#%d</span>'
                          '<span class="grow"><a href="/s/%s" title="%s">%s</a> '
@@ -3460,7 +3492,7 @@ def v_rank(q):
 
     body += ('<div class="tabs"><a class="btn" href="/stats">← 全局统计</a>'
              '<a class="btn" href="/">← 回索引</a></div>')
-    return page("统计与排序", [("索引", "/"), ("统计与排序", "")], body, sub=sub)
+    return page("筛选与排序", [("索引", "/"), ("筛选与排序", "")], body, sub=sub)
 
 
 def v_api_doc(q):

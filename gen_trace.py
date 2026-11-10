@@ -788,8 +788,101 @@ h2.dicth{{font-size:15px;font-weight:500;margin:34px 0 4px;padding-top:18px;bord
 """
 
 
-def scan_all():
-    """扫描所有会话，返回索引条目（db 补 cwd/标题，jsonl 补统计）"""
+_SCAN_FILES = {}          # path -> ((mtime_ns, size), stats)
+_SCAN_LAST = {"sig": None, "out": None}
+
+
+def scan_file(f):
+    """读一个会话 jsonl，返回文件自身的统计（不含 db 标题 / 工作区）。
+
+    与 scan_all() 拆开是为了按 (mtime_ns, size) 缓存：未变动的会话直接复用，
+    只重读正在追加的那个文件，避免每 60 秒把全库重扫一遍（实测 35 个会话
+    全量约 2.9 s，增量后只剩一个文件）。
+    """
+    sid = os.path.basename(f)[:-6]
+    turns = calls = 0
+    credit = pin = pout = 0
+    ai = ""
+    model_tokens = {}   # 本会话：稳定分组键 -> 输入 token
+    # 按「本次调用实际发生的日期」分桶，供首页时间折线与活动日历使用。
+    day_bins = {}
+    agent_votes = {}
+    votes = {}          # 本会话：分组键 -> {展示名: 输入 token}，供全库投票汇总
+    # 子代理是独立的 agent-* 会话文件，行内另有 providerData.isSubAgent 标记。
+    # first_ts / rootRequestId / 主会话的 Agent 调用时间用于首页做关系推断。
+    # 时间戳一律归一成毫秒数值：外部 jsonl 里 timestamp 可能是字符串或 None，
+    # 原样留着会在下游做减法时 TypeError（首页 500）。
+    is_sub = sid.startswith("agent-")
+    root = ""
+    first_ts = 0
+    agent_calls = []
+    agent_reqs = []
+    skipped = {"skipped": 0}
+    for d in iter_rows(f, skipped):
+        pd = d.get("providerData") or {}
+        t = d.get("type")
+        if not first_ts:
+            first_ts = _ms(d.get("timestamp"))
+        a = pd.get("agent")
+        if a:
+            agent_votes[a] = agent_votes.get(a, 0) + 1
+        if pd.get("isSubAgent"):
+            is_sub = True
+        if not root and pd.get("rootRequestId"):
+            root = str(pd["rootRequestId"])
+        if t == "function_call" and d.get("name") == "Agent":
+            # 时间戳给时间窗兜底用；请求 id 是子会话 rootRequestId 的精确对照键。
+            agent_calls.append(_ms(d.get("timestamp")))
+            if pd.get("conversationRequestId"):
+                agent_reqs.append(str(pd["conversationRequestId"]))
+        if t == "message" and d.get("role") == "user":
+            turns += 1
+        elif t == "function_call":
+            ru = pd.get("rawUsage") or {}
+            pt = ru.get("prompt_tokens", 0)
+            if not pt:
+                continue
+            calls += 1
+            pin += pt
+            pout += ru.get("completion_tokens", 0)
+            credit += ru.get("credit") or 0
+            # 按调用真实发生日落桶：跨天会话的 token 与调用分散到各自那天，
+            # 不再整段压到文件 mtime（最后修改日）。与 calls / pin 同一批记录，
+            # 保证 sum(day_bins[pin]) == pin、sum(day_bins[calls]) == calls。
+            dk = day_key(d.get("timestamp"))
+            if dk:
+                b = day_bins.setdefault(dk, [0, 0])
+                b[0] += pt
+                b[1] += 1
+            # 模型构成直接从会话记录取：db 只负责补标题/工作区，db 不可读或
+            # 会话中途换过模型时，仍能得到按输入 token 加权的真实构成。
+            key, label = model_bucket(pd)
+            if key:
+                model_tokens[key] = model_tokens.get(key, 0) + pt
+                if label:
+                    vs = votes.setdefault(key, {})
+                    vs[label] = vs.get(label, 0) + pt
+        elif t == "ai-title" and not ai:
+            ai = d.get("aiTitle") or ""
+    return {
+        "path": f, "id": sid, "ai": ai,
+        "turns": turns, "calls": calls, "credit": credit, "pin": pin, "pout": pout,
+        "models": model_tokens, "votes": votes, "days": day_bins,
+        "agent": max(agent_votes, key=agent_votes.get) if agent_votes else "cli",
+        "is_sub": is_sub, "root": root, "first_ts": first_ts,
+        "agent_calls": agent_calls, "agent_reqs": agent_reqs,
+        "skipped": skipped["skipped"],
+    }
+
+
+def scan_all(force=False):
+    """扫描所有会话，返回索引条目（db 补 cwd/标题，jsonl 补统计）。
+
+    逐文件按 (mtime_ns, size) 增量缓存；全库签名（文件集合 + 各文件签名 +
+    db 元数据内容）未变且非 force 时，返回同一个索引列表对象，让 rank_rows /
+    model_display_map 等下游缓存继续命中。force=True 供显式刷新使用，强制
+    重建列表对象（即使数据未变），从而让下游缓存确定性地失效。
+    """
     db = data_dir() / "workbuddy.db"
     meta = {}
     meta_ok = True
@@ -806,106 +899,78 @@ def scan_all():
               "模型名与统计来自 jsonl，不受影响）"
               % (db, type(e).__name__, e), file=sys.stderr)
 
-    out = []
+    files = list(iter_jsonl())
+    # db 元数据也进签名：WAL 模式下标题变更不一定改主库 mtime，用内容签名兜底。
+    meta_sig = tuple(sorted((k, v["cwd"], v["title"], v["model"])
+                            for k, v in meta.items()))
+    sig = [meta_sig]
+    stats = []
+    for f in files:
+        try:
+            st = os.stat(f)
+        except OSError:
+            continue
+        fsig = (st.st_mtime_ns, st.st_size)
+        sig.append((f, fsig))
+        hit = _SCAN_FILES.get(f)
+        if hit is not None and hit[0] == fsig:
+            s = hit[1]
+        else:
+            s = scan_file(f)
+            _SCAN_FILES[f] = (fsig, s)
+        s["mtime"] = st.st_mtime
+        stats.append(s)
+    sig = tuple(sig)
+
+    alive = set(files)
+    for p in list(_SCAN_FILES):
+        if p not in alive:
+            _SCAN_FILES.pop(p, None)
+
+    if not force and _SCAN_LAST["sig"] == sig and _SCAN_LAST["out"] is not None:
+        return _SCAN_LAST["out"]
+
     # 全库展示名投票：不能按会话各自投票，否则同一模型在不同会话里会选出
-    # 不同写法，累加到首页又变回多份。所有会话共用同一张 key -> 展示名 表。
+    # 不同写法，累加到首页又变回多份。这里汇总各文件的局部投票即可。
     all_labels = {}
+    for s in stats:
+        for key, vs in s["votes"].items():
+            dest = all_labels.setdefault(key, {})
+            for lab, tok in vs.items():
+                dest[lab] = dest.get(lab, 0) + tok
+
+    best = dict((k, max(v, key=v.get)) for k, v in all_labels.items() if v)
+    out = []
     seen = {}
-    for f in iter_jsonl():
-        sid = os.path.basename(f)[:-6]
+    for s in stats:
+        sid, f = s["id"], s["path"]
         if sid in seen:
             print("token-trace: 会话 id 重复，后者会覆盖前者：%s / %s" % (seen[sid], f),
                   file=sys.stderr)
         seen[sid] = f
-        turns = calls = 0
-        credit = pin = pout = 0
-        ai = ""
-        model_tokens = {}   # 本会话：稳定分组键 -> 输入 token
-        # 按「本次调用实际发生的日期」分桶，供首页时间折线与活动日历使用。
-        # value = [输入 token, 调用数]；不落盘，索引重建时重算。
-        day_bins = {}
-        agent_votes = {}
-        # 子代理是独立的 agent-* 会话文件，行内另有 providerData.isSubAgent 标记。
-        # first_ts / rootRequestId / 主会话的 Agent 调用时间用于首页做关系推断。
-        # 时间戳一律归一成毫秒数值：外部 jsonl 里 timestamp 可能是字符串或 None，
-        # 原样留着会在下游做减法时 TypeError（首页 500）。
-        is_sub = sid.startswith("agent-")
-        root = ""
-        first_ts = 0
-        agent_calls = []
-        agent_reqs = []
-        skipped = {"skipped": 0}
-        for d in iter_rows(f, skipped):
-            pd = d.get("providerData") or {}
-            t = d.get("type")
-            if not first_ts:
-                first_ts = _ms(d.get("timestamp"))
-            a = pd.get("agent")
-            if a:
-                agent_votes[a] = agent_votes.get(a, 0) + 1
-            if pd.get("isSubAgent"):
-                is_sub = True
-            if not root and pd.get("rootRequestId"):
-                root = str(pd["rootRequestId"])
-            if t == "function_call" and d.get("name") == "Agent":
-                # 时间戳给时间窗兜底用；请求 id 是子会话 rootRequestId 的精确对照键。
-                agent_calls.append(_ms(d.get("timestamp")))
-                if pd.get("conversationRequestId"):
-                    agent_reqs.append(str(pd["conversationRequestId"]))
-            if t == "message" and d.get("role") == "user":
-                turns += 1
-            elif t == "function_call":
-                ru = pd.get("rawUsage") or {}
-                pt = ru.get("prompt_tokens", 0)
-                if not pt:
-                    continue
-                calls += 1
-                pin += pt
-                pout += ru.get("completion_tokens", 0)
-                credit += ru.get("credit") or 0
-                # 按调用真实发生日落桶：跨天会话的 token 与调用分散到各自那天，
-                # 不再整段压到文件 mtime（最后修改日）。与 calls / pin 同一批记录，
-                # 保证 sum(day_bins[pin]) == pin、sum(day_bins[calls]) == calls。
-                dk = day_key(d.get("timestamp"))
-                if dk:
-                    b = day_bins.setdefault(dk, [0, 0])
-                    b[0] += pt
-                    b[1] += 1
-                # 模型构成直接从会话记录取：db 只负责补标题/工作区，db 不可读或
-                # 会话中途换过模型时，仍能得到按输入 token 加权的真实构成。
-                # 用底层 model ID 分组、展示名单独投票，避免同一模型因大小写
-                # 写法不同被拆成多份（首页构成环的「重复计数」）。
-                key, label = model_bucket(pd)
-                if key:
-                    model_tokens[key] = model_tokens.get(key, 0) + pt
-                    if label:
-                        votes = all_labels.setdefault(key, {})
-                        votes[label] = votes.get(label, 0) + pt
-            elif t == "ai-title" and not ai:
-                ai = d.get("aiTitle") or ""
         info = meta.get(sid, {})
         out.append({
             "path": f, "id": sid,
             "ws": info.get("cwd") or os.path.basename(os.path.dirname(f)).replace("-", "/"),
-            "title": info.get("title") or ai or "(无标题)",
+            "title": info.get("title") or s["ai"] or "(无标题)",
             "model": info.get("model") or "",   # 循环后按全库统一结果重算
-            "models": dict(model_tokens),       # 暂存分组键，循环后统一换展示名
-            "agent": max(agent_votes, key=agent_votes.get) if agent_votes else "cli",
-            "is_sub": is_sub,
-            "root": root,
-            "first_ts": first_ts,
-            "agent_calls": agent_calls,
-            "agent_reqs": agent_reqs,
-            "mtime": os.path.getmtime(f),
-            "days": day_bins,           # YYYY-MM-DD -> [输入 token, 调用数]
-            "turns": turns, "calls": calls, "credit": credit, "pin": pin, "pout": pout,
-            "skipped": skipped["skipped"],
+            "models": dict(s["models"]),        # 暂存分组键，循环后统一换展示名
+            "agent": s["agent"],
+            "is_sub": s["is_sub"],
+            "root": s["root"],
+            "first_ts": s["first_ts"],
+            "agent_calls": list(s["agent_calls"]),
+            "agent_reqs": list(s["agent_reqs"]),
+            "mtime": s["mtime"],
+            "days": dict(s["days"]),            # YYYY-MM-DD -> [输入 token, 调用数]
+            "turns": s["turns"], "calls": s["calls"], "credit": s["credit"],
+            "pin": s["pin"], "pout": s["pout"],
+            "skipped": s["skipped"],
             "meta_ok": meta_ok,
         })
     # 全库统一展示名：同一底层模型在所有会话、首页构成环、会话列表里都只
     # 出现一次，且统一用得票最多的官方写法。不同分组键若展示名相同（老数据
     # 缺 model 时按显示名分组），在这里自然合并。
-    best = dict((k, max(v, key=v.get)) for k, v in all_labels.items() if v)
     for s in out:
         named = {}
         for key, token in s["models"].items():
@@ -919,6 +984,8 @@ def scan_all():
             # 否则会话列表里会混进一个小写 ID，看起来又像「多了一个模型」。
             s["model"] = best.get(canon_model(s["model"]), s["model"] or "")
     out.sort(key=lambda x: (x["ws"], -x["mtime"]))
+    _SCAN_LAST["sig"] = sig
+    _SCAN_LAST["out"] = out
     return out
 
 

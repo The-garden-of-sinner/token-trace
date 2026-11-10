@@ -717,6 +717,21 @@ def main():
                           "to": ["2099-12-31"]})
         check("没有匹配当前筛选条件" in hnone,
               "空结果给出提示而不是空白表格")
+        # 性能：索引增量复用 + 已排序缓存
+        a1 = G.scan_all()
+        a2 = G.scan_all()
+        check(a2 is a1,
+              "scan_all 数据未变时复用同一索引对象（下游缓存继续命中）")
+        a3 = G.scan_all(force=True)
+        check(a3 is not a1 and len(a3) == len(a1),
+              "scan_all(force=True) 强制重建列表对象但复用文件摘要")
+        s1 = T.rank_sorted("block", "product")
+        s2 = T.rank_sorted("block", "product")
+        check(s2 is s1, "rank_sorted 重复调用命中已排序缓存")
+        ff = T.rank_filter("block", s1, "tool_result", "", "")
+        expect = [r for r in s1 if r[3]["k"] == "tool_result"]
+        check(len(ff) == len(expect) and all(a is b for a, b in zip(ff, expect)),
+              "筛选结果保持已排序顺序，不重新排序")
         before = T.rank_rows("block")
         T.STORE.sessions(refresh=True)
         after = T.rank_rows("block")
