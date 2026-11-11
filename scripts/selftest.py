@@ -325,6 +325,29 @@ def main():
         pcts2 = [float(x) for x in re.findall(r"<em>([\d.]+)%</em>", ov2)]
         check(abs(sum(pcts2) - 100) < 0.15,
               "归一后图例合计仍为 100%%（%.1f%%）" % sum(pcts2))
+        # <1% 的模型并入「其他」：6 个模型里 4 个各占 0.5%，图例只留 2 主 + 其他
+        tiny = 1000000.0
+        fake_tiny = [{"id": "t", "ws": "D:/x/y", "title": "t",
+                      "model": "big1",
+                      "models": {"big1": tiny * 90, "big2": tiny * 8,
+                                 "s1": tiny * 0.5, "s2": tiny * 0.5,
+                                 "s3": tiny * 0.5, "s4": tiny * 0.5},
+                      "mtime": time.time(), "calls": 1, "turns": 1,
+                      "pin": tiny * 100, "pout": 1, "credit": 0.1}]
+        ov4 = T.index_overview(fake_tiny)
+        names4 = re.findall(r'<span class="g">(.*?)</span>', ov4)
+        check(len(names4) == 3 and names4[0] == "big1" and names4[1] == "big2"
+              and names4[2].startswith("其他 4 个模型"),
+              "低于 1%% 的模型并入「其他」，图例只留 ≥1%% 的主模型（%s）" % names4)
+        pcts4 = [float(x) for x in re.findall(r"<em>([\d.]+)%</em>", ov4)]
+        check(abs(sum(pcts4) - 100) < 0.15,
+              "并入其他后图例合计仍为 100%%（%.1f%%）" % sum(pcts4))
+        # 时间折线：每天一个热区列，悬停气泡带日期与输入 token
+        hits = re.findall(r'<div class="hz"[^>]*data-tip="([^"]+)"', ov4)
+        check(len(hits) == 14 and all("&#10;输入 " in h for h in hits),
+              "折线 14 天各有热区列且气泡含日期+输入 token（%d 列）" % len(hits))
+        check('<div class="ovline">' in ov4 and 'class="foc"' not in ov4,
+              "折线用 .ovline 叠热区列（零 JS），不再画静态焦点线")
         big = 10340000000
         fake_big = [{"id": "c", "ws": "D:/x/y", "title": "t", "model": "m",
                      "models": {"m": big}, "mtime": time.time(), "calls": 1,

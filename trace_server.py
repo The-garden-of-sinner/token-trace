@@ -1272,6 +1272,14 @@ CSS_VIZ = """
 @keyframes tt-draw{from{clip-path:inset(0 100% 0 0);opacity:.55}to{clip-path:inset(0 0 0 0);opacity:1}}
 .spark polyline{fill:none;stroke:var(--accent);stroke-width:1.6;vector-effect:non-scaling-stroke}
 .spark polygon{fill:var(--accent);opacity:.11}
+/* 首页「按时间」折线：viewBox 纵向 80px，渲染高由 .ovline 给定，折线不再被
+   横拉压扁；其上的热区列复用 [data-tip] 气泡（零 JS），悬停出焦点竖线。 */
+.ovline{position:relative;height:64px;margin-top:2px}
+.ovline .spark{position:absolute;inset:0;height:100%;animation:none}
+.ovline .hz{position:absolute;top:0;bottom:0;cursor:default}
+.ovline .hz i{position:absolute;left:50%;width:0;height:0;border-left:1px dashed var(--accent);
+ opacity:0;transition:opacity .12s}
+.ovline .hz:hover i{opacity:.55;height:100%;top:0}
 """
 
 CSS_HM = """
@@ -2039,10 +2047,16 @@ def index_overview(ss):
     residual = raw_total - sum(by_model.values())
     if residual > 0:
         by_model["未知模型"] += residual
+    # 低于 1% 的模型不单列，并入「其他」：长尾每个只占零点零几，单列只会
+    # 把有效信息挤成一条边。保底至多 5 个主模型，避免模型种类本就不多时
+    # 图例空着。
     models = sorted(by_model.items(), key=lambda x: -x[1])
-    if len(models) > 5:
-        models = models[:5] + [("其他 %d 个模型" % (len(by_model) - 5),
-                                sum(v for _, v in models[5:]))]
+    big = [(n, v) for n, v in models if v / total * 100.0 >= 1.0][:5]
+    if len(big) < len(models):
+        rest = models[len(big):]
+        models = big + [("其他 %d 个模型" % len(rest), sum(v for _, v in rest))]
+    else:
+        models = big
     colors = ("var(--p0)", "var(--p1)", "var(--p2)", "var(--p3)",
               "var(--p4)", "var(--accent)")
     arcs, legend, acc = [], [], 0.0
@@ -2081,11 +2095,27 @@ def index_overview(ss):
             if k is not None:
                 buckets[k] += s["pin"]
     mx = max(buckets) or 1
-    pts = " ".join("%.2f,%.2f" % (i * 100.0 / (days - 1), 38 - v / mx * 34)
+    # 视图纵向拉到 80（横向仍 100），渲染时按容器真实宽高拉伸，折线不再被
+    # 压成一条扁边；stroke 用 vector-effect:non-scaling-stroke 保持 1.6px。
+    H, TOP = 80, 4
+    pts = " ".join("%.2f,%.2f" % (i * 100.0 / (days - 1), H - v / mx * (H - TOP - 2))
                    for i, v in enumerate(buckets))
-    line = ('<svg class="spark" viewBox="0 0 100 40" preserveAspectRatio="none" '
-            'role="img" aria-label="按天输入 token 走势">'
-            '<polygon points="0,40 %s 100,40"/><polyline points="%s"/></svg>' % (pts, pts))
+    svg = ('<svg class="spark" viewBox="0 0 100 %d" preserveAspectRatio="none" '
+           'role="img" aria-label="按天输入 token 走势">'
+           '<polygon points="0,%d %s 100,%d"/><polyline points="%s"/></svg>' %
+           (H, H, pts, H, pts))
+    # 悬停：SVG 元素不支持 ::after 气泡，改为在图上叠一层 HTML 热区列（零 JS，
+    # 复用 [data-tip] 气泡）。每列内嵌一条焦点竖线，top 与折线同比例换算，
+    # hover 时由 CSS 显形。
+    step = 100.0 / days
+    cols = []
+    for i, v in enumerate(buckets):
+        d = day_list[i].strftime("%m-%d")
+        y = H - v / mx * (H - TOP - 2)
+        cols.append('<div class="hz" style="left:%.2f%%;width:%.2f%%" '
+                    'data-tip="%s&#10;输入 %s token"><i style="top:%.2f%%"></i></div>' %
+                    (i * step, step, d, kh(v), y / H * 100.0))
+    line = '<div class="ovline">%s%s</div>' % (svg, "".join(cols))
     axis = ('<div class="ovaxis"><span>%s</span><span>峰值 %s token/天</span><span>今天</span></div>' %
             (day_list[0].strftime("%m-%d"), kh(mx)))
 

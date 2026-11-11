@@ -112,7 +112,7 @@
 - **命中块折叠**：调用详情里连续命中块默认折成一枚紧凑胶囊「#a–#b 块缓存命中」，展开时才铺成全宽标题条并拉出逐块清单；「按调用浏览」每行也带同样的折叠摘要；主动选「只看命中」时全部展开
 - **轮来源标签**：`role=user` 的消息并不都是你输入的。每轮标为「用户消息 / 后台任务 / 压缩摘要 / 系统注入 / 内部消息」，非真人输入显示可读摘要而不是整段 XML；会话页可按类别筛选，单轮详情也按来源改标题
 - **子代理隶属树**：子代理是独立的 `agent-*` 会话文件，且工作区常与主会话不同。首页把同一页内的父子收编成「父会话行 → 缩进子树」（原生 `<details>` 折叠、零脚本），子行带 `└` 连接符并注明「派生自「父会话标题」」，分组标题标「含 N 个子代理」；父子跨页或无法定位父级时改在行内注明，关系不会凭空消失。匹配优先用子会话的 `rootRequestId` 精确对照派发它的 `Agent` 调用，字段缺失时才退回 5 秒时间窗兜底
-- **首页全库画像**：按模型的输入 token 环（按 `providerData.model` 分组、忽略展示名大小写差异，不依赖 db）、按时间的输入 token 折线、工作区路径递归树（两级 + 占比条），只消费已缓存的会话索引；「按时间」折线与「会话活动日历」都按**每次调用实际发生的日期**分桶（`scan_all()` 预聚合的 `days`），不把整个会话压到文件最后修改日，跨天会话也能落到各自那天
+- **首页全库画像**：按模型的输入 token 环（按 `providerData.model` 分组、忽略展示名大小写差异，不依赖 db；**低于 1% 的模型并入「其他」，图例只列 ≥1% 的主模型**）、按时间的输入 token 折线（**悬停任意一天出气泡显示日期与输入 token，并带焦点竖线**，复用 `data-tip` 零 JS 方案）、工作区路径递归树（两级 + 占比条），只消费已缓存的会话索引；「按时间」折线与「会话活动日历」都按**每次调用实际发生的日期**分桶（`scan_all()` 预聚合的 `days`），不把整个会话压到文件最后修改日，跨天会话也能落到各自那天
 - **同机互链**：服务端用一次 loopback `/api/ping`（150 ms 超时、结果缓存 15 s）判断同机的 WorkBuddy 用量监视是否在跑，在跑才在工具条与页脚放「实时用量 ↗」，没跑就不渲染——页面上不会出现死链；地址可用 `TRACE_MONITOR_URL` 改
 - **统一检索入口**：单行搜索区，左侧用零脚本分段开关切换「按字符匹配 / 按块匹配」并由服务端分流，输入框吃掉剩余宽度、按钮贴右；会话页入口改为无边框渐变卡片（分类色侧条）+ 分段浏览控件，次要链接降级
 - 缓存命中率统一显示到小数点后一位
@@ -612,7 +612,7 @@ token（按 `providerData.model` 分组，展示名取全库得票最多的写�
 | 轮来源标签 | `gen_trace.user_kind()` 按 `isCompacted` / `isSummary` / `<cb_summary`、`<task-notification` / `<task-id>`、`isMeta`、`startsNewUserRequest` / `<user_query` 依次判定；`user_disp()` 给非真人输入一句可读摘要，`q` 原文保留供全文检索；`turn_chip()` 输出标签，`v_session` 按 `?kind=` 筛选 | 复用解析时已在手的字段，零额外遍历、零新增索引 |
 | 静态模式同步 | `gen_trace.render()` 的每轮概要同样显示类别标签与可读摘要 | 离线兜底口径一致 |
 | 子代理标注 | `scan_all()` 在同一次逐行遍历里记 `isSubAgent` / `agent` / `rootRequestId` / 首条时间戳 / `Agent` 调用的时间与 `conversationRequestId`（`agent_reqs`）；`subagent_relations()` 先用 `rootRequestId` 精确匹配，匹配不到再退回 5 秒时间窗，会话列表按结果打「子代理」/「N 个子代理」标签 | 零额外全库遍历；精确匹配 O(子代理数)，只有未命中的才走时间窗；无子代理时无标签，页面不多一块高度 |
-| 首页全库画像 | `index_overview()` 只聚合 `STORE.sessions()` 的 `models / model / days / mtime / ws / pin`，输出模型环、时间折线、工作区两级树；`models` 与 `days`（`YYYY-MM-DD -> [输入 token, 调用数]`）都由 `scan_all()` 在原有逐行遍历里按输入 token / 调用真实时间预聚合得出 | 零额外全库遍历、零新增索引、不依赖 `workbuddy.db`；旧索引无 `days` 时回退 `mtime` 兜底 |
+| 首页全库画像 | `index_overview()` 只聚合 `STORE.sessions()` 的 `models / model / days / mtime / ws / pin`，输出模型环、时间折线、工作区两级树；`models` 与 `days`（`YYYY-MM-DD -> [输入 token, 调用数]`）都由 `scan_all()` 在原有逐行遍历里按输入 token / 调用真实时间预聚合得出；模型环按占比 ≥1% 筛选主模型、其余并入「其他 N 个模型」；时间折线 viewBox 纵向 80px（不再横拉压扁），图上叠 `.ovline` HTML 热区列，每天一列，悬停由 `[data-tip]` 气泡显示日期与输入 token，并带焦点竖线 | 零额外全库遍历、零新增索引、不依赖 `workbuddy.db`；旧索引无 `days` 时回退 `mtime` 兜底；悬停零 JS |
 | 同机互链 | `monitor_url()` 用 `http.client` 直连 loopback 的 `/api/ping`（不走 `http_proxy`、150 ms 超时），成功与失败都按 `MONITOR_TTL` 缓存；`monitor_link()` 只在探测通过时输出 `<a target="_blank" rel="noopener">` | 每 15 s 最多一次本地连接；不通时输出 0 字节，页面不留死链 |
 | 统一检索 | `search_box()` 用 `radio + label` 分段开关（无 `id`、无脚本、同页可复用），固定 form action，`v_search()` 按 `mode` 分流到 `v_find()` | 零 JS、零新增路由；分页仍直连 `/find` |
 | 按需 CSS（续） | `CSS_FOLD` / `CSS_NAV` / `CSS_INDEX` 分别按 `hitfold` / `navgrid` / `ovgrid` 注入 | 只有用到的页面才带对应图表样式 |
