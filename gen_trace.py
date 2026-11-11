@@ -801,7 +801,7 @@ def scan_file(f):
     """
     sid = os.path.basename(f)[:-6]
     turns = calls = 0
-    credit = pin = pout = 0
+    credit = pin = pout = hit = 0
     ai = ""
     model_tokens = {}   # 本会话：稳定分组键 -> 输入 token
     # 按「本次调用实际发生的日期」分桶，供首页时间折线与活动日历使用。
@@ -844,6 +844,13 @@ def scan_file(f):
                 continue
             calls += 1
             pin += pt
+            # 命中 token 的字段来源与 parse() 完全一致：先 rawUsage，再
+            # message.usage（Ling 等模型只在后者给 cache_read_input_tokens）。
+            u = (d.get("message") or {}).get("usage") or {}
+            h = ru.get("prompt_cache_hit_tokens")
+            if h is None:
+                h = u.get("cache_read_input_tokens")
+            hit += h or 0
             pout += ru.get("completion_tokens", 0)
             credit += ru.get("credit") or 0
             # 按调用真实发生日落桶：跨天会话的 token 与调用分散到各自那天，
@@ -867,6 +874,7 @@ def scan_file(f):
     return {
         "path": f, "id": sid, "ai": ai,
         "turns": turns, "calls": calls, "credit": credit, "pin": pin, "pout": pout,
+        "hit": hit, "miss": pin - hit, "rate": (hit / pin) if pin else 0,
         "models": model_tokens, "votes": votes, "days": day_bins,
         "agent": max(agent_votes, key=agent_votes.get) if agent_votes else "cli",
         "is_sub": is_sub, "root": root, "first_ts": first_ts,
@@ -965,6 +973,7 @@ def scan_all(force=False):
             "days": dict(s["days"]),            # YYYY-MM-DD -> [输入 token, 调用数]
             "turns": s["turns"], "calls": s["calls"], "credit": s["credit"],
             "pin": s["pin"], "pout": s["pout"],
+            "hit": s["hit"], "miss": s["miss"], "rate": s["rate"],
             "skipped": s["skipped"],
             "meta_ok": meta_ok,
         })

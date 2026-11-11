@@ -145,6 +145,11 @@ class Store(object):
                 # rank_rows / rank_sorted 等缓存继续命中，避免每 60 秒一次全量重算。
                 self._index = G.scan_all(force=refresh)
                 self._index_at = time.time()
+                if refresh:
+                    # 显式刷新同时丢弃会话全文缓存：宽表 / 调用明细走 STORE.get()
+                    # 首次解析的快照，源 jsonl 追加新行后不会自动更新。不清就会出现
+                    # /api/sessions 是新的、宽表还是旧的（实测两者 pin 差 3 倍）。
+                    self._cache.clear()
             if self.auto:
                 # 索引刷新后同步容量：让「全部会话」能同时驻留，避免抖动。
                 self.cap = max(CACHE_MIN, min(len(self._index) + 8, CACHE_MAX))
@@ -3874,6 +3879,7 @@ def paged(data, total, offset, limit, base, q):
 ANALYTICS_FIELDS = (
     "sid", "seq", "ts", "date", "model", "tool",
     "pin", "hit", "miss", "pout", "credit", "rate", "turn", "ws",
+    "is_sub", "root",
 )
 ANALYTICS_MAX_LIMIT = 500     # 与 API_MAX_LIMIT 对齐，避免一次序列化过大
 
@@ -3948,9 +3954,16 @@ def analytics_calls(q):
     mf = G.canon_model(qstr(q, "model").strip())
     wf = qstr(q, "ws").strip().lower()
     tf = qstr(q, "tool").strip().lower()
+    sid_f = qstr(q, "sid").strip()          # 精确匹配单个会话 id
+    refresh = qstr(q, "refresh") == "1"
 
+    # refresh=1 会同时失效会话全文缓存（见 Store.sessions），让宽表与
+    # /api/sessions 看到同一份最新 jsonl；分页链接不再携带它，避免每页重扫。
+    sessions = STORE.sessions(refresh=refresh)
     total, rows = 0, []
-    for s in STORE.sessions():
+    for s in sessions:
+        if sid_f and s["id"] != sid_f:
+            continue
         if not _session_may_hit(s, lo, hi):
             continue
         ws = s.get("ws") or ""
@@ -3981,14 +3994,22 @@ def analytics_calls(q):
                     "pout": c.get("pout") or 0, "credit": c.get("credit") or 0,
                     "rate": (hit / pin) if pin else None,
                     "turn": c.get("turn", 0), "ws": ws,
+                    "is_sub": bool(s.get("is_sub")),
+                    "root": s.get("root") or "",
                 }
                 rows.append(dict((k, full[k]) for k in cols))
             total += 1
 
-    resp = paged(rows, total, off, lim, "/api/analytics/calls", q)
+    q_next = dict((k, v) for k, v in q.items() if k != "refresh")
+    resp = paged(rows, total, off, lim, "/api/analytics/calls", q_next)
+    latest = max((x.get("mtime") or 0) for x in sessions) if sessions else 0
     resp["meta"].update({"ts_unit": "unix_ms", "date_tz": "server local time",
                          "fields": cols,
-                         "model_key": "providerData.model（全库统一展示名）"})
+                         "model_key": "providerData.model（全库统一展示名）",
+                         "indexed_at": round(STORE._index_at, 3),
+                         "source_mtime_max": round(latest, 3),
+                         "data_as_of": fmt_ts(latest * 1000, "%Y-%m-%d %H:%M:%S", ""),
+                         "refreshed": refresh})
     return resp, 200
 
 
@@ -4285,10 +4306,10 @@ ROUTE_SPEC = [
       "GET /s/<sid>?view=turns|calls&p=", "会话概览（按轮 / 按调用分页）", "/s/{sid}"),
 
     A("/api/health", "状态、pid、rss_mb、会话数、缓存数、write_files、monitor", "/api/health"),
-    A("/api/sessions", "全部会话摘要", "/api/sessions"),
+    A("/api/sessions", "全部会话摘要（新增 hit / miss / rate）", "/api/sessions"),
     A("/api/stats", "跨会话全量聚合", "/api/stats"),
-    A("/api/analytics/calls?from=&to=&model=&ws=&tool=&fields=&offset=&limit=",
-      "跨会话扁平调用宽表（分析程序入口，字段与量纲见 docs/API.md）",
+    A("/api/analytics/calls?from=&to=&model=&ws=&tool=&sid=&fields=&refresh=&offset=&limit=",
+      "跨会话扁平调用宽表：sid 精筛、is_sub/root 列、refresh=1 强制重扫并在 meta 给出数据新鲜度（详见 docs/API.md）",
       "/api/analytics/calls?limit=3"),
     A("/api/s/<sid>", "单会话全量统计 + 每一轮摘要", "/api/s/{sid}"),
     A("/api/s/<sid>/calls?offset=&limit=&turn=", "调用列表（分页；不含正文）", "/api/s/{sid}/calls?limit=3"),

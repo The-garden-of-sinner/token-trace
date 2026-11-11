@@ -88,7 +88,9 @@ curl -s "http://127.0.0.1:8765/api/analytics/calls?limit=3" | python3 -m json.to
 | `model` | 不限 | 归一后**精确匹配**（大小写、`-`/`_` 差异忽略），例如 `deepseek-v4.1-flash` |
 | `ws` | 不限 | 工作区路径**大小写不敏感子串**匹配 |
 | `tool` | 不限 | 工具名**大小写不敏感子串**匹配 |
-| `fields` | 全部 14 列 | 逗号分隔的列投影；非法列名返回 **400**（不静默忽略） |
+| `sid` | 不限 | 会话 id **精确匹配**，只取一个会话（与 `ws` 的子串语义不同）；不存在时返回空 `data` |
+| `refresh` | `0` | `1` 强制重扫源 jsonl 并失效会话全文缓存，同时在 `meta` 给出数据新鲜度；`next` 不携带它，翻页复用已刷新的缓存 |
+| `fields` | 全部 16 列 | 逗号分隔的列投影；非法列名返回 **400**（不静默忽略） |
 | `offset` / `limit` | `0` / `200` | `limit` 上限 **500**，超出自动夹到 500 |
 
 非法 `from` / `to`、`from > to`、非法 `fields` 都返回 400 + 错误信封。
@@ -104,7 +106,8 @@ curl -s "http://127.0.0.1:8765/api/analytics/calls?limit=3" | python3 -m json.to
       "date": "2026-11-09", "model": "DeepSeek-V4.1-Flash", "tool": "Bash",
       "pin": 123456, "hit": 120000, "miss": 3456, "pout": 812,
       "credit": 0.19, "rate": 0.9736, "turn": 1,
-      "ws": "/home/linwei/work/order-service"
+      "ws": "/home/linwei/work/order-service",
+      "is_sub": false, "root": ""
     }
   ],
   "meta": {
@@ -112,7 +115,11 @@ curl -s "http://127.0.0.1:8765/api/analytics/calls?limit=3" | python3 -m json.to
     "next": "/api/analytics/calls?offset=200&limit=200",
     "ts_unit": "unix_ms", "date_tz": "server local time",
     "fields": ["sid", "seq", "..."],
-    "model_key": "providerData.model（全库统一展示名）"
+    "model_key": "providerData.model（全库统一展示名）",
+    "indexed_at": 1794405689.698,
+    "source_mtime_max": 1794405684.608,
+    "data_as_of": "2026-11-11 22:01:24",
+    "refreshed": false
   }
 }
 ```
@@ -139,6 +146,14 @@ curl -s "http://127.0.0.1:8765/api/analytics/calls?limit=3" | python3 -m json.to
 | `rate` | float \| null | 0–1 | `hit / pin`；`pin=0` 时为 **`null`** |
 | `turn` | int | — | 所属轮次 |
 | `ws` | str | — | 工作区路径（每行冗余，宽表自包含，便于直接 group by） |
+| `is_sub` | bool | — | 是否子代理会话（`agent-*` 或带 `isSubAgent` 标记） |
+| `root` | str | — | 父会话的 `rootRequestId`；主会话为 `""` |
+
+`meta` 里另有四个新鲜度字段：`indexed_at`（索引上次重建的 Unix 秒）、
+`source_mtime_max`（索引覆盖到的最新源文件 mtime，Unix 秒）、
+`data_as_of`（`source_mtime_max` 的本地时间，人可读）与 `refreshed`（本次是否强制刷新）。
+两者相差过大说明源数据已追加而索引尚未重建，取数前加 `refresh=1`。
+`/api/sessions` 也新增 `hit` / `miss` / `rate`（`pin=0` 时 `rate=0`，不是 `null`）。
 
 ---
 
@@ -220,6 +235,13 @@ by_model = df.groupby("model").agg(
    自行做 `lower()` + 把 `-`/`_`/空格折叠。
 7. 服务**只读**：数据由 WorkBuddy 写入 `~/.workbuddy/projects/**/*.jsonl`，
    本服务不会修改、整理或删除源文件。
+8. **`refresh=1` 修的是「全文缓存陈旧」，不是两端点的口径差**（口径差见第 1 条）。
+   `/api/sessions` 的 `hit` / `miss` / `rate` 与它的 `pin` / `pout` / `calls` 同口径
+   （只数有 `prompt_tokens` 的 `function_call`）；宽表还包含「最终回答」和无独立
+   usage 的调用。要对齐，宽表需过滤 `tool != "最终回答"` 且 `pin > 0` 后再聚合。
+9. **源 jsonl 是 append-only**：会话全文在首次访问时解析并缓存，此后写入的新调用
+   不会自动进入宽表 / 调用明细。取数前加 `refresh=1`（会同时清掉全文缓存），
+   或重启服务；常驻的旧实例必须重启才会加载新代码。
 
 ---
 
@@ -312,3 +334,4 @@ by_model = df.groupby("model").agg(
 | 2026-11-09 v1.2.1 | `/api/stats` 新增 `costly_blocks`（估算 token × 被携带次数）；HTML 页面增至 19 个（新增 `/rank`，纯页面无对应 JSON 端点），JSON 端点仍 18 个；块级 `ts` / `e` 仅供 HTML 展示，原有块端点返回结构不变；自检 127 → 144 项 |
 | 2026-11-10 v1.2.2 | 修正 `/rank` 的统计对象为**逐块 / 逐调用排行**（去掉按会话 / 日期聚合）：每一行就是一个上下文块或一次调用本身；新增 `k` / `from` / `to` 筛选参数（块类型 / 模型归一键 + 本地日期闭区间，可任意组合）；页面更名「筛选与排序」；种类下拉改自绘 `details` 菜单、搜索范围改 radio；声明 `color-scheme`、日期框去原生外观；`scan_all()` 改逐文件增量缓存、排行结果按 `(对象, 键)` 缓存、启动后后台预热全部会话；纯 HTML 改动，JSON 端点与返回结构不变；自检 144 → 168 项 |
 | 2026-11-10 v1.2.3（本地提交，未发版） | 纯 HTML 观感与筛选变化，**JSON 端点与返回结构不变**：`/rank` 的 `k` 参数由单值扩展为逗号分隔多值（种类多选，取并集），新增 `cx=1` 开关把「压缩摘要」块纳入排行（默认排除）；块类型标签按类别着色；`/stats` 双栏卡片等高；首页全库画像去掉三栏脚注、递归摘要补会话数。自检 175 → 181 项 |
+| 2026-11-11（本地改动，未发版） | `/api/sessions` 每行新增 `hit` / `miss` / `rate`；宽表新增 `sid` 精筛参数与 `is_sub` / `root` 两列（14 → 16 列）、`refresh=1` 强制重扫并失效会话全文缓存、`meta` 新增 `indexed_at` / `source_mtime_max` / `data_as_of` / `refreshed`；`ROUTE_SPEC` 文档与 README / API.md 同步；自检 185 → 194 项 |

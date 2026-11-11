@@ -603,10 +603,13 @@ def main():
               "宽表端点返回统一信封、3 行与全库 total=%s"
               % d.get("meta", {}).get("total"))
         check(d["meta"].get("ts_unit") == "unix_ms"
-              and len(d["meta"]["fields"]) == 14,
-              "meta 声明毫秒时间戳单位与 14 列字段字典")
+              and len(d["meta"]["fields"]) == 16,
+              "meta 声明毫秒时间戳单位与 16 列字段字典")
         check(all(set(r) == set(T.ANALYTICS_FIELDS) for r in d["data"]),
-              "默认每行字段完整（14 列宽表）")
+              "默认每行字段完整（16 列宽表，含 is_sub / root）")
+        check(all(isinstance(r["is_sub"], bool) and isinstance(r["root"], str)
+                  for r in d["data"]),
+              "新增 is_sub / root 类型正确（bool / str）")
 
         allrows = T.analytics_calls({"limit": ["500"]})[0]["data"]
         sess_names = set(k for s in T.STORE.sessions()
@@ -660,6 +663,60 @@ def main():
         check(st7 == 200
               and len(json.loads(b7)["data"]) <= T.ANALYTICS_MAX_LIMIT,
               "limit 超上限被夹到 %d" % T.ANALYTICS_MAX_LIMIT)
+
+        print("== 三桶字段 / sid 精筛 / 数据新鲜度 ==")
+        st_s, b_s = get("/api/sessions")
+        sess_s = json.loads(b_s)["data"]
+        check(all("hit" in s and "miss" in s and "rate" in s for s in sess_s)
+              and all(s["miss"] == s["pin"] - s["hit"]
+                      and 0 <= s["rate"] <= 1
+                      and (s["rate"] == 0 if not s["pin"] else True)
+                      for s in sess_s),
+              "/api/sessions 每行含 hit/miss/rate，miss=pin-hit，rate∈[0,1] 且 pin=0 时为 0（%d 会话）"
+              % len(sess_s))
+        st_sid, b_sid = get("/api/analytics/calls?sid=%s&limit=500" % sid)
+        d_sid = json.loads(b_sid)
+        check(st_sid == 200 and d_sid["meta"]["total"] > 0
+              and all(r["sid"] == sid for r in d_sid["data"]),
+              "sid 精筛只返回该会话（total=%s）" % d_sid["meta"].get("total"))
+        st_none, b_none = get("/api/analytics/calls?sid=no-such-session&limit=3")
+        d_none = json.loads(b_none)
+        check(st_none == 200 and d_none["data"] == [] and d_none["meta"]["total"] == 0,
+              "不存在的 sid 返回空页而非 404/500")
+        st_proj, b_proj = get("/api/analytics/calls?fields=is_sub,root,pin&limit=2")
+        check(st_proj == 200 and all(set(r) == {"is_sub", "root", "pin"}
+                                     for r in json.loads(b_proj)["data"]),
+              "新增 is_sub / root 可参与 fields 投影")
+        st_rf, b_rf = get("/api/analytics/calls?refresh=1&limit=2")
+        m_rf = json.loads(b_rf)["meta"]
+        check(st_rf == 200 and m_rf.get("refreshed") is True
+              and isinstance(m_rf.get("indexed_at"), (int, float))
+              and isinstance(m_rf.get("source_mtime_max"), (int, float))
+              and bool(re.match(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}",
+                                m_rf.get("data_as_of", ""))),
+              "refresh=1 的 meta 给出 indexed_at / source_mtime_max / data_as_of / refreshed")
+        check("refresh=1" not in (m_rf.get("next") or ""),
+              "分页 next 不携带 refresh，翻页不会每页强制重扫")
+        # 取一个小会话，避免 limit=500 截断影响口径对齐
+        small = [x for x in sess_s if 0 < x["calls"] < 400]
+        t_sid = next((x["id"] for x in small if x.get("is_sub")),
+                     small[0]["id"] if small else sid)
+        st_al, b_al = get("/api/analytics/calls?sid=%s&refresh=1&limit=500"
+                          "&fields=tool,pin,hit,pout" % t_sid)
+        aligned = [r for r in json.loads(b_al)["data"]
+                   if r["tool"] != "最终回答" and r["pin"] > 0]
+        s_al = next(x for x in sess_s if x["id"] == t_sid)
+        check(sum(r["pin"] for r in aligned) == s_al["pin"]
+              and sum(r["hit"] for r in aligned) == s_al["hit"]
+              and sum(r["pout"] for r in aligned) == s_al["pout"],
+              "refresh 后宽表按同口径过滤与 /api/sessions 的 pin/hit/pout 完全一致")
+        T.STORE.get(t_sid)
+        had = t_sid in T.STORE._cache
+        T.STORE.sessions(refresh=True)
+        cleared = t_sid not in T.STORE._cache
+        T.STORE.get(t_sid)
+        check(had and cleared and t_sid in T.STORE._cache,
+              "refresh=1 失效会话全文缓存，下次访问重新解析最新 jsonl")
 
         print("== 块时间戳 / 估算 token / 成本排名 ==")
         d0 = T.STORE.get(sid)

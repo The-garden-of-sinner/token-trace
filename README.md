@@ -356,9 +356,9 @@ tar 成员与 gzip 容器头的 `mtime` 都固定为 0（`GzipFile(..., mtime=0)
 | 端点 | 说明 |
 | --- | --- |
 | `GET /api/health` | 状态、`pid`、`rss_mb`、`uptime_s`、会话数、缓存数、`write_files=false` |
-| `GET /api/sessions` | 全部会话摘要 |
+| `GET /api/sessions` | 全部会话摘要（含 `hit` / `miss` / `rate`） |
 | `GET /api/stats` | 跨会话全量聚合 |
-| `GET /api/analytics/calls?from=&to=&model=&ws=&tool=&fields=&offset=&limit=` | 跨会话扁平调用宽表，分析程序入口（字段与量纲见 `docs/API.md`） |
+| `GET /api/analytics/calls?from=&to=&model=&ws=&tool=&sid=&fields=&refresh=&offset=&limit=` | 跨会话扁平调用宽表（16 列，含 `is_sub` / `root`；`sid` 精筛、`refresh=1` 强制重扫并给出数据新鲜度；字段与量纲见 `docs/API.md`） |
 | `GET /api/s/<sid>` | 会话统计 + 每轮摘要 + 冷启动调用号 |
 | `GET /api/s/<sid>/calls?offset=&limit=&turn=` | 调用列表（不含正文） |
 | `GET /api/s/<sid>/calls/<seq>` | 单次调用：usage、缓存边界、块总数、输出段索引 |
@@ -377,6 +377,7 @@ tar 成员与 gzip 容器头的 `mtime` 都固定为 0（`GzipFile(..., mtime=0)
 
 ```bash
 curl -s "http://127.0.0.1:8765/api/analytics/calls?limit=3" | python3 -m json.tool
+curl -s "http://127.0.0.1:8765/api/analytics/calls?sid=<sid>&refresh=1&limit=500" | python3 -m json.tool
 curl -s "http://127.0.0.1:8765/api/sessions" | python3 -m json.tool
 curl -s "http://127.0.0.1:8765/api/s/<sid>/calls?limit=5"
 curl -s "http://127.0.0.1:8765/api/s/<sid>/blocks/42?offset=0&limit=1000"
@@ -1009,6 +1010,12 @@ p95 回落到 16.8 ms；run1 的 P/S 低帧是脚本在冷加载末尾强制 `ca
 21. **同机互链依赖监视器的 Web 模式**：`workbuddy-token-monitor` 的 Qt 桌面窗口是进程内聚合，不开 HTTP 服务，因此只有 `--web` 模式（默认 8791）才会被探测到；Windows 侧监视器本就只有 web 形态，链路天然可用。探测只连本机、150 ms 超时，**不会**因此访问外网。
 22. **缓存容量自适应有上限**：默认 `cap = max(32, 会话数 + 8)`，最多 256 个会话（约 380 MB RSS）。
     低内存容器可用 `--cache` 显式压低，代价是遍历全部会话的路径会重复解析。
+23. **会话全文缓存不是实时增量**：`scan_all()` 按 `(mtime, size)` 增量重扫索引，所以
+    `/api/sessions` 能看到刚追加的调用；但宽表 / 调用明细走的是 `STORE.get()` 首次解析的
+    会话全文快照，不会自动更新。取数前在宽表加 `refresh=1`（会清掉全文缓存、重扫索引，
+    并在 `meta` 返回 `indexed_at` / `source_mtime_max` / `data_as_of` / `refreshed`），
+    或重启服务。另注意两端点口径不同：`/api/sessions` 只数有 `prompt_tokens` 的
+    `function_call`，宽表还包含「最终回答」与无独立 usage 的调用（见 `docs/API.md` §7）。
     超过 256 个会话时超出部分仍走 LRU，`/stats` 每次请求会重新解析它们（单次约
     0.1–0.7 s/会话，线性而非二次退化）；此时可用 `--cache` 显式调大，代价是内存
     （单会话约 1.5 MB）。这是「内存上限」与「全库统计速度」之间的取舍，不是缺陷。
