@@ -705,7 +705,11 @@ def main():
                           "&fields=tool,pin,hit,pout" % t_sid)
         aligned = [r for r in json.loads(b_al)["data"]
                    if r["tool"] != "最终回答" and r["pin"] > 0]
-        s_al = next(x for x in sess_s if x["id"] == t_sid)
+        # 源 jsonl 在测试期间仍可能增长：refresh=1 重扫后必须重取会话摘要，
+        # 否则拿测试开头缓存的旧摘要对比新宽表会稳定假失败（实测同一会话
+        # pin 从 1691092 涨到 1744143，重取后三个字段差值均为 0）。
+        s_al = next(x for x in json.loads(get("/api/sessions")[1])["data"]
+                    if x["id"] == t_sid)
         check(sum(r["pin"] for r in aligned) == s_al["pin"]
               and sum(r["hit"] for r in aligned) == s_al["hit"]
               and sum(r["pout"] for r in aligned) == s_al["pout"],
@@ -879,11 +883,16 @@ def main():
               "入场用均衡缓动，跨页过渡只做透明度")
         # 性能：索引增量复用 + 已排序缓存
         a1 = G.scan_all()
+        sig1 = G._SCAN_LAST["sig"]
         a2 = G.scan_all()
-        check(a2 is a1,
+        sig2 = G._SCAN_LAST["sig"]
+        # WorkBuddy 会实时追加 jsonl / 更新 sessions 表，两次扫描之间全库签名
+        # 变化属正常：只在签名未变时才要求复用同一对象，避免实时写入造成假失败。
+        check(a2 is a1 or sig2 != sig1,
               "scan_all 数据未变时复用同一索引对象（下游缓存继续命中）")
         a3 = G.scan_all(force=True)
-        check(a3 is not a1 and len(a3) == len(a1),
+        check(a3 is not a1 and (len(a3) == len(a1)
+                                or len(G._SCAN_LAST["sig"]) != len(sig1)),
               "scan_all(force=True) 强制重建列表对象但复用文件摘要")
         s1 = T.rank_sorted("block", "product")
         s2 = T.rank_sorted("block", "product")
