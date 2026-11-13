@@ -1,10 +1,10 @@
-"""外部源桥接：把 Codex / ZCode 的会话接进 gen_trace 的 scan_all / build。
+"""外部源桥接：把 Codex / ZCode / DSH 的会话接进 gen_trace 的 scan_all / build。
 
 对外只暴露两个函数，形状与 gen_trace 内部契约一致：
     scan_external(force=False) -> [会话摘要 dict]
     build(path)                -> (ctx, calls, meta, turns)
 
-会话 id 带平台前缀（codex- / zcode-），伪路径走 <src>://<sid>，
+会话 id 带平台前缀（codex- / zcode- / dsh-），伪路径走 <src>://<sid>，
 因此下游（Store / 统计 / 搜索 / 路由）不需要知道数据来自 JSONL 还是 SQLite。
 
 单个源不可用时只跳过该源并打印一行，不影响其他平台与 WorkBuddy 主源。
@@ -12,19 +12,26 @@
 import os
 
 try:                      # 作为包导入（gen_trace / trace_server）
-    from . import codex, zcode
+    from . import codex, zcode, dsh
 except ImportError:       # 直接运行本文件自测
     import codex
     import zcode
+    import dsh
 
 _CACHE = {"sig": None, "out": []}
-_PREFIX = ("codex://", "zcode://")
+_PREFIX = ("codex://", "zcode://", "dsh://")
 
 
 def _sig():
     """文件集合 + 各文件签名。sqlite 走 WAL，-wal 也必须进签名。"""
     parts = []
     for f in codex.session_files():
+        try:
+            st = os.stat(f)
+        except OSError:
+            continue
+        parts.append((f, st.st_mtime_ns, st.st_size))
+    for f in dsh.session_files():
         try:
             st = os.stat(f)
         except OSError:
@@ -58,6 +65,10 @@ def scan_external(force=False):
             con.close()
     except Exception as e:
         print("token-trace: ZCode 源跳过（%s: %s）" % (type(e).__name__, e))
+    try:
+        out.extend(dsh.scan())
+    except Exception as e:
+        print("token-trace: DSH 源跳过（%s: %s）" % (type(e).__name__, e))
 
     _CACHE["sig"] = sig
     _CACHE["out"] = out
@@ -77,6 +88,8 @@ def build(path):
             ctx, calls, meta, _ = zcode.build(con, path.split("://", 1)[1])
         finally:
             con.close()
+    elif path.startswith("dsh://"):
+        ctx, calls, meta, _ = dsh.build(path)
     else:
         raise KeyError(path)
     return _turn_objects(ctx, calls, meta)

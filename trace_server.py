@@ -1298,16 +1298,24 @@ CSS_VIZ = """
 .reserve{display:flex;height:14px;border-radius:4px;overflow:hidden;background:var(--track);margin:7px 0 4px}
 .reserve .used{background:var(--accent)}
 .reserve .retired{background:repeating-linear-gradient(45deg,var(--dim) 0 4px,var(--track) 4px 8px)}
-/* 折线图的拉起：从左往右用 clip 逐步揭开，折线与面积一起「画」出来。
-   clip-path 只影响合成层，不触发重排；不支持 inset 的浏览器直接显示整条线。 */
-.spark{width:100%;height:38px;display:block;animation:tt-draw .8s var(--ease-in) backwards}
-@keyframes tt-draw{from{clip-path:inset(0 100% 0 0);opacity:.55}to{clip-path:inset(0 0 0 0);opacity:1}}
-.spark polyline{fill:none;stroke:var(--accent);stroke-width:1.6;vector-effect:non-scaling-stroke}
-.spark polygon{fill:var(--accent);opacity:.11}
+/* 折线图的绘制：polyline 带 pathLength="100"，CSS 用 dashoffset 把路径从
+   左往右「长」出来；面积延后淡入并轻微上浮，读起来像笔尖描过一遍，而不是
+   整张图被裁开。归一化长度让纯 CSS 就能精确描线，不需要测量路径。
+   只动合成属性（dashoffset / opacity / transform），不触发重排。 */
+.spark{width:100%;height:38px;display:block}
+.spark polyline{fill:none;stroke:var(--accent);stroke-width:1.6;vector-effect:non-scaling-stroke;
+ stroke-dasharray:100;animation:tt-draw .88s var(--ease-in) backwards}
+.spark polygon{fill:var(--accent);opacity:.11;animation:tt-area .72s .18s var(--ease-in) backwards}
+/* 多平台三条线错峰，各画各的；单条线不受影响 */
+.spark polyline:nth-of-type(2){animation-delay:.13s}
+.spark polyline:nth-of-type(3){animation-delay:.26s}
+@keyframes tt-draw{from{stroke-dashoffset:100}to{stroke-dashoffset:0}}
+@keyframes tt-area{from{opacity:0;transform:translateY(4px)}to{opacity:.11;transform:none}}
 /* 首页「按时间」折线：viewBox 纵向 80px，渲染高由 .ovline 给定，折线不再被
-   横拉压扁；其上的热区列复用 [data-tip] 气泡（零 JS），悬停出焦点竖线。 */
+   横拉压扁；其上的热区列复用 [data-tip] 气泡（零 JS），悬停出焦点竖线。
+   容器定位在绝对层，动画交给里面的 polyline，不再整块禁用。 */
 .ovline{position:relative;height:64px;margin-top:2px}
-.ovline .spark{position:absolute;inset:0;height:100%;animation:none}
+.ovline .spark{position:absolute;inset:0;height:100%}
 /* 三平台三条线的共用图例 */
 .ovlegend{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:10px;
  color:var(--muted);margin-top:5px}
@@ -1380,9 +1388,11 @@ CSS_TREND = """
 .trend a:hover,.trend a:focus-visible{outline:1px solid var(--accent);outline-offset:1px}
 .trend a .mk{position:absolute;top:-3px;left:50%;transform:translateX(-50%);font-size:9px;line-height:1;color:var(--neg2)}
 .trend a .mk.c{color:var(--warn-fg)}
-.trend .ovl{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;
- animation:tt-line .9s .2s var(--ease-in) backwards}
-@keyframes tt-line{from{clip-path:inset(0 100% 0 0);opacity:0}to{clip-path:inset(0 0 0 0);opacity:1}}
+.trend .ovl{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+/* 命中率折线在柱子起势之后再描出来，否则两条动画同时起步会互相抢注意力 */
+.trend .ovl polyline{fill:none;stroke:var(--fg);stroke-width:1.2;opacity:.42;
+ vector-effect:non-scaling-stroke;stroke-dasharray:100;
+ animation:tt-draw .92s .3s var(--ease-in) backwards}
 .trend .ovl polyline{fill:none;stroke:var(--fg);stroke-width:1.2;opacity:.42;vector-effect:non-scaling-stroke}
 @keyframes tt-rise{from{transform:scaleY(.02);opacity:.35}to{transform:scaleY(1);opacity:1}}
 """
@@ -1911,7 +1921,8 @@ def sparkline_svg(series):
                    for i, v in enumerate(series))
     return ('<svg class="spark" viewBox="0 0 100 38" preserveAspectRatio="none" '
             'role="img" aria-label="可见上下文字数走势">'
-            '<polygon points="0,38 %s 100,38"/><polyline points="%s"/></svg>' % (pts, pts))
+            '<polygon points="0,38 %s 100,38"/>'
+            '<polyline pathLength="100" points="%s"/></svg>' % (pts, pts))
 
 
 HM_ROWS = 7          # 周一..周日，与 GitHub 贡献图一致
@@ -2064,7 +2075,8 @@ def _platform_charts(ss, total, raw_total):
     #    颜色与下面的折线、图例共用同一组变量，两套主题各有取值。
     platforms = (("workbuddy", "WorkBuddy", "var(--p0)"),
                  ("zcode", "ZCode", "var(--p1)"),
-                 ("codex", "Codex", "var(--p2)"))
+                 ("codex", "Codex", "var(--p2)"),
+                 ("dsh", "DSH", "var(--p3)"))
     by_src = Counter()
     for s in ss:
         by_src[s.get("src") or "workbuddy"] += s["pin"]
@@ -2150,7 +2162,7 @@ def _platform_charts(ss, total, raw_total):
         pts = " ".join("%.2f,%.2f" % (i * 100.0 / (n - 1),
                                       H - v / mx * (H - TOP - 2))
                        for i, v in enumerate(buckets[k]))
-        polys.append('<polyline points="%s" style="stroke:%s;stroke-width:1.7"/>' %
+        polys.append('<polyline pathLength="100" points="%s" style="stroke:%s;stroke-width:1.7"/>' %
                      (pts, color))
     unit_cn = "天" if unit == "day" else "周"
     svg = ('<svg class="spark" viewBox="0 0 100 %d" preserveAspectRatio="none" '
@@ -2287,7 +2299,8 @@ def _model_charts(ss, total, raw_total):
                    for i, v in enumerate(buckets))
     svg = ('<svg class="spark" viewBox="0 0 100 %d" preserveAspectRatio="none" '
            'role="img" aria-label="按天输入 token 走势">'
-           '<polygon points="0,%d %s 100,%d"/><polyline points="%s"/></svg>' %
+           '<polygon points="0,%d %s 100,%d"/>'
+           '<polyline pathLength="100" points="%s"/></svg>' %
            (H, H, pts, H, pts))
     step = 100.0 / days
     cols = []
@@ -2445,7 +2458,7 @@ def trend_overlay(rows):
     pts = " ".join("%.2f,%.2f" % ((i + .5) * 100.0 / n, 100 - r["rate"] * 100)
                    for i, r in enumerate(rows))
     return ('<svg class="ovl" viewBox="0 0 100 100" preserveAspectRatio="none" '
-            'aria-hidden="true"><polyline points="%s"/></svg>' % pts)
+            'aria-hidden="true"><polyline pathLength="100" points="%s"/></svg>' % pts)
 
 
 def rate_bar(c, width=True):
@@ -2645,7 +2658,8 @@ def v_index(q):
                                        (("src", k), ("sort", "" if sort == "mtime" else sort)) if vv)),
                         lab)
                     for k, lab in (("", "全部"), ("workbuddy", "WorkBuddy"),
-                                   ("zcode", "ZCode"), ("codex", "Codex"))))
+                                   ("zcode", "ZCode"), ("codex", "Codex"),
+                                   ("dsh", "DSH"))))
     src_bytes = 0
     for s in ss:
         try:

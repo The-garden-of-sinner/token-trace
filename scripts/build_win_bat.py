@@ -46,7 +46,8 @@ VERSION_FILE = os.path.join(BASE, "scripts", "VERSION")
 # fullname.replace(".", "/") 查 "xxx.py" / "xxx/__init__.py"。
 SOURCES = ("trace_server.py", "gen_trace.py", "pricing.py",
            "sources/__init__.py", "sources/bridge.py",
-           "sources/codex.py", "sources/zcode.py")
+           "sources/codex.py", "sources/zcode.py", "sources/dsh.py",
+           "sources/_zstd.py")
 
 BAT_HEAD = r"""@echo off
 rem Token Trace @VERSION@ - single-file Windows launcher. No other project files needed.

@@ -80,6 +80,66 @@ def main():
     check(bool(re.search(r"20\d{2}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", ts_views[0])),
           "调用详情渲染真实本地时间戳")
 
+    print("== DSH 源：多帧 zstd 事件流 ==")
+    try:
+        import tempfile
+        import shutil
+        from sources import dsh as D
+        root = tempfile.mkdtemp(prefix="tt-dsh-")
+        sd = os.path.join(root, "sessions", "--ws--", "session-t1")
+        os.makedirs(sd)
+        ev = [
+            {"type": "session", "version": 4, "id": "session-t1",
+             "cwd": "/w", "delegationDepth": 0},
+            {"type": "turn/start", "seq": 1, "time": 1780000000100, "data": {}},
+            {"type": "user/message", "seq": 2, "time": 1780000000200,
+             "data": {"content": "第一问"}},
+            {"type": "assistant/message", "seq": 3, "time": 1780000001000,
+             "data": {"message": {"source": {"model": "m1"}, "content": "答一"},
+                      "usage": {"inputTokens": 10, "outputTokens": 5,
+                                "cacheReadTokens": 100, "cacheWriteTokens": 0}}},
+            {"type": "tool/call", "seq": 4, "time": 1780000001100,
+             "data": {"name": "bash"}},
+            {"type": "turn/start", "seq": 5, "time": 1780000002000, "data": {}},
+            {"type": "user/message", "seq": 6, "time": 1780000002100,
+             "data": {"content": "第二问"}},
+            {"type": "assistant/message", "seq": 7, "time": 1780000003000,
+             "data": {"message": {"source": {"model": "m1"}, "content": "答二"},
+                      "usage": {"inputTokens": 20, "outputTokens": 7,
+                                "cacheReadTokens": 200, "cacheWriteTokens": 0}}},
+        ]
+        lines = [json.dumps(e, ensure_ascii=False).encode() for e in ev]
+        # 两段各自压缩再拼接 = 两个独立 zstd 帧，复现「追加写入」
+        blob = b"".join(
+            subprocess.run(["zstd", "-q", "-c"], input=b"\n".join(chunk) + b"\n",
+                           stdout=subprocess.PIPE, check=True).stdout
+            for chunk in (lines[:3], lines[3:]))
+        with open(os.path.join(sd, "session.v4.jsonl.zstd"), "wb") as fh:
+            fh.write(blob)
+        old_home = D.DSH_HOME
+        D.DSH_HOME = root
+        D._PARSED.clear()
+        try:
+            ss = D.scan()
+            check(len(ss) == 1, "dsh 多帧文件完整解析（2 帧拼接，不是只解首帧）")
+            s = ss[0]
+            check(s["pin"] == 330 and s["hit"] == 300 and s["pout"] == 12,
+                  "dsh 用量映射：pin=input+cacheRead+cacheWrite、hit=cacheRead（%d/%d/%d）"
+                  % (s["pin"], s["hit"], s["pout"]))
+            check(s["turns"] == 2 and s["ai"] == "第一问",
+                  "dsh 轮次按 turn/start 计数、标题取首条用户消息")
+            ctx, calls, meta, turns = D.build("dsh://session-t1")
+            check(len(calls) == 2 and calls[0]["tool"] == "bash",
+                  "dsh build 的调用数与工具归属正确")
+            check([b["k"] for b in ctx][:3] == ["user", "assistant", "tool_call"],
+                  "dsh 块序列按事件顺序还原")
+        finally:
+            D.DSH_HOME = old_home
+            D._PARSED.clear()
+            shutil.rmtree(root, ignore_errors=True)
+    except FileNotFoundError:
+        print("  SKIP 本机没有 zstd 命令，跳过 DSH 多帧用例")
+
     print("== 启动临时服务 ==")
     proc = subprocess.Popen(
         [sys.executable, "-B", "trace_server.py", "--port", str(PORT)],
@@ -616,6 +676,10 @@ def main():
               "缺模型名的调用收敛为空串，不产生假类别")
         by_variant = {}
         for s in T.STORE.sessions():
+            # 多平台接入后各源有各自的模型命名（如 DSH 的 deepseek-v4 与
+            # WorkBuddy 的 DeepSeek-V4.1-Flash 是不同模型），只验主源的写法变体
+            if (s.get("src") or "workbuddy") != "workbuddy":
+                continue
             for c in T.STORE.get(s["id"])["calls"]:
                 if "deepseek" in (c.get("model") or "").lower():
                     by_variant.setdefault(c["model"], c)

@@ -89,7 +89,7 @@
 
 | 层 | 职责 | 刻意不做 |
 | --- | --- | --- |
-| 数据源 | `sources/` 下每平台一个模块：WorkBuddy（`projects/**/*.jsonl` + `workbuddy.db`）、Codex（`~/.codex/sessions/**/rollout-*.jsonl[.zst]`）、ZCode（`~/.zcode/cli/db/db.sqlite` + model-io 补充源），全程只读 | 不写回、不复制一份数据 |
+| 数据源 | `sources/` 下每平台一个模块：WorkBuddy（`projects/**/*.jsonl` + `workbuddy.db`）、Codex（`~/.codex/sessions/**/rollout-*.jsonl[.zst]`）、ZCode（`~/.zcode/cli/db/db.sqlite` + model-io 补充源）、DSH（`~/.dsh/sessions/**/session.v4.jsonl.zstd` 事件流），全程只读 | 不写回、不复制一份数据 |
 | 数据层 | `build(path, full=True)` 重建块序列，`Store` LRU 常驻 + 前缀和派生索引 | 不建倒排索引、不落盘 |
 | 计算层 | `call_state` / `call_outline` / `block_users` / `search` / `trend_rows` 等，O(1) 或二分 | 不把整段上下文展开到页面 |
 | 渲染 / API 层 | 每请求只产出一屏 HTML 或一条 `{ok,data,meta}` JSON | 不一次性注入大 JSON、不截断全文 |
@@ -103,8 +103,19 @@
 - Codex 的 `token_usage_record.usage` **就是本次调用增量**，累计值在
   `turn_token_usage` / `thread_token_usage`；对 usage 再差分会重复计数。
   老版本只有 `event_msg/token_count` 时才回退差分，且两者不混用。
-- Codex 的 `.zst` 用系统 `libzstd.so.1` 经 ctypes 解，不引入第三方包；
-  `rglob("*.jsonl")` 匹配不到 `.zst`，必须单独枚举。
+- Codex 的 `.zst` 与 DSH 的 `.jsonl.zstd` 都走 `sources/_zstd.py`：ctypes 直连
+  系统 libzstd（Linux `libzstd.so.1` / macOS `.dylib` / Windows `libzstd.dll`、
+  `zstd.dll`，含 PATH 与常见安装位置），找不到再退 `zstd` 命令行，仍不引入第三方包；
+  `rglob("*.jsonl")` 匹配不到压缩文件，必须单独枚举。
+- **DSH 会话文件是多帧 zstd**（每次 flush 追加一帧），只解第一帧会静默丢掉后续内容；
+  `_zstd.py` 用 `ZSTD_decompressStream` 循环解码，单帧多帧都能完整读出。
+- DSH 的用量在 `assistant/message.data.usage`（`inputTokens` 未缓存 / `cacheReadTokens`
+  命中 / `cacheWriteTokens` / `outputTokens`），本工具按 `pin = 三者之和`、`hit = cacheRead`
+  映射，与 WorkBuddy 侧同口径；模型取 `message.source.model`，`delegationDepth > 0`
+  标为子代理会话。事件流只到消息粒度，**不宣称** DSH projection 里的 surface 级 token 归属。
+- 同一会话在 Codex 侧可能对应多个 rollout（每次 resume 新开一个文件并重放历史），
+  `scan()` 按 `session_id` 分组、按 `(ts, pin, pout, model)` 去重后合并，否则同一次调用
+  会被重复计入、会话列表出现重复项。
 - ZCode 的 `message.sequence` / `part.sequence` 实测全为 0，无法按序列切上下文，
   `ctxN` 只能按 `part.time_created` 推进（用 `<=`，才能把同一毫秒完成的工具结果算进去）。
 - ZCode 有两套用量表：逐调用必须认 `model_usage`，`turn_usage` 只做交叉校验
@@ -132,7 +143,7 @@
 - **命中块折叠**：调用详情里连续命中块默认折成一枚紧凑胶囊「#a–#b 块缓存命中」，展开时才铺成全宽标题条并拉出逐块清单；「按调用浏览」每行也带同样的折叠摘要；主动选「只看命中」时全部展开
 - **轮来源标签**：`role=user` 的消息并不都是你输入的。每轮标为「用户消息 / 后台任务 / 压缩摘要 / 系统注入 / 内部消息」，非真人输入显示可读摘要而不是整段 XML；会话页可按类别筛选，单轮详情也按来源改标题
 - **子代理隶属树**：子代理是独立的 `agent-*` 会话文件，且工作区常与主会话不同。首页把同一页内的父子收编成「父会话行 → 缩进子树」（原生 `<details>` 折叠、零脚本），子行带 `└` 连接符并注明「派生自「父会话标题」」，分组标题标「含 N 个子代理」；父子跨页或无法定位父级时改在行内注明，关系不会凭空消失。匹配优先用子会话的 `rootRequestId` 精确对照派发它的 `Agent` 调用，字段缺失时才退回 5 秒时间窗兜底
-- **首页全库画像**：按视图分两套口径。「全部」视图是**按平台拼接**的输入 token 环（WorkBuddy / ZCode / Codex 各一段，弧宽对 <1.2% 的段做可见性保底，图例给真实占比）与**三条不同颜色的按平台走势线**（共用纵轴；14 天内活跃平台不足两个时自动退到近 12 周按周，避免旧会话全落在窗口外）。切到**单个平台**则回到**按模型的输入 token 环**（按 `providerData.model` 分组、忽略展示名大小写差异，不依赖 db；**低于 1% 的模型并入「其他」，图例只列 ≥1% 的主模型**）与**单条按天折线**。两视图都复用 `data-tip` 零 JS 悬停气泡、带焦点竖线，另有工作区路径递归树（两级 + 占比条）；「按时间」分桶一律按**每次调用实际发生的日期**（`scan_all()` 预聚合的 `days`），不把整个会话压到文件最后修改日，跨天会话也能落到各自那天
+- **首页全库画像**：按视图分两套口径。「全部」视图是**按平台拼接**的输入 token 环（WorkBuddy / ZCode / Codex / DSH 各一段，弧宽对 <1.2% 的段做可见性保底，图例给真实占比）与**按平台着色的走势线**（共用纵轴；14 天内活跃平台不足两个时自动退到近 12 周按周，避免旧会话全落在窗口外）。切到**单个平台**则回到**按模型的输入 token 环**（按 `providerData.model` 分组、忽略展示名大小写差异，不依赖 db；**低于 1% 的模型并入「其他」，图例只列 ≥1% 的主模型**）与**单条按天折线**。两视图都复用 `data-tip` 零 JS 悬停气泡、带焦点竖线，另有工作区路径递归树（两级 + 占比条）；「按时间」分桶一律按**每次调用实际发生的日期**（`scan_all()` 预聚合的 `days`），不把整个会话压到文件最后修改日，跨天会话也能落到各自那天
 - **同机互链**：服务端用一次 loopback `/api/ping`（150 ms 超时、结果缓存 15 s）判断同机的 WorkBuddy 用量监视是否在跑，在跑才在工具条与页脚放「实时用量 ↗」，没跑就不渲染——页面上不会出现死链；地址可用 `TRACE_MONITOR_URL` 改
 - **统一检索入口**：单行搜索区，左侧用零脚本分段开关切换「按字符匹配 / 按块匹配」并由服务端分流，输入框吃掉剩余宽度、按钮贴右；会话页入口改为无边框渐变卡片（分类色侧条）+ 分段浏览控件，次要链接降级
 - 缓存命中率统一显示到小数点后一位
@@ -315,7 +326,8 @@ tar 成员与 gzip 容器头的 `mtime` 都固定为 0（`GzipFile(..., mtime=0)
 
 | 版本 | 主要内容 |
 | --- | --- |
-| **v1.3.0** | **多平台接入**：新增 `sources/`（Codex rollout JSONL / `.zst` 经 ctypes+libzstd 零依赖解压、ZCode `db.sqlite`）与 `sources/bridge.py`，`scan_all()` 合并三源，会话 id 带 `codex-` / `zcode-` 前缀，伪路径 `codex://` / `zcode://` 在 `build()` 入口分发，单个外部源不可用时只跳过该源；新增 `pricing.py` 按「新输入 / 缓存命中 / 输出」三档刊例价估算成本，`top_calls` 改按估算成本排序，WorkBuddy 积分口径原样保留、首页 KPI 双口径并列。首页平台切换移到大标题栏；「全部」视图构成环改为**按平台拼接**（小占比段做弧宽保底、图例给真实占比）、折线改为**三平台三色线**（14 天内活跃平台不足两个时自动退到近 12 周按周），**单平台视图保持按模型环 + 单条按天折线**。修 `_derive` 零输入调用造成的首页 / 会话页调用数不一致，`unit_miss` 分母只取有积分的会话。ZCode 工具名经 `assistant_message_id` ↔ `part.message_id` 精确到单次调用；`model-io-*.jsonl` 只作 system prompt / 工具 schema 补充源（独立探针验证，未进主链路）。**打包修正**：deb 与自包含 Windows `TokenTrace.bat` 补齐 `pricing.py` 与 `sources/` 全部模块，bat 改用内存 `MetaPathFinder` 支持包与相对导入，否则 v1.3.0 的安装包会在 `import pricing` 处直接失败。自检 194 → 195 项 |
+| **v1.3.1** | **折线载入动画**：`polyline` 带 `pathLength="100"`，用 `stroke-dashoffset` 把线从左往右「画」出来，面积延后淡入并轻微上浮；多平台多条线按 0.13s 错峰，命中率折线在柱子起势后 0.3s 再描。首页「按时间」折线此前被 `animation:none` 整块关掉，现已恢复。**DSH 接入**：`sources/dsh.py` 解析 `~/.dsh/sessions/**/session.v4.jsonl.zstd` 事件流（`session` / `session/title` / `turn/start` / `user/message` / `assistant/message` / `tool/call` / `tool/result`），会话 id 前缀 `dsh-`、伪路径 `dsh://`，首页平台环与走势线增加第四色。**zstd 跨平台**：新增 `sources/_zstd.py`（ctypes 直连 libzstd → `zstd` 命令行 → 3.14 标准库/第三方包），支持**多帧**；修掉 Windows 上因只找 `libzstd.so.1` 导致 Codex `.zst` 全部跳过的问题。**Codex resume 分片合并**：同一 `session_id` 的多个 rollout 按时间去重合并（本机 115 个文件 → 36 个会话），修复重复会话与统计虚高。`scan()` 走轻量模式（不构造块列表）+ 文件级 `(mtime, size)` 缓存，全库重扫从 2.3s 降到 39ms。自检 195 → 200 项（新增 DSH 多帧/字段映射/工具归属/块序） |
+| v1.3.0 | **多平台接入**：新增 `sources/`（Codex rollout JSONL / `.zst` 经 ctypes+libzstd 零依赖解压、ZCode `db.sqlite`）与 `sources/bridge.py`，`scan_all()` 合并三源，会话 id 带 `codex-` / `zcode-` 前缀，伪路径 `codex://` / `zcode://` 在 `build()` 入口分发，单个外部源不可用时只跳过该源；新增 `pricing.py` 按「新输入 / 缓存命中 / 输出」三档刊例价估算成本，`top_calls` 改按估算成本排序，WorkBuddy 积分口径原样保留、首页 KPI 双口径并列。首页平台切换移到大标题栏；「全部」视图构成环改为**按平台拼接**（小占比段做弧宽保底、图例给真实占比）、折线改为**三平台三色线**（14 天内活跃平台不足两个时自动退到近 12 周按周），**单平台视图保持按模型环 + 单条按天折线**。修 `_derive` 零输入调用造成的首页 / 会话页调用数不一致，`unit_miss` 分母只取有积分的会话。ZCode 工具名经 `assistant_message_id` ↔ `part.message_id` 精确到单次调用；`model-io-*.jsonl` 只作 system prompt / 工具 schema 补充源（独立探针验证，未进主链路）。**打包修正**：deb 与自包含 Windows `TokenTrace.bat` 补齐 `pricing.py` 与 `sources/` 全部模块，bat 改用内存 `MetaPathFinder` 支持包与相对导入，否则 v1.3.0 的安装包会在 `import pricing` 处直接失败。自检 194 → 195 项 |
 | **v1.2.4** | 会话索引与调用宽表口径对齐：`/api/sessions` 每行新增 `hit` / `miss` / `rate`（`scan_file` 按解析同源口径累加命中 token）；`/api/analytics/calls` 新增 `sid` 精筛与 `is_sub` / `root` 两列（14 → 16 列），`refresh=1` 强制重扫并同时失效会话全文缓存，修源 jsonl 追加后宽表仍读旧快照的问题；`meta` 补 `indexed_at` / `source_mtime_max` / `data_as_of` / `refreshed` 四项数据新鲜度字段，分页 `next` 不再携带 `refresh`。自检补一条防实时数据漂移的口径断言（重扫后重取会话摘要），194 项全过 |
 | **v1.2.3** | 四处观感与筛选修正：`/stats` 双栏卡片由 `align-items:start` 改 `stretch` 等高对齐（7 行日历比左栏高时上下边框不再错开）；块类型标签统一按 `--p0..--p4` 五类着色，`/rank`、调用详情、块全文 / 块检索结果共用 `type_chip()`，不再一片灰；`/rank` 种类筛选由单选改**多选组合**（`k` 支持逗号分隔多值，下拉里逐项点选 / 取消，取并集），并默认排除「压缩摘要」块（`cx=1` 才纳入 —— 上下文压缩产生的历史摘要单块几十万字，原本霸占按 token 排行的前几名）；首页全库画像删掉三栏下方的小字脚注，递归关系摘要改「N 个 parent 目录 · M 个工作区 · K 个会话」。首页画像再修：模型环**低于 1% 的模型并入「其他 N 个模型」**，图例只列 ≥1% 主模型（原写死 top5 把 0.7% 的长尾也单列）；「按时间」折线 viewBox 纵向 80px 不再横拉压扁，并叠 `.ovline` HTML 热区列实现**逐日悬停气泡**（日期 + 输入 token，带焦点竖线，复用 `data-tip` 零 JS 方案）。自检 185 项 |
 | **v1.2.2** | 修正 `/rank`（页面更名**筛选与排序**）的统计对象：原实现按会话 / 日期聚合，把块和调用压成桶；现改为**逐块 / 逐调用排行**，每一行就是一个上下文块或一次调用本身（块按块 token / 被携带次数 / 乘积，调用按合计 / 输入 / 输出 token）。行数分别等于全库块数与调用数；块乘积与 `/stats.costly_blocks` 同口径。新增「种类 + 时间」筛选：块按块类型、调用按模型归一键，时间按对象本地日期闭区间，三维可任意组合；筛选状态在切换对象 / 排序 / 翻页时保持。性能：`scan_all()` 改按 `(mtime, size)` 逐文件增量缓存（35 会话全量 2.5 s → 未变 7.7 ms、单文件变更 15 ms），索引未变时复用同一对象；排序结果按 `(对象, 键)` 缓存，筛选在有序列表上只过滤不重排；启动后后台预热全部会话，`/stats`、`/rank` 首访不再等冷启动。观感：声明 `color-scheme` 让原生控件跟随明暗；日期框初版只去掉原生外观与内层边框（浏览器弹层黑边仍在，见下）；种类下拉改为 `<details>` + 链接菜单，搜索范围改为 radio 分段控件，彻底去掉原生 select 弹层。**同版本补修**：原生日期弹层的直角黑边改用自绘日历（`<details>` + 日期链接，零脚本，`cal` / `calfield` 翻月，筛选栏提到页首保证弹层完整可见）；热力图悬浮框被 `overflow-x:auto` 连带的纵向裁切斩断，去掉容器 overflow 并提升层级；活动日历最终定为 7 行 × 26 列的周对齐贡献图（约 20px 格子、星期标签、月份刻度），中途试过 4 行 × 18 列但丢了星期语义；色阶改 `color-mix` 混色让气泡不再被格子的 `opacity` 带淡、气泡宽度改 `max-content` 不再被小格子压成竖条；入场动画换均衡缓动、活动动画数由 34 削到约 12、`both` 改 `backwards`，跨页过渡只做透明度 —— 兆芯集显实测首页 28 → 42 fps、p50 33.3 → 16.7 ms、长帧后动画剩余 227 → 420 ms 以上。自检 175 项 |
