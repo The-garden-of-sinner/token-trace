@@ -15,6 +15,8 @@ import sys
 import time
 from pathlib import Path
 
+import pricing      # 刊例价估算：会话级成本按各模型输入占比分摊 hit/pout
+
 SR = re.compile(r"<system-reminder[^>]*>(.*?)</system-reminder>", re.S)
 MAX_TEXT = 3000      # 块字典里存的上限（全文）
 PREVIEW = 600        # 调用内部就地展开时的预览长度
@@ -299,6 +301,9 @@ def brief(args):
 def build(path, full=False):
     """返回 (ctx, calls, meta, turns)。
 
+    path 支持伪路径 codex://<sid> / zcode://<sid>，交给 sources.bridge 解析；
+    其余按 WorkBuddy 的 jsonl 路径处理。
+
     ctx 是「按时间顺序进入上下文的内容块」，只放会作为历史重发给模型的东西：
       user / injected  → 用户消息
       tool_call        → 助手发出的工具调用
@@ -315,6 +320,14 @@ def build(path, full=False):
     因此不删任何块（块索引 / 分片 / URL 全部不变），只给每次调用记 vf（visible_from，
     可见区间起点块号）与 compact（该调用是否紧随压缩）。所有统计用 [vf, ctxN)。
     """
+    if isinstance(path, str) and path.startswith(("codex://", "zcode://")):
+        from sources import bridge
+        ctx, calls, meta, turns = bridge.build(path)
+        if not full:
+            for b in ctx:
+                b["t"] = clip(b["t"])
+        return ctx, calls, meta, turns
+
     skipped = {"skipped": 0}
     rows = list(iter_rows(path, skipped))
     ctx, calls, out_buf = [], [], []
@@ -883,6 +896,24 @@ def scan_file(f):
     }
 
 
+def session_cost(s):
+    """会话级刊例价估算：按各模型输入 token 占比分摊 hit/pout。
+
+    没有逐调用模型明细时，这是最接近真值的做法——同一会话通常只有 1~2 个模型，
+    占比稳定；用「主模型 × 全部 token」会在混合模型会话里明显偏高。
+    """
+    models = s.get("models") or {}
+    total = sum(models.values())
+    if not total:
+        return 0.0
+    cost = 0.0
+    for m, pin in models.items():
+        share = pin / total
+        c = pricing.cost_cny(m, pin, int(s["hit"] * share), int(s["pout"] * share))
+        cost += c or 0.0
+    return cost
+
+
 def scan_all(force=False):
     """扫描所有会话，返回索引条目（db 补 cwd/标题，jsonl 补统计）。
 
@@ -908,10 +939,20 @@ def scan_all(force=False):
               % (db, type(e).__name__, e), file=sys.stderr)
 
     files = list(iter_jsonl())
+    # 外部平台（Codex / ZCode）：与 WorkBuddy 会话同构，直接拼进索引。
+    # 单个源不可用时只跳过该源，不影响主源与另一个平台。
+    ext = []
+    try:
+        from sources import bridge
+        ext = bridge.scan_external(force=force)
+    except Exception as e:
+        print("token-trace: 外部源跳过（%s: %s）" % (type(e).__name__, e), file=sys.stderr)
+
     # db 元数据也进签名：WAL 模式下标题变更不一定改主库 mtime，用内容签名兜底。
     meta_sig = tuple(sorted((k, v["cwd"], v["title"], v["model"])
                             for k, v in meta.items()))
-    sig = [meta_sig]
+    sig = [meta_sig, ("ext", tuple((s["id"], s["mtime"], s["calls"], s["pin"])
+                                   for s in ext))]
     stats = []
     for f in files:
         try:
@@ -928,6 +969,7 @@ def scan_all(force=False):
             _SCAN_FILES[f] = (fsig, s)
         s["mtime"] = st.st_mtime
         stats.append(s)
+    stats.extend(ext)
     sig = tuple(sig)
 
     alive = set(files)
@@ -959,7 +1001,9 @@ def scan_all(force=False):
         info = meta.get(sid, {})
         out.append({
             "path": f, "id": sid,
-            "ws": info.get("cwd") or os.path.basename(os.path.dirname(f)).replace("-", "/"),
+            "ws": info.get("cwd") or s.get("ws") or
+                  os.path.basename(os.path.dirname(f)).replace("-", "/"),
+            "src": s.get("src") or "workbuddy",
             "title": info.get("title") or s["ai"] or "(无标题)",
             "model": info.get("model") or "",   # 循环后按全库统一结果重算
             "models": dict(s["models"]),        # 暂存分组键，循环后统一换展示名
@@ -992,6 +1036,8 @@ def scan_all(force=False):
             # 没有模型名记录的会话退回 db 的 model，也统一到同一套展示名，
             # 否则会话列表里会混进一个小写 ID，看起来又像「多了一个模型」。
             s["model"] = best.get(canon_model(s["model"]), s["model"] or "")
+    for s in out:
+        s["cost"] = session_cost(s)
     out.sort(key=lambda x: (x["ws"], -x["mtime"]))
     _SCAN_LAST["sig"] = sig
     _SCAN_LAST["out"] = out

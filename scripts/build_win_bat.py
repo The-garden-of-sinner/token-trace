@@ -2,12 +2,18 @@
 # -*- coding: utf-8 -*-
 """Build one self-contained Windows .bat for token-trace.
 
-The batch file carries the full source of trace_server.py + gen_trace.py plus the
-application icon as a zlib-compressed, base64-encoded blob. Double-clicking it
-needs no other project file: a tiny pure-ASCII loader is extracted into
-%LOCALAPPDATA%\\TokenTrace, which registers gen_trace in sys.modules from memory
-and execs the server. "shortcut" writes the embedded icon and creates Desktop +
-Start Menu shortcuts that point back at this very .bat.
+The batch file carries the full source of every runtime module (trace_server.py,
+gen_trace.py, pricing.py and the sources/ package) plus the application icon as
+a zlib-compressed, base64-encoded blob. Double-clicking it needs no other project
+file: a tiny pure-ASCII loader is extracted into %LOCALAPPDATA%\\TokenTrace, which
+installs an in-memory import hook (MetaPathFinder) so absolute and relative
+imports all resolve from the bundle, then execs the server. "shortcut" writes the
+embedded icon and creates Desktop + Start Menu shortcuts that point back at this
+very .bat.
+
+The import hook matters since v1.3.0: gen_trace imports sources.bridge and both
+server modules import pricing. Bundling only the two historical files would make
+the .bat die with ImportError before the first request.
 
     python3 scripts/build_win_bat.py
     -> dist/TokenTrace.bat          (the single Release asset)
@@ -36,7 +42,11 @@ DIST = os.path.join(BASE, "dist")
 OUT = os.path.join(DIST, "TokenTrace.bat")
 ICON = os.path.join(BASE, "assets", "TokenTrace.ico")
 VERSION_FILE = os.path.join(BASE, "scripts", "VERSION")
-SOURCES = ("trace_server.py", "gen_trace.py")
+# 相对仓库根的路径；key 同时作为 bundle 里的模块键，loader 按
+# fullname.replace(".", "/") 查 "xxx.py" / "xxx/__init__.py"。
+SOURCES = ("trace_server.py", "gen_trace.py", "pricing.py",
+           "sources/__init__.py", "sources/bridge.py",
+           "sources/codex.py", "sources/zcode.py")
 
 BAT_HEAD = r"""@echo off
 rem Token Trace @VERSION@ - single-file Windows launcher. No other project files needed.
@@ -165,7 +175,8 @@ __PY_BUNDLE__
 
 BAT_TAIL = "__PY_END__\n"
 
-LOADER_HEAD = """import base64, json, os, sys, types, zlib
+LOADER_HEAD = """import base64, json, os, sys, zlib
+import importlib.abc, importlib.util
 _S = \"\"\"
 """
 
@@ -176,13 +187,34 @@ if len(sys.argv) > 1 and sys.argv[1] == "--write-icon":
     with open(os.path.join(_D, "TokenTrace.ico"), "wb") as _f:
         _f.write(base64.b64decode(_M["icon.ico"]))
     raise SystemExit(0)
-_G = types.ModuleType("gen_trace")
-_G.__file__ = os.path.join(_D, "gen_trace.py")
-sys.modules["gen_trace"] = _G
-exec(compile(_M["gen_trace.py"], _G.__file__, "exec"), _G.__dict__)
+_PY = dict((k, v) for k, v in _M.items() if k.endswith(".py"))
+
+class _MemLoader(importlib.abc.Loader):
+    def __init__(self, name, src, is_pkg):
+        self.name, self.src, self.is_pkg = name, src, is_pkg
+    def create_module(self, spec):
+        return None
+    def exec_module(self, mod):
+        rel = self.name.replace(".", "/") + ("/__init__.py" if self.is_pkg else ".py")
+        mod.__file__ = os.path.join(_D, rel)
+        if self.is_pkg:
+            mod.__path__ = [os.path.join(_D, *self.name.split("."))]
+        exec(compile(self.src, mod.__file__, "exec"), mod.__dict__)
+
+class _MemFinder(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        rel = fullname.replace(".", "/")
+        for key, is_pkg in ((rel + "/__init__.py", True), (rel + ".py", False)):
+            if key in _PY:
+                return importlib.util.spec_from_loader(
+                    fullname, _MemLoader(fullname, _PY[key], is_pkg),
+                    is_package=is_pkg)
+        return None
+
+sys.meta_path.insert(0, _MemFinder())
 _D2 = {"__name__": "__main__", "__file__": os.path.join(_D, "trace_server.py"),
        "__builtins__": __builtins__, "__package__": None, "__doc__": None}
-exec(compile(_M["trace_server.py"], _D2["__file__"], "exec"), _D2)
+exec(compile(_PY["trace_server.py"], _D2["__file__"], "exec"), _D2)
 """
 
 

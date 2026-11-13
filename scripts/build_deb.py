@@ -83,8 +83,15 @@ def main():
     postrm = heredoc("POSTRM")
 
     data_files = [("usr/bin/token-trace", launcher.encode("utf-8"), 0o755)]
-    for name in ("trace_server.py", "gen_trace.py", "README.md", "LICENSE"):
+    for name in ("trace_server.py", "gen_trace.py", "pricing.py",
+                 "README.md", "LICENSE"):
         data_files.append(("usr/share/token-trace/" + name, read(name), 0o644))
+    # v1.3.0：sources/ 是包，必须整目录进 deb；pricing 是顶层硬依赖。
+    srcdir = os.path.join(BASE, "sources")
+    for name in sorted(os.listdir(srcdir)):
+        if name.endswith(".py"):
+            data_files.append(("usr/share/token-trace/sources/" + name,
+                               read("sources/" + name), 0o644))
     docs = os.path.join(BASE, "docs")
     for name in sorted(os.listdir(docs)):
         path = os.path.join(docs, name)

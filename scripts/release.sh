@@ -81,7 +81,7 @@ Get-FileHash .\\TokenTrace.bat -Algorithm SHA256
 
 ## 说明
 
-- 两个产物都只读本机 WorkBuddy 会话数据（`~/.workbuddy`），不联网、不写源文件、不需要第三方包。
+- 两个产物只读本机会话数据（WorkBuddy `~/.workbuddy`、Codex `~/.codex`、ZCode `~/.zcode`），不联网、不写源文件、不需要第三方包；外部平台目录不存在时自动跳过，不影响 WorkBuddy 主源。
 - 页面零 JavaScript，每次只渲染一屏；全部调用与原文均可逐条回溯。
 - **Windows 版尚未在真实 Windows 机器上验证**：中文/空格用户名、`-WindowStyle` 隐藏效果、
   中文路径传参等待目标机实测。Linux deb 内的源码已在本机实跑验证。

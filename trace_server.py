@@ -33,6 +33,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gen_trace as G  # noqa: E402  复用 build / scan_all / brief / cmd_html
+import pricing  # noqa: E402  按刊例价估算成本，只用于排序与横向对比
 
 # 每屏渲染上限 —— 调大只会让单页变重，不会让内容变多
 PAGE_TURNS = 20        # 会话页每页轮数
@@ -244,7 +245,7 @@ class Store(object):
             "cold": cold, "compacts": compacts, "billed": billed,
             "title": meta.get("aiTitle") or s.get("title") or s["id"][:8],
             "stats": {
-                "turns": len(turns), "calls": len(calls), "blocks": len(ctx),
+                "turns": len(turns), "calls": len(billed), "blocks": len(ctx),
                 "chars": pref[-1], "pin": tin, "hit": thit,
                 "miss": tin - thit, "pout": sum(c["pout"] for c in calls),
                 "credit": tcredit, "rate": (thit / tin) if tin else 0,
@@ -463,12 +464,18 @@ def global_stats():
            "calls": 0, "turns": 0, "blocks": 0, "chars": 0,
            "visible_peak_sum": 0, "compactions": 0,
            "pin": 0, "hit": 0, "pout": 0, "credit": 0, "compose": Counter(),
+           "wb_miss": 0,
+           "cost": 0.0, "unpriced": 0,
            "cold": [], "top_calls": [], "top_blocks": [], "costly_blocks": []}
     for s in ss:
         d = STORE.get(s["id"])
         st = d["stats"]
         for k in ("calls", "turns", "blocks", "chars", "pin", "hit", "pout", "credit"):
             out[k] += st[k]
+        # 积分只有 WorkBuddy 侧有（Codex/ZCode 没有这个字段），单价分母也必须
+        # 只取「有积分的会话」的未命中量，否则混入外部平台会把 unit_miss 拉低。
+        if st["credit"]:
+            out["wb_miss"] += st["miss"]
         out["visible_peak_sum"] += st["visible_peak"]
         out["compactions"] += st["compactions"]
         out["compose"].update(st["compose"])
@@ -477,9 +484,17 @@ def global_stats():
             out["cold"].append({"sid": s["id"], "ws": s["ws"], "seq": c["seq"],
                                 "ts": c["ts"], "pin": c["pin"], "hit": c["hit"],
                                 "rate": c["hit"] / c["pin"], "credit": c["credit"]})
-        for i, c in sorted(enumerate(d["calls"]), key=lambda x: -(x[1]["credit"]))[:5]:
+        # 排序键改成「按刊例价估算的成本」：WorkBuddy 的 credit 只在自家数据上有值，
+        # 接多平台后 Codex/ZCode 没有积分字段，继续按 credit 排会让它们永远沉底。
+        ranked = []
+        for c in d["calls"]:
+            cost = pricing.cost_cny(c["model"], c["pin"], c["hit"], c["pout"])
+            out["cost"] += cost or 0.0
+            out["unpriced"] += 1 if cost is None else 0
+            ranked.append((cost or 0.0, c))
+        for cost, c in sorted(ranked, key=lambda x: -x[0])[:5]:
             out["top_calls"].append({"sid": s["id"], "ws": s["ws"], "seq": c["seq"],
-                                     "credit": c["credit"], "pin": c["pin"],
+                                     "credit": c["credit"], "cost": cost, "pin": c["pin"],
                                      "rate": (c["hit"] / c["pin"]) if c["pin"] else 0,
                                      "tool": c["tool"]})
         for i, b in sorted(enumerate(d["ctx"]), key=lambda x: -x[1]["n"])[:3]:
@@ -501,11 +516,12 @@ def global_stats():
                                          "est": est, "users": u, "cost": cost})
     out["rate"] = (out["hit"] / out["pin"]) if out["pin"] else 0
     out["miss"] = out["pin"] - out["hit"]
-    # 实测单价：积分 / 未命中输入
+    # 实测单价：积分 / 未命中输入（分母只含真正有积分的平台）
     billed_credit = out["credit"]
-    out["unit_miss"] = (billed_credit / out["miss"] * 10000) if out["miss"] else 0
+    out["unit_miss"] = (billed_credit / out["wb_miss"] * 10000) if out["wb_miss"] else 0
+    out["unit_cost_miss"] = (out["cost"] / out["miss"] * 10000) if out["miss"] else 0
     out["cold"].sort(key=lambda x: -x["pin"])
-    out["top_calls"].sort(key=lambda x: -x["credit"])
+    out["top_calls"].sort(key=lambda x: -(x["cost"] or 0))
     out["top_calls"] = out["top_calls"][:20]
     out["top_blocks"].sort(key=lambda x: -x["chars"])
     out["top_blocks"] = out["top_blocks"][:20]
@@ -944,6 +960,17 @@ h1{font-size:19px;font-weight:500;margin:0 0 3px}
 .hdrow h1{margin:0}
 .sub{color:var(--muted);font-size:12px;margin-left:auto;text-align:right;max-width:62%}
 @media(max-width:720px){.sub{margin-left:0;text-align:left;max-width:none}}
+/* 首页：平台切换与大标题同栏。这里自带一份分段控件样式，不依赖 CSS_INDEX
+   片段是否加载；其余页面不渲染 .platbar，不受影响。 */
+.sub.sub-wide{margin-left:0;text-align:left;max-width:none;margin-top:5px}
+.platbar{display:inline-flex;align-items:center;gap:9px;margin-left:auto;flex-wrap:wrap}
+.platbar .tb-lab{font-size:10.5px;letter-spacing:.06em;color:var(--faint)}
+.platbar .tb-seg{display:inline-flex;background:var(--track);border-radius:999px;padding:2px}
+.platbar .tb-seg a{padding:5px 14px;border-radius:999px;font-size:11px;color:var(--muted);
+ text-decoration:none;transition:background-color .28s var(--ease),color .28s var(--ease)}
+.platbar .tb-seg a:hover{color:var(--link-h)}
+.platbar .tb-seg a.on{background:var(--bg);color:var(--fg);font-weight:600;box-shadow:var(--shadow)}
+@media(max-width:720px){.platbar{margin-left:0}}
 .badge{display:inline-block;font-size:10.5px;color:var(--ok-fg);background:var(--ok-bg);border-radius:9px;padding:0 8px;line-height:17px;margin-left:8px;vertical-align:2px}
 h2{font-size:13px;font-weight:500;margin:24px 0 9px;padding-bottom:6px;border-bottom:1px solid var(--line);color:var(--fg)}
 h2 small{font-weight:400;color:var(--dim);font-size:11.5px;margin-left:8px}
@@ -1281,6 +1308,11 @@ CSS_VIZ = """
    横拉压扁；其上的热区列复用 [data-tip] 气泡（零 JS），悬停出焦点竖线。 */
 .ovline{position:relative;height:64px;margin-top:2px}
 .ovline .spark{position:absolute;inset:0;height:100%;animation:none}
+/* 三平台三条线的共用图例 */
+.ovlegend{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:10px;
+ color:var(--muted);margin-top:5px}
+.ovlegend .lg{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.ovlegend .lg i{width:11px;height:2px;border-radius:2px;flex:none}
 .ovline .hz{position:absolute;top:0;bottom:0;cursor:default}
 .ovline .hz i{position:absolute;left:50%;width:0;height:0;border-left:1px dashed var(--accent);
  opacity:0;transition:opacity .12s}
@@ -1603,7 +1635,7 @@ def monitor_link(cls="tb-ext"):
             '实时用量 ↗</a>' % (cls, esc(url)))
 
 
-def page(title, crumbs, body, sub="", extra_head="", need=()):
+def page(title, crumbs, body, sub="", extra_head="", need=(), topbar=""):
     """need 显式声明本页需要的图表样式片段（"viz"/"hm"/"map"/"chart"/
     "fold"/"nav"/"index"），与 body 探测取并集。
 
@@ -1631,9 +1663,17 @@ def page(title, crumbs, body, sub="", extra_head="", need=()):
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
             '<title>%s · Token 轨迹</title><style>%s</style>' % (esc(title), css))
     back = back_link(crumbs)
-    doc = (head + '<header><div class="wrap">' + crumb(crumbs) +
-           '<div class="hdrow"><h1>%s<span class="badge">完整模式 · 零截断</span></h1>' % esc(title) +
-           ('<div class="sub">%s</div>' % esc(sub) if sub else '') + '</div>' +
+    h1 = '<h1>%s<span class="badge">完整模式 · 零截断</span></h1>' % esc(title)
+    if topbar:
+        # 平台切换与大标题同栏：标题在左、切换在右；说明文字另起一行左对齐，
+        # 免得和两个 margin-left:auto 抢同一行的剩余空间。
+        hd = ('<div class="hdrow">%s%s</div>' % (h1, topbar) +
+              ('<div class="sub sub-wide">%s</div>' % esc(sub) if sub else ''))
+    else:
+        # 其余页面保持原来的「标题 + 右侧说明」单行布局，零影响。
+        hd = ('<div class="hdrow">' + h1 +
+              ('<div class="sub">%s</div>' % esc(sub) if sub else '') + '</div>')
+    doc = (head + '<header><div class="wrap">' + crumb(crumbs) + hd +
            '</div></header><div class="wrap">' + extra_head + body +
            '<footer><span>本页 HTML @@KB@@ KB</span>' +
            '<span>数据只读 · 全文由后端按需提供 · 无需 JavaScript</span>' +
@@ -2017,114 +2057,134 @@ def subagent_relations(ss):
 
 
 
-def index_overview(ss):
-    """首页全库画像：按模型的输入 token 环 + 按时间的折线 + 工作区递归树。
-
-    三种图都只消费 STORE.sessions() 已缓存的会话索引字段（models / model /
-    days / mtime / ws / pin），不解析任何会话全文、不新增一次全库遍历。
-    「按时间」折线按 days（每次调用真实发生日）落桶，而非会话 mtime，
-    跨天会话的 token 会分散到各自那天；无 days 的老索引回退 mtime 兜底。
-    模型分组键来自 jsonl 的 providerData.model，不依赖 workbuddy.db；
-    展示名允许大小写变体，这里再兜一层归一合并（兼容旧索引缓存）。
-    """
-    if not ss:
-        return ""
-    raw_total = sum(s["pin"] for s in ss)
-    total = raw_total or 1
-
-    # 1) 按模型：输入 token 构成环
-    by_model = Counter()
+def _platform_charts(ss, total, raw_total):
+    """「全部」视图：按平台拼接环 + 三平台三色折线。"""
+    # 1) 按平台：输入 token 拼接环。三个平台各占一段，不再把 WorkBuddy 的
+    #    模型分布和 Codex/ZCode 混进同一个「跨平台全量聚合模型」环。
+    #    颜色与下面的折线、图例共用同一组变量，两套主题各有取值。
+    platforms = (("workbuddy", "WorkBuddy", "var(--p0)"),
+                 ("zcode", "ZCode", "var(--p1)"),
+                 ("codex", "Codex", "var(--p2)"))
+    by_src = Counter()
     for s in ss:
-        # scan_all 已在同一次逐行遍历里按输入 token 分模型加权；老索引或
-        # 无 providerData 的会话退回到单值 model，口径仍与会话列表一致。
-        mm = s.get("models") or {}
-        if mm:
-            by_model.update(mm)
-        else:
-            by_model[s["model"] or "未知模型"] += s["pin"]
-    # 同一模型的大小写/分隔符变体并到一组，展示名取输入 token 最多的写法。
-    # scan_all 已在解析层归一，这里再兜一层：兼容旧索引缓存、外部构造的
-    # sessions，以及 Windows 端可能写入的其它写法。
-    by_model = Counter(G.merge_model_counter(by_model))
-    # 残差桶：少数调用有 prompt_tokens 却没写模型名，pin 进了 total 却进不了
-    # by_model，环会画不满、图例百分比也不到 100%。显式归到「未知模型」，
-    # 保证 sum(by_model) == sum(pin)。
-    residual = raw_total - sum(by_model.values())
+        by_src[s.get("src") or "workbuddy"] += s["pin"]
+    segs = [(k, name, color, by_src[k])
+            for k, name, color in platforms if by_src.get(k)]
+    residual = raw_total - sum(v for _, _, _, v in segs)
     if residual > 0:
-        by_model["未知模型"] += residual
-    # 低于 1% 的模型不单列，并入「其他」：长尾每个只占零点零几，单列只会
-    # 把有效信息挤成一条边。保底至多 5 个主模型，避免模型种类本就不多时
-    # 图例空着。
-    models = sorted(by_model.items(), key=lambda x: -x[1])
-    big = [(n, v) for n, v in models if v / total * 100.0 >= 1.0][:5]
-    if len(big) < len(models):
-        rest = models[len(big):]
-        models = big + [("其他 %d 个模型" % len(rest), sum(v for _, v in rest))]
-    else:
-        models = big
-    colors = ("var(--p0)", "var(--p1)", "var(--p2)", "var(--p3)",
-              "var(--p4)", "var(--accent)")
+        segs.append(("other", "其他", "var(--p4)", residual))
+    fracs = [val / total * 100.0 for _, _, _, val in segs]
+    # 弧宽对 <1.2% 的段做视觉保底：Codex 实测只占 0.2%，严格按比例会细到
+    # 看不见，「三段拼接」就退化成两段。图例仍给真实占比，弧宽只是可读性
+    # 补偿；保底后整体等比归一，环始终闭合。
+    vis = [max(f, 1.2) for f in fracs]
+    vsum = sum(vis) or 1.0
+    vis = [v * 100.0 / vsum for v in vis]
     arcs, legend, acc = [], [], 0.0
-    for i, (name, val) in enumerate(models):
-        frac = val / total * 100.0
-        seg = max(0.0, frac - min(.6, frac * .2))
-        color = colors[i % len(colors)]
+    for (_key, name, color, val), frac, vfrac in zip(segs, fracs, vis):
+        seg = max(0.0, vfrac - min(.6, vfrac * .2))
         arcs.append('<circle cx="21" cy="21" r="15.9155" style="stroke:%s;animation-delay:%.2fs" '
                     'stroke-dasharray="%.3f %.3f" transform="rotate(%.2f 21 21)"/>' %
                     (color, .03 + acc / 100.0 * .42, seg, 100 - seg, -90 + acc * 3.6))
         legend.append('<div class="sl"><i style="background:%s"></i>'
                       '<span class="g">%s</span><b>%s</b><em>%.1f%%</em></div>' %
-                      (color, esc(cut(name, 20)), kh(val), frac))
-        acc += frac
+                      (color, esc(name), kh(val), frac))
+        acc += vfrac
     donut = ('<svg class="donut" viewBox="0 0 42 42" role="img" '
-             'aria-label="按模型的输入 token 构成">'
+             'aria-label="按平台的输入 token 构成">'
              '<circle class="trk" cx="21" cy="21" r="15.9155"/>' +
              "".join(arcs) + '</svg>')
 
-    # 2) 按时间：最近 14 天，按每次调用的真实发生日落桶（date 运算，DST 安全）。
-    #    老索引 / 外部构造的 sessions 没有 days 时退回 mtime + pin 兜底。
-    days = 14
-    day_list = [datetime.date.today() - datetime.timedelta(days=days - 1 - i)
-                for i in range(days)]
-    day_idx = dict((d.strftime("%Y-%m-%d"), i) for i, d in enumerate(day_list))
-    buckets = [0.0] * days
-    for s in ss:
-        bins = s.get("days")
-        if bins:
-            for day, pair in bins.items():
-                k = day_idx.get(day)
-                if k is not None:
-                    buckets[k] += pair[0]
-        else:
-            k = day_idx.get(fmt_ts(s["mtime"], "%Y-%m-%d", ""))
-            if k is not None:
-                buckets[k] += s["pin"]
-    mx = max(buckets) or 1
-    # 视图纵向拉到 80（横向仍 100），渲染时按容器真实宽高拉伸，折线不再被
-    # 压成一条扁边；stroke 用 vector-effect:non-scaling-stroke 保持 1.6px。
-    H, TOP = 80, 4
-    pts = " ".join("%.2f,%.2f" % (i * 100.0 / (days - 1), H - v / mx * (H - TOP - 2))
-                   for i, v in enumerate(buckets))
-    svg = ('<svg class="spark" viewBox="0 0 100 %d" preserveAspectRatio="none" '
-           'role="img" aria-label="按天输入 token 走势">'
-           '<polygon points="0,%d %s 100,%d"/><polyline points="%s"/></svg>' %
-           (H, H, pts, H, pts))
-    # 悬停：SVG 元素不支持 ::after 气泡，改为在图上叠一层 HTML 热区列（零 JS，
-    # 复用 [data-tip] 气泡）。每列内嵌一条焦点竖线，top 与折线同比例换算，
-    # hover 时由 CSS 显形。
-    step = 100.0 / days
-    cols = []
-    for i, v in enumerate(buckets):
-        d = day_list[i].strftime("%m-%d")
-        y = H - v / mx * (H - TOP - 2)
-        cols.append('<div class="hz" style="left:%.2f%%;width:%.2f%%" '
-                    'data-tip="%s&#10;输入 %s token"><i style="top:%.2f%%"></i></div>' %
-                    (i * step, step, d, kh(v), y / H * 100.0))
-    line = '<div class="ovline">%s%s</div>' % (svg, "".join(cols))
-    axis = ('<div class="ovaxis"><span>%s</span><span>峰值 %s token/天</span><span>今天</span></div>' %
-            (day_list[0].strftime("%m-%d"), kh(mx)))
+    # 2) 按时间 × 按平台：三条不同颜色的折线，共用同一纵轴（全平台峰值）。
+    #    窗口自适应：默认近 14 天按天；若这 14 天里不足两个平台有数据
+    #    （Codex / ZCode 的会话往往更旧），退到近 12 周按周，保证三色对比图
+    #    真的有三条线，而不是只剩 WorkBuddy 一条。
+    today = datetime.date.today()
+    keys = [k for k, _, _ in platforms] + ["other"]
 
-    # 3) 工作区：按路径最后两段聚成「父目录 → 工作区」两层树
+    def collect(unit, n):
+        """返回 (每桶起始日, {平台: [每桶输入 token]})。"""
+        if unit == "day":
+            labels = [today - datetime.timedelta(days=n - 1 - i) for i in range(n)]
+        else:
+            labels = [today - datetime.timedelta(days=(n - i) * 7 - 1) for i in range(n)]
+        idx = dict((d.strftime("%Y-%m-%d"), i) for i, d in enumerate(labels)) if unit == "day" else None
+        out = dict((k, [0.0] * n) for k in keys)
+
+        def slot(day):
+            if unit == "day":
+                return idx.get(day)
+            try:
+                age = (today - datetime.date.fromisoformat(day)).days
+            except (ValueError, TypeError):
+                return None
+            return n - 1 - age // 7 if 0 <= age < n * 7 else None
+
+        for s in ss:
+            k = s.get("src") or "workbuddy"
+            if k not in out:
+                k = "other"
+            bins = s.get("days")
+            pairs = bins.items() if bins else [(fmt_ts(s["mtime"], "%Y-%m-%d", ""), (s["pin"], 0))]
+            for day, pair in pairs:
+                j = slot(day)
+                if j is not None:
+                    out[k][j] += pair[0]
+        return labels, out
+
+    day_list, buckets = collect("day", 14)
+    unit = "day"
+    if sum(1 for k, _, _ in platforms if any(buckets[k])) < 2:
+        day_list, buckets = collect("week", 12)
+        unit = "week"
+    n = len(day_list)
+    active = [(k, name, color) for k, name, color in platforms if any(buckets[k])]
+    if any(buckets["other"]):
+        active.append(("other", "其他", "var(--p4)"))
+    mx = max((v for k in buckets for v in buckets[k]), default=0) or 1
+    # 视图纵向 80（横向仍 100），按容器真实宽高拉伸；每条线 inline 指定颜色，
+    # 覆盖 .spark polyline 的 var(--accent) 默认色。
+    H, TOP = 80, 4
+    polys = []
+    for k, name, color in active:
+        pts = " ".join("%.2f,%.2f" % (i * 100.0 / (n - 1),
+                                      H - v / mx * (H - TOP - 2))
+                       for i, v in enumerate(buckets[k]))
+        polys.append('<polyline points="%s" style="stroke:%s;stroke-width:1.7"/>' %
+                     (pts, color))
+    unit_cn = "天" if unit == "day" else "周"
+    svg = ('<svg class="spark" viewBox="0 0 100 %d" preserveAspectRatio="none" '
+           'role="img" aria-label="按%s、按平台的输入 token 走势">' %
+           (H, unit_cn) + "".join(polys) + '</svg>')
+    # 悬停：图上叠一层 HTML 热区列（零 JS，复用 [data-tip] 气泡），一次列出
+    # 该桶三个平台各自的输入量；焦点竖线按当天最高点同比例换算。
+    step = 100.0 / n
+    cols = []
+    for i in range(n):
+        top = max((buckets[k][i] for k in buckets), default=0)
+        y = H - top / mx * (H - TOP - 2)
+        tip = day_list[i].strftime("%m-%d") + (" 起 7 天" if unit == "week" else "") + "".join(
+            "&#10;%s %s token" % (name, kh(buckets[k][i]))
+            for k, name, _ in active)
+        cols.append('<div class="hz" style="left:%.2f%%;width:%.2f%%" '
+                    'data-tip="%s"><i style="top:%.2f%%"></i></div>' %
+                    (i * step, step, tip, y / H * 100.0))
+    line_legend = ('<div class="ovlegend">' + "".join(
+        '<span class="lg"><i style="background:%s"></i>%s</span>' %
+        (color, esc(name))
+        for _k, name, color in active) + '</div>')
+    line = '<div class="ovline">%s%s</div>%s' % (svg, "".join(cols), line_legend)
+    axis = ('<div class="ovaxis"><span>%s</span><span>单平台峰值 %s token/%s</span>'
+            '<span>%s</span></div>' %
+            (day_list[0].strftime("%m-%d"), kh(mx), unit_cn,
+             "今天" if unit == "day" else "最近 7 天"))
+    ovt2 = "按时间 × 平台 · 近 %d %s" % (n, unit_cn)
+    return donut, legend, line, axis, ovt2
+
+
+def _workspace_cell(ss, total):
+    """三列共用的工作区递归树，跟随当前视图的会话集合。"""
+    # 工作区：按路径最后两段聚成「父目录 → 工作区」两层树
     leaf = OrderedDict()
     for s in ss:
         parts = [p for p in re.split(r"[\\/]+", s["ws"]) if p]
@@ -2161,32 +2221,134 @@ def index_overview(ss):
                '<span class="wsfold-h">展开</span></summary>'
                '<div class="in">%s</div></details>' %
                (len(parents), len(leaf), len(ss), "".join(tree)))
+    return ws_cell
 
-    # 模型名取自会话 jsonl 的 providerData，与 workbuddy.db 是否可读无关；
-    # 只有整库都没有模型名时才不画「未知模型 100%」这种无信息量的单色环。
-    if by_model and not (len(by_model) == 1 and "未知模型" in by_model):
-        # 84px 小环内圈直径约 53px；"1034.1M" 这类 7 字符在 13px 下约 55px，
-        # 已经会压到环上（截图里首位数字被环盖住）。按字数收字号，保证任何
-        # 数据量都落在内圈里。
-        ctr_txt = kh(total)
-        ctr_fs = max(9.0, min(13.0, 13.0 * 6.0 / max(1, len(ctr_txt))))
-        model_cell = ('<div class="donut-row"><div class="donut-wrap">%s'
-                      '<div class="ctr"><b style="font-size:%.1fpx">%s</b>'
-                      '<span>token</span></div></div>'
-                      '<div class="slice">%s</div></div>' %
-                      (donut, ctr_fs, ctr_txt, "".join(legend)))
+
+def _model_charts(ss, total, raw_total):
+    """单平台视图：接多平台前的口径——按模型输入 token 环 + 按天单条折线。"""
+    by_model = Counter()
+    for s in ss:
+        mm = s.get("models") or {}
+        if mm:
+            by_model.update(mm)
+        else:
+            by_model[s.get("model") or "未知模型"] += s["pin"]
+    by_model = Counter(G.merge_model_counter(by_model))
+    residual = raw_total - sum(by_model.values())
+    if residual > 0:
+        by_model["未知模型"] += residual
+    models = sorted(by_model.items(), key=lambda x: -x[1])
+    big = [(nm, v) for nm, v in models if v / total * 100.0 >= 1.0][:5]
+    if len(big) < len(models):
+        rest = models[len(big):]
+        models = big + [("其他 %d 个模型" % len(rest), sum(v for _, v in rest))]
     else:
-        model_cell = '<div class="empty">会话记录未写模型名，此图暂不可用</div>'
+        models = big
+    usable = bool(by_model) and not (len(by_model) == 1 and "未知模型" in by_model)
+    colors = ("var(--p0)", "var(--p1)", "var(--p2)", "var(--p3)",
+              "var(--p4)", "var(--accent)")
+    arcs, legend, acc = [], [], 0.0
+    for i, (name, val) in enumerate(models):
+        frac = val / total * 100.0
+        seg = max(0.0, frac - min(.6, frac * .2))
+        color = colors[i % len(colors)]
+        arcs.append('<circle cx="21" cy="21" r="15.9155" style="stroke:%s;animation-delay:%.2fs" '
+                    'stroke-dasharray="%.3f %.3f" transform="rotate(%.2f 21 21)"/>' %
+                    (color, .03 + acc / 100.0 * .42, seg, 100 - seg, -90 + acc * 3.6))
+        legend.append('<div class="sl"><i style="background:%s"></i>'
+                      '<span class="g">%s</span><b>%s</b><em>%.1f%%</em></div>' %
+                      (color, esc(cut(name, 20)), kh(val), frac))
+        acc += frac
+    donut = ('<svg class="donut" viewBox="0 0 42 42" role="img" '
+             'aria-label="按模型的输入 token 构成">'
+             '<circle class="trk" cx="21" cy="21" r="15.9155"/>' +
+             "".join(arcs) + '</svg>')
 
-    # 三列各自的小字脚注删掉了：标题已经写明口径，脚注只是重复占高度。
+    # 近 14 天按天，单条折线 + 面积（原口径）
+    days = 14
+    day_list = [datetime.date.today() - datetime.timedelta(days=days - 1 - i)
+                for i in range(days)]
+    day_idx = dict((d.strftime("%Y-%m-%d"), i) for i, d in enumerate(day_list))
+    buckets = [0.0] * days
+    for s in ss:
+        bins = s.get("days")
+        if bins:
+            for day, pair in bins.items():
+                k = day_idx.get(day)
+                if k is not None:
+                    buckets[k] += pair[0]
+        else:
+            k = day_idx.get(fmt_ts(s["mtime"], "%Y-%m-%d", ""))
+            if k is not None:
+                buckets[k] += s["pin"]
+    mx = max(buckets) or 1
+    H, TOP = 80, 4
+    pts = " ".join("%.2f,%.2f" % (i * 100.0 / (days - 1), H - v / mx * (H - TOP - 2))
+                   for i, v in enumerate(buckets))
+    svg = ('<svg class="spark" viewBox="0 0 100 %d" preserveAspectRatio="none" '
+           'role="img" aria-label="按天输入 token 走势">'
+           '<polygon points="0,%d %s 100,%d"/><polyline points="%s"/></svg>' %
+           (H, H, pts, H, pts))
+    step = 100.0 / days
+    cols = []
+    for i, v in enumerate(buckets):
+        d = day_list[i].strftime("%m-%d")
+        y = H - v / mx * (H - TOP - 2)
+        cols.append('<div class="hz" style="left:%.2f%%;width:%.2f%%" '
+                    'data-tip="%s&#10;输入 %s token"><i style="top:%.2f%%"></i></div>' %
+                    (i * step, step, d, kh(v), y / H * 100.0))
+    line = '<div class="ovline">%s%s</div>' % (svg, "".join(cols))
+    axis = ('<div class="ovaxis"><span>%s</span><span>峰值 %s token/天</span>'
+            '<span>今天</span></div>' % (day_list[0].strftime("%m-%d"), kh(mx)))
+    return donut, (legend if usable else []), line, axis, "按时间 · 输入 token"
+
+
+def _donut_cell(donut, legend, total, empty_msg):
+    """环 + 图例的外壳；环心按字数收字号，保证长数字不压到环上。"""
+    if not legend:
+        return '<div class="empty">%s</div>' % empty_msg
+    ctr_txt = kh(total)
+    ctr_fs = max(9.0, min(13.0, 13.0 * 6.0 / max(1, len(ctr_txt))))
+    return ('<div class="donut-row"><div class="donut-wrap">%s'
+            '<div class="ctr"><b style="font-size:%.1fpx">%s</b>'
+            '<span>token</span></div></div>'
+            '<div class="slice">%s</div></div>' %
+            (donut, ctr_fs, ctr_txt, "".join(legend)))
+
+
+def _overview_shell(cell, ovt1, ovt2, line, axis, ws_cell, note):
     return ('<div class="viz"><div class="viz-hd"><b>全库画像</b>'
-            '<small>输入 token 口径 · 只读索引</small></div>'
+            '<small>%s</small></div>'
             '<div class="ovgrid">'
-            '<div class="ovcell"><div class="ovt">按模型 · 输入 token</div>%s</div>'
-            '<div class="ovcell"><div class="ovt">按时间 · 输入 token</div>%s%s</div>'
+            '<div class="ovcell"><div class="ovt">%s</div>%s</div>'
+            '<div class="ovcell"><div class="ovt">%s</div>%s%s</div>'
             '<div class="ovcell"><div class="ovt">工作区 · 递归关系</div>%s</div>'
-            '</div></div>' %
-            (model_cell, line, axis, ws_cell))
+            '</div></div>' % (note, ovt1, cell, ovt2, line, axis, ws_cell))
+
+
+def index_overview(ss, focus=""):
+    """首页画像分发：全部 = 平台拼接环 + 三色线；单平台 = 模型环 + 按天单线。
+
+    只消费 STORE.sessions() 已缓存的索引字段，不解析会话全文、不新增一次
+    全库遍历。调用方在「全部」时传全量 sessions，筛到某平台时传该平台
+    的 sessions，环 / 线 / 工作区树自然跟随当前视图。
+    """
+    if not ss:
+        return ""
+    raw_total = sum(s["pin"] for s in ss)
+    total = raw_total or 1
+    ws_cell = _workspace_cell(ss, total)
+    if focus:
+        donut, legend, line, axis, ovt2 = _model_charts(ss, total, raw_total)
+        cell = _donut_cell(donut, legend, total, "会话记录未写模型名，此图暂不可用")
+        label = {"workbuddy": "WorkBuddy", "zcode": "ZCode",
+                 "codex": "Codex"}.get(focus, focus)
+        return _overview_shell(cell, "按模型 · 输入 token", ovt2, line, axis,
+                               ws_cell, "输入 token 口径 · %s 平台内 · 只读索引" % esc(label))
+    donut, legend, line, axis, ovt2 = _platform_charts(ss, total, raw_total)
+    cell = _donut_cell(donut, legend, total, "暂无输入 token 记录，此图暂不可用")
+    return _overview_shell(cell, "按平台 · 输入 token", ovt2, line, axis,
+                           ws_cell, "输入 token 口径 · 按平台拆分 · 只读索引")
 
 
 def _tile(items, x, y, w, h, out, depth=0):
@@ -2402,9 +2564,12 @@ def human_size(n):
 
 
 def v_index(q):
-    ss = STORE.sessions(refresh=qstr(q, "refresh") == "1")
+    ss_all = STORE.sessions(refresh=qstr(q, "refresh") == "1")
     ws = qstr(q, "ws")
+    src = qstr(q, "src")
     sort = qstr(q, "sort", "mtime")
+    # 平台筛选：不传 = 全部（WorkBuddy 与 Codex/ZCode 合并视图）
+    ss = [s for s in ss_all if not src or (s.get("src") or "workbuddy") == src]
     shown = [s for s in ss if not ws or s["ws"] == ws]
     if sort == "credit":
         shown = sorted(shown, key=lambda s: -s["credit"])
@@ -2422,13 +2587,24 @@ def v_index(q):
 
     total_cr = sum(s["credit"] for s in ss)
     total_calls = sum(s["calls"] for s in ss)
-    body = ('<div class="hero">' + kpi([
-                ("会话", nfmt(len(ss))), ("工作区", nfmt(len(set(s["ws"] for s in ss)))),
-                ("模型调用", nfmt(total_calls)), ("累计积分", "%.1f" % total_cr),
-                ("累计输入 token", nfmt(sum(s["pin"] for s in ss))),
-                ("累计输出 token", nfmt(sum(s["pout"] for s in ss)))],
-                fs=21, pad=42) +
-            index_overview(ss) + '</div>')
+    has_ext = any((s.get("src") or "workbuddy") != "workbuddy" for s in ss_all)
+    total_cost = 0.0
+    if has_ext:
+        total_cost = sum(s.get("cost") or 0.0 for s in ss)
+    kpis = [("会话", nfmt(len(ss))), ("工作区", nfmt(len(set(s["ws"] for s in ss)))),
+            ("模型调用", nfmt(total_calls))]
+    if has_ext:
+        # 积分只有 WorkBuddy 有；外部平台按刊例价估算，两套账并列但各自标清口径
+        kpis.append(("积分·WorkBuddy", "%.1f" % total_cr))
+        kpis.append(("估算成本", "¥%.2f" % total_cost))
+    else:
+        kpis.append(("累计积分", "%.1f" % total_cr))
+    kpis += [("累计输入 token", nfmt(sum(s["pin"] for s in ss))),
+             ("累计输出 token", nfmt(sum(s["pout"] for s in ss)))]
+    # 「全部」用全量会话画平台拼接环 + 三色线；切到单个平台则回到该平台
+    # 自己的按模型环 + 单条按天折线。KPI 与会话列表始终跟随筛选。
+    body = ('<div class="hero">' + kpi(kpis, fs=21, pad=42) +
+            index_overview(ss_all if not src else ss, focus=src) + '</div>')
     # 子代理关系用全量 shown 算（父在第 1 页、子在第 2 页时也能标出归属）。
     # 同一页内的父子在会话列表里收编成「父行 → 缩进子树」，不再各贴一个孤立
     # chip 平铺在不同工作区分组里；跨页 / 未定位的行内注明父级。
@@ -2457,6 +2633,19 @@ def v_index(q):
         for k, lab in (("mtime", "最近修改"), ("credit", "积分"), ("calls", "调用数")))
     clear_ws = (('<a class="tb-clear" href="/">清除工作区筛选：%s ✕</a>' % esc(ws))
                 if ws else "")
+    # 平台切换挂到大标题同一栏（header 里的 .platbar），不再挤在下方工具条。
+    # 只在检测到外部源时出现，单平台用户看到的界面不变。
+    plat = ""
+    if has_ext:
+        plat = ('<div class="platbar"><span class="tb-lab">平台</span>'
+                '<span class="tb-seg">%s</span></div>' % "".join(
+                    '<a class="%s" href="/?%s">%s</a>' % (
+                        "on" if src == k else "",
+                        urlencode(dict((kk, vv) for kk, vv in
+                                       (("src", k), ("sort", "" if sort == "mtime" else sort)) if vv)),
+                        lab)
+                    for k, lab in (("", "全部"), ("workbuddy", "WorkBuddy"),
+                                   ("zcode", "ZCode"), ("codex", "Codex"))))
     src_bytes = 0
     for s in ss:
         try:
@@ -2469,10 +2658,10 @@ def v_index(q):
              '<a href="/rank">筛选与排序</a>'
              '<a href="/api">API 文档</a>'
              '<a href="/?refresh=1">刷新</a>%s</nav>'
-             '<div class="tb-sort"><span class="tb-lab">排序</span>'
-             '<span class="tb-seg">%s</span>%s</div>'
+             '<div class="tb-sort">%s<span class="tb-lab">排序</span>'
+             '<span class="tb-seg">%s</span></div>'
              '<span class="tb-meta">源文件 %s · 只读</span></div>' %
-             (monitor_link(), sort_links, clear_ws,
+             (monitor_link(), clear_ws, sort_links,
               human_size(src_bytes) if src_bytes else "体积未知"))
 
     groups = OrderedDict()
@@ -2494,17 +2683,26 @@ def v_index(q):
         t = fmt_ts(s["mtime"], "%m-%d %H:%M", "")
         br = '<span class="branch">└</span>' if branch else ""
         label = title if title is not None else s["title"]
+        src = s.get("src") or "workbuddy"
+        if src != "workbuddy":
+            # 外部平台没有积分字段，用刊例价估算成本代替，避免整列显示 0.0 分
+            name = {"codex": "Codex", "zcode": "ZCode"}.get(src, src)
+            cost = s.get("cost")
+            money = ("≈¥%.2f" % cost) if cost is not None else "—"
+            tag = ('<span class="chip ks">%s</span>' % esc(name)) + tag
+        else:
+            money = "%.1f 分" % s["credit"]
         return ('<a class="%s" href="/s/%s" style="grid-template-columns:1fr 96px 108px 92px 92px 82px 70px">'
                 '<span class="grow">%s%s<b style="font-weight:500">%s</b>'
                 '<span class="fine" style="display:block">%s · %s%s</span></span>'
                 '<span class="num">%d 轮</span><span class="num">%d 次调用</span>'
                 '<span class="num">输入 %s</span><span class="num">输出 %s</span>'
-                '<span class="num credit">%.1f 分</span>'
+                '<span class="num credit">%s</span>'
                 '<span class="num">%s</span></a>' %
                 (rowcls, esc(s["id"]), br, tag, esc(label[:70]),
                  esc(s["id"][:8]), esc(s["model"] or "?"), note,
                  s["turns"], s["calls"], "%.1fM" % (s["pin"] / 1e6),
-                 "%.0fk" % (s["pout"] / 1000), s["credit"], t))
+                 "%.0fk" % (s["pout"] / 1000), money, t))
 
     def sub_row(k, parent, nested):
         tag = ('<span class="chip ks" title="子代理会话 · %s">子代理 · %s</span>' %
@@ -2556,7 +2754,7 @@ def v_index(q):
     body += meta_warn
     return page("会话索引", [("索引", "")], body,
                 sub="%d 个会话 · 点任一会话进入全量轨迹（不裁调用、不裁文本）" % total_shown,
-                need=("index",))
+                need=("index",), topbar=plat)
 
 
 def v_session(q, sid):
@@ -3314,7 +3512,9 @@ def v_stats(q):
                 ("累计输入 token", nfmt(st["pin"])), ("缓存命中率", "%.1f%%" % (st["rate"] * 100)),
                 ("未命中 token", nfmt(st["miss"])), ("输出 token", nfmt(st["pout"])),
                 ("累计积分", "%.2f" % st["credit"]),
-                ("积分/万未命中", "%.3f" % st["unit_miss"])])
+                ("积分/万未命中", "%.3f" % st["unit_miss"]),
+                ("按刊例估算", "¥%.2f" % st["cost"]),
+                ("估算/万未命中", "¥%.3f" % st["unit_cost_miss"])])
     # 两张卡片内容都偏窄，各占整行时右边大片留白；并排成左右两栏（窄屏回落单列）。
     body += ('<div class="viz2">' + compose_bar(st["compose"]) +
              activity_heatmap(ss) + '</div>')
@@ -3326,14 +3526,14 @@ def v_stats(q):
              (ms, st["sessions"],
               ('，<a href="/s/%s/compact">可在压缩事件页逐条核对</a>' % esc(compact_sid))
               if compact_sid else ''))
-    body += '<h2>最贵的 20 次调用 <small>按 credit</small></h2>'
+    body += '<h2>最贵的 20 次调用 <small>按刊例价估算 · 非账单</small></h2>'
     for x in st["top_calls"]:
         body += ('<a class="row bad" href="/s/%s/c/%d" style="grid-template-columns:64px 1fr 104px 84px 84px">'
                  '<span class="idx">#%d</span><span class="grow">%s · %s</span>'
                  '<span class="num">输入 %s</span><span class="num">命中 %.1f%%</span>'
-                 '<span class="num credit">%.2f 分</span></a>' %
+                 '<span class="num credit">¥%.3f</span></a>' %
                  (esc(x["sid"]), x["seq"], x["seq"], esc(x["ws"]), esc(x["tool"] or "最终回答"),
-                  nfmt(x["pin"]), x["rate"] * 100, x["credit"]))
+                  nfmt(x["pin"]), x["rate"] * 100, x["cost"]))
     body += '<h2>最大的 20 个上下文块 <small>点进去分片看全文</small></h2>'
     for x in st["top_blocks"]:
         body += ('<a class="row" href="/s/%s/b/%d" style="grid-template-columns:64px 1fr 110px 76px">'

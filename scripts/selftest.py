@@ -283,16 +283,7 @@ def main():
         finally:
             T.STORE = orig_store
 
-        print("== 全库画像：模型残差桶 ==")
-        fake_one = [{"id": "a", "ws": "D:/x/y", "title": "t", "model": "m1",
-                     "models": {"m1": 60}, "mtime": time.time(), "calls": 1, "turns": 1,
-                     "pin": 100, "pout": 10, "credit": 0.1}]
-        ov = T.index_overview(fake_one)
-        pcts = [float(x) for x in re.findall(r"<em>([\d.]+)%</em>", ov)]
-        check("未知模型" in ov and abs(sum(pcts) - 100) < 0.15,
-              "models 之和小于 pin 时补「未知模型」残差，图例合计 %.1f%%" % sum(pcts))
-
-        print("== 全库画像：模型名变体归一 ==")
+        print("== 全库画像：按平台拼接环 ==")
         import gen_trace as G
         k1, _ = G.model_bucket({"model": "deepseek-v4.1-flash",
                                 "requestModelName": "DeepSeek-V4.1-Flash"})
@@ -307,47 +298,51 @@ def main():
                                         "Hy4": 200, "Hy4 preview": 50})
         check(len(merged) == 3 and merged.get("DeepSeek-V4.1-Flash") == 750,
               "merge 合并为 750 token 并保留得票最多的展示名（%d 组）" % len(merged))
-        fake_vars = [{"id": "b", "ws": "D:/x/y", "title": "t",
-                      "model": "DeepSeek-V4.1-Flash",
-                      "models": {"DeepSeek-V4.1-Flash": 500,
-                                 "Deepseek-V4.1-Flash": 200,
-                                 "deepseek-v4.1-flash": 50,
-                                 "Hy4": 200, "Hy4 preview": 50},
-                      "mtime": time.time(), "calls": 5, "turns": 3,
-                      "pin": 1000, "pout": 10, "credit": 0.1}]
-        ov2 = T.index_overview(fake_vars)
-        names = re.findall(r'<span class="g">(.*?)</span>', ov2)
-        ds = [n for n in names if "flash" in n.lower()]
-        check(len(ds) == 1, "首页构成环里同一模型只出现 1 项（%s）" % ds)
-        check(any(n.strip() == "Hy4" for n in names)
-              and any("Hy4 preview" in n for n in names),
-              "归一不会把 Hy4 与 Hy4 preview 误并")
-        pcts2 = [float(x) for x in re.findall(r"<em>([\d.]+)%</em>", ov2)]
-        check(abs(sum(pcts2) - 100) < 0.15,
-              "归一后图例合计仍为 100%%（%.1f%%）" % sum(pcts2))
-        # <1% 的模型并入「其他」：6 个模型里 4 个各占 0.5%，图例只留 2 主 + 其他
-        tiny = 1000000.0
-        fake_tiny = [{"id": "t", "ws": "D:/x/y", "title": "t",
-                      "model": "big1",
-                      "models": {"big1": tiny * 90, "big2": tiny * 8,
-                                 "s1": tiny * 0.5, "s2": tiny * 0.5,
-                                 "s3": tiny * 0.5, "s4": tiny * 0.5},
-                      "mtime": time.time(), "calls": 1, "turns": 1,
-                      "pin": tiny * 100, "pout": 1, "credit": 0.1}]
-        ov4 = T.index_overview(fake_tiny)
-        names4 = re.findall(r'<span class="g">(.*?)</span>', ov4)
-        check(len(names4) == 3 and names4[0] == "big1" and names4[1] == "big2"
-              and names4[2].startswith("其他 4 个模型"),
-              "低于 1%% 的模型并入「其他」，图例只留 ≥1%% 的主模型（%s）" % names4)
-        pcts4 = [float(x) for x in re.findall(r"<em>([\d.]+)%</em>", ov4)]
-        check(abs(sum(pcts4) - 100) < 0.15,
-              "并入其他后图例合计仍为 100%%（%.1f%%）" % sum(pcts4))
-        # 时间折线：每天一个热区列，悬停气泡带日期与输入 token
-        hits = re.findall(r'<div class="hz"[^>]*data-tip="([^"]+)"', ov4)
-        check(len(hits) == 14 and all("&#10;输入 " in h for h in hits),
-              "折线 14 天各有热区列且气泡含日期+输入 token（%d 列）" % len(hits))
-        check('<div class="ovline">' in ov4 and 'class="foc"' not in ov4,
+
+        def _plat(sid, src, pin, day):
+            return {"id": sid, "ws": "D:/x/y", "title": "t", "model": "m",
+                    "mtime": time.time(), "calls": 1, "turns": 1,
+                    "pin": pin, "pout": 1, "credit": 0.1, "src": src,
+                    "days": {day: [pin, 1]}}
+
+        today = time.strftime("%Y-%m-%d", time.localtime())
+        tri = [_plat("a", "workbuddy", 600, today),
+               _plat("b", "zcode", 300, today),
+               _plat("c", "codex", 100, today)]
+        ov = T.index_overview(tri)
+        names = re.findall(r'<span class="g">(.*?)</span>', ov)
+        check(names == ["WorkBuddy", "ZCode", "Codex"],
+              "构成环改为按平台拼接三段，不再按跨平台模型聚合（%s）" % names)
+        pcts = [float(x) for x in re.findall(r"<em>([\d.]+)%</em>", ov)]
+        check(len(pcts) == 3 and abs(sum(pcts) - 100) < 0.15
+              and abs(pcts[0] - 60) < 0.15,
+              "平台环图例合计 100%% 且按输入 token 占比（%s）" % pcts)
+        ovx = T.index_overview(tri + [_plat("d", "mystery", 200, today)])
+        pctsx = [float(x) for x in re.findall(r"<em>([\d.]+)%</em>", ovx)]
+        check("其他" in ovx and len(pctsx) == 4 and abs(sum(pctsx) - 100) < 0.15,
+              "未知来源归「其他」，环仍闭合到 100%%（%s）" % pctsx)
+        ovm = T.index_overview(tri, focus="zcode")
+        check("按模型 · 输入 token" in ovm and "按时间 · 输入 token" in ovm
+              and "按平台 · 输入 token" not in ovm and "ZCode 平台内" in ovm,
+              "单平台视图回到按模型环 + 按天单线，不再做平台拼接")
+
+        print("== 全库画像：三平台三色折线 ==")
+        polys = re.findall(r'<polyline[^>]*style="stroke:([^;]+);stroke-width:([\d.]+)"', ov)
+        check(len(polys) == 3 and len(set(c for c, _ in polys)) == 3,
+              "折线换成三根且三色互不相同（%s）" % polys)
+        check("<polygon" not in ov, "折线改为纯线条，不再叠单色面积 polygon")
+        hits = re.findall(r'<div class="hz"[^>]*data-tip="([^"]+)"', ov)
+        check(len(hits) in (12, 14)
+              and all(all(n in h for n in ("WorkBuddy", "ZCode", "Codex")) for h in hits),
+              "每个热区列都给出三平台用量（%d 列 / 自适应窗口）" % len(hits))
+        check('<div class="ovline">' in ov and 'class="foc"' not in ov,
               "折线用 .ovline 叠热区列（零 JS），不再画静态焦点线")
+        ovm2 = T.index_overview(tri, focus="zcode")
+        npoly = len(re.findall(r'<polyline[^>]*points=', ovm2))
+        nhz = len(re.findall(r'<div class="hz"', ovm2))
+        check(npoly == 1 and "<polygon" in ovm2 and nhz == 14
+              and "按平台拆分" not in ovm2,
+              "单平台折线为单条带面积线 + 14 天热区（%d 条 / %d 列）" % (npoly, nhz))
         big = 10340000000
         fake_big = [{"id": "c", "ws": "D:/x/y", "title": "t", "model": "m",
                      "models": {"m": big}, "mtime": time.time(), "calls": 1,

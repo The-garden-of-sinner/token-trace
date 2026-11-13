@@ -25,8 +25,12 @@ mkdir -p "$STAGE/DEBIAN" \
          "$STAGE/usr/share/icons/hicolor/256x256/apps"
 
 # ---- 程序文件（只放运行必需的，不含 trace/ 页面与开发期产物）
-install -m 644 "$ROOT/trace_server.py" "$ROOT/gen_trace.py" "$STAGE/usr/share/$PKG/"
+install -m 644 "$ROOT/trace_server.py" "$ROOT/gen_trace.py" "$ROOT/pricing.py" "$STAGE/usr/share/$PKG/"
 install -m 644 "$ROOT/README.md" "$ROOT/LICENSE" "$STAGE/usr/share/$PKG/"
+# v1.3.0：pricing 与 sources/ 是运行期硬依赖（import pricing / from sources
+# import bridge），漏装会让 deb 里的服务在第一个请求前就 ImportError。
+mkdir -p "$STAGE/usr/share/$PKG/sources"
+install -m 644 "$ROOT/sources/"*.py "$STAGE/usr/share/$PKG/sources/"
 # 应用菜单图标：desktop 里写图标名 token-trace，由 hicolor 主题解析
 install -m 644 "$ROOT/assets/token-trace.png" \
          "$STAGE/usr/share/icons/hicolor/256x256/apps/token-trace.png"
