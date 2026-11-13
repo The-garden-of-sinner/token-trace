@@ -459,8 +459,16 @@ def turn_brief(d, t):
             "cold": bool(first and (first["hit"] / first["pin"]) < 0.5)}
 
 
-def global_stats():
+def _pick_src(src):
+    """按平台筛会话；src 为空表示全部。"""
     ss = STORE.sessions()
+    if not src:
+        return ss
+    return [s for s in ss if (s.get("src") or "workbuddy") == src]
+
+
+def global_stats(ss=None):
+    ss = STORE.sessions() if ss is None else ss
     out = {"sessions": len(ss), "workspaces": len(set(s["ws"] for s in ss)),
            "calls": 0, "turns": 0, "blocks": 0, "chars": 0,
            "visible_peak_sum": 0, "compactions": 0,
@@ -532,7 +540,7 @@ def global_stats():
     return out
 
 
-def search(q, sid=None, scope="all", limit=SEARCH_MAX):
+def search(q, sid=None, scope="all", limit=SEARCH_MAX, src=None):
     """跨会话全文搜索。用 re 直接在原文上扫，不复制一份小写副本。"""
     q = (q or "").strip()
     if len(q) < 2:
@@ -544,7 +552,7 @@ def search(q, sid=None, scope="all", limit=SEARCH_MAX):
     rx = re.compile(re.escape(q), re.I)
     hits = []
     truncated = False
-    targets = [STORE.by_id(sid)] if sid else STORE.sessions()
+    targets = [STORE.by_id(sid)] if sid else _pick_src(src)
     for s in targets:
         d = STORE.get(s["id"])
         if scope in ("all", "blocks"):
@@ -834,9 +842,9 @@ def compact_rows(d):
     return out
 
 
-def tool_stats(sid=None):
+def tool_stats(sid=None, src=None):
     """按工具名聚合 token / 积分，按 shell 程序名聚合执行次数。"""
-    targets = [STORE.by_id(sid)] if sid else STORE.sessions()
+    targets = [STORE.by_id(sid)] if sid else _pick_src(src)
     tools, progs = {}, {}
     total_calls, total_credit = 0, 0.0
     for s in targets:
@@ -883,9 +891,9 @@ TOOL_CACHE = OrderedDict()
 TOOL_CACHE_TTL = 60
 
 
-def tool_stats_cached(sid=None, refresh=False):
+def tool_stats_cached(sid=None, refresh=False, src=None):
     """全库遍历较慢且结果稳定，缓存 60 秒（与会话索引同 TTL）。"""
-    key = sid or ""
+    key = (sid or "") + "|" + (src or "")
     now = time.time()
     if not refresh and key in TOOL_CACHE:
         ts, val = TOOL_CACHE[key]
@@ -893,18 +901,18 @@ def tool_stats_cached(sid=None, refresh=False):
             TOOL_CACHE.move_to_end(key)
             return val
     with CALC_LOCK:
-        val = tool_stats(sid)
+        val = tool_stats(sid, src)
     TOOL_CACHE[key] = (now, val)
     TOOL_CACHE.move_to_end(key)
-    while len(TOOL_CACHE) > 4:
+    while len(TOOL_CACHE) > 8:
         TOOL_CACHE.popitem(last=False)
     return val
 
 
-def tool_calls(sid, tool, offset=0, limit=40):
+def tool_calls(sid, tool, offset=0, limit=40, src=None):
     """某个工具的全部调用行（可跨会话），按积分降序，供点击下钻。"""
     rows = []
-    for s in ([STORE.by_id(sid)] if sid else STORE.sessions()):
+    for s in ([STORE.by_id(sid)] if sid else _pick_src(src)):
         d = STORE.get(s["id"])
         for i, c in enumerate(d["calls"]):
             if (c["tool"] or "最终回答") != tool:
@@ -971,6 +979,9 @@ h1{font-size:19px;font-weight:500;margin:0 0 3px}
  text-decoration:none;transition:background-color .28s var(--ease),color .28s var(--ease)}
 .platbar .tb-seg a:hover{color:var(--link-h)}
 .platbar .tb-seg a.on{background:var(--bg);color:var(--fg);font-weight:600;box-shadow:var(--shadow)}
+/* 本机没有该平台的会话：不可点，靠 title 说明原因（无 X 会话记录） */
+.platbar .tb-seg .off{padding:5px 14px;border-radius:999px;font-size:11px;color:var(--faint);
+ opacity:.55;cursor:not-allowed;user-select:none}
 @media(max-width:720px){.platbar{margin-left:0}}
 .badge{display:inline-block;font-size:10.5px;color:var(--ok-fg);background:var(--ok-bg);border-radius:9px;padding:0 8px;line-height:17px;margin-left:8px;vertical-align:2px}
 h2{font-size:13px;font-weight:500;margin:24px 0 9px;padding-bottom:6px;border-bottom:1px solid var(--line);color:var(--fg)}
@@ -1307,9 +1318,9 @@ CSS_VIZ = """
 .spark polyline{fill:none;stroke:var(--accent);stroke-width:1.6;vector-effect:non-scaling-stroke;
  stroke-dasharray:100;animation:tt-draw .88s var(--ease-in) backwards}
 .spark polygon{fill:var(--accent);opacity:.11;animation:tt-area .72s .18s var(--ease-in) backwards}
-/* 多平台三条线错峰，各画各的；单条线不受影响 */
-.spark polyline:nth-of-type(2){animation-delay:.13s}
-.spark polyline:nth-of-type(3){animation-delay:.26s}
+/* 空档：没有会话的那几桶沿底部用虚线连过去，与「用量真的掉到 0」区分开。
+   dasharray 用 viewBox 单位（这条不设 pathLength），不做描线动画、直接显示。 */
+.spark polyline.gap{stroke-dasharray:1.8 1.4;stroke-width:1.3;opacity:.62;animation:none}
 @keyframes tt-draw{from{stroke-dashoffset:100}to{stroke-dashoffset:0}}
 @keyframes tt-area{from{opacity:0;transform:translateY(4px)}to{opacity:.11;transform:none}}
 /* 首页「按时间」折线：viewBox 纵向 80px，渲染高由 .ovline 给定，折线不再被
@@ -1859,7 +1870,7 @@ def kpi(items, fs=18, pad=32):
 # 因此只在被请求的那一屏产生开销，且复杂度对块数 / 调用数是线性的。
 # 字数是原文统计、token 来自 API usage，二者不同口径，页面统一用 ≈ 标注估算项。
 
-def search_box(action, term="", mode="text", scope="all", placeholder="关键词"):
+def search_box(action, term="", mode="text", scope="all", placeholder="关键词", extra=""):
     """统一搜索框：「按字符匹配 / 按块匹配」由 v_search 在服务端分流。
 
     零 JS 下 form 的 action 是固定的，所以用 mode 参数让 /search 决定交给
@@ -1882,12 +1893,35 @@ def search_box(action, term="", mode="text", scope="all", placeholder="关键词
                           for k, lab in (("all", "全部"), ("blocks", "上下文块"),
                                          ("outputs", "模型输出"), ("turns", "提问")))
                       + '</span>')
-    return ('<form class="searchbox" method="get" action="%s">'
+    return ('<form class="searchbox" method="get" action="%s">%s'
             '<span class="sb-tools">%s%s</span>'
             '<span class="sb-main"><input type="text" name="q" value="%s" placeholder="%s">'
             '<button type="submit">%s</button></span></form>' %
-            (esc(action), mode_pick, scope_pick, esc(term), esc(placeholder),
+            (esc(action), extra, mode_pick, scope_pick, esc(term), esc(placeholder),
              "检索" if mode == "blocks" else "搜索"))
+
+
+def plat_switch(ss_all, src, path, keep=()):
+    """平台切换控件：本机没有该平台会话时置灰，不做死链。
+
+    path 是当前页路径，keep 是链接里需要保留的其余查询参数（排序、检索词…）。
+    """
+    if not any((s.get("src") or "workbuddy") != "workbuddy" for s in ss_all):
+        return ""
+    have = Counter(s.get("src") or "workbuddy" for s in ss_all)
+    items = []
+    for k, lab in (("", "全部"), ("workbuddy", "WorkBuddy"), ("zcode", "ZCode"),
+                   ("codex", "Codex"), ("dsh", "DSH")):
+        if k and not have.get(k):
+            items.append('<span class="off" title="无 %s 会话记录">%s</span>'
+                         % (esc(lab), esc(lab)))
+            continue
+        qs = ([("src", k)] if k else []) + [(kk, vv) for kk, vv in keep if vv]
+        href = path + ("?" + urlencode(qs) if qs else "")
+        items.append('<a class="%s" href="%s">%s</a>'
+                     % ("on" if src == k else "", esc(href), esc(lab)))
+    return ('<div class="platbar"><span class="tb-lab">平台</span>'
+            '<span class="tb-seg">%s</span></div>' % "".join(items))
 
 
 def kh(n):
@@ -2120,6 +2154,58 @@ def subagent_relations(ss):
 
 
 
+def _series_polys(active, buckets, n, mx, H=80, TOP=4):
+    """把每个平台的按桶序列画成「实线 + 空档虚线」。
+
+    连续有数据的桶连成实线；跨越没有会话的桶时，从前一点落到 0、沿底部
+    走过去、再升到下一个点，这段用虚线 —— 读起来是「这里没有会话」，
+    而不是「用量真的掉到 0」。单点段画成圆点，polyline 画不出一个点。
+    """
+    def y_of(v):
+        return H - v / mx * (H - TOP - 2)
+
+    def x_of(i):
+        return i * 100.0 / (n - 1)
+
+    out = []
+    for idx, (k, _name, color) in enumerate(active):
+        vals = buckets[k]
+        delay = idx * 0.13
+        i = 0
+        while i < n:
+            if vals[i] > 0:
+                j = i
+                while j < n and vals[j] > 0:
+                    j += 1
+                if j - i == 1:
+                    out.append('<circle cx="%.2f" cy="%.2f" r="1.5" fill="%s"/>'
+                               % (x_of(i), y_of(vals[i]), color))
+                else:
+                    pts = " ".join("%.2f,%.2f" % (x_of(x), y_of(vals[x]))
+                                   for x in range(i, j))
+                    out.append('<polyline pathLength="100" points="%s" '
+                               'style="stroke:%s;stroke-width:1.7;animation-delay:%.2fs"/>'
+                               % (pts, color, delay))
+                i = j
+            else:
+                j = i
+                while j < n and vals[j] == 0:
+                    j += 1
+                # 多个平台的空档线都贴底，全画在 y=H 会叠成一条；按平台错开 1.6
+                base = H - 1.6 * (idx % 3)
+                seg = []
+                if i > 0:
+                    seg.append("%.2f,%.2f" % (x_of(i - 1), y_of(vals[i - 1])))
+                seg.append("%.2f,%.1f" % (x_of(i), base))
+                seg.append("%.2f,%.1f" % (x_of(j - 1), base))
+                if j < n:
+                    seg.append("%.2f,%.2f" % (x_of(j), y_of(vals[j])))
+                out.append('<polyline class="gap" points="%s" style="stroke:%s"/>'
+                           % (" ".join(seg), color))
+                i = j
+    return "".join(out)
+
+
 def _platform_charts(ss, total, raw_total):
     """「全部」视图：按平台拼接环 + 三平台三色折线。"""
     # 1) 按平台：输入 token 拼接环。三个平台各占一段，不再把 WorkBuddy 的
@@ -2196,12 +2282,35 @@ def _platform_charts(ss, total, raw_total):
                     out[k][j] += pair[0]
         return labels, out
 
-    day_list, buckets = collect("day", 14)
-    unit = "day"
-    if sum(1 for k, _, _ in platforms if any(buckets[k])) < 2:
-        day_list, buckets = collect("week", 12)
-        unit = "week"
-    n = len(day_list)
+    # 窗口左界跟着「最老的那个平台最后一次出会话」走：只在两个月前跑过几次的
+    # 平台（典型是 DSH / Codex），固定近 14 天会让它整条线落在窗口外，看起来
+    # 像没有数据。跨度 ≤14 天按天，否则按周，上限 26 周（半年外的会话不纳入）。
+    last_day = {}
+    for s in ss:
+        # 空会话（只有元数据、0 次调用）不参与：它们的文件 mtime 可能很新，
+        # 会把平台真实的最后活跃日往后推，窗口反而盖不到真正有数据的那天。
+        if not s.get("calls"):
+            continue
+        k = s.get("src") or "workbuddy"
+        if k not in keys:
+            k = "other"
+        bins = s.get("days") or {}
+        ds = [d for d in bins.keys() if d] or [fmt_ts(s["mtime"], "%Y-%m-%d", "")]
+        ds = [d for d in ds if d]
+        if ds:
+            last_day[k] = max(max(ds), last_day.get(k, ""))
+    anchor = min(last_day.values()) if last_day else today.strftime("%Y-%m-%d")
+    try:
+        span = (today - datetime.date.fromisoformat(anchor)).days
+    except (ValueError, TypeError):
+        span = 0
+    if span <= 13:
+        # 最少 7 天：只在今天跑过一次时也有上下文，不至于整张图只剩一个点；
+        # 前 6 天会以空档虚线的形式落到 0，一眼看出「之前没有会话」。
+        unit, n = "day", max(7, min(14, span + 1))
+    else:
+        unit, n = "week", max(2, min(26, span // 7 + 1))
+    day_list, buckets = collect(unit, n)
     active = [(k, name, color) for k, name, color in platforms if any(buckets[k])]
     if any(buckets["other"]):
         active.append(("other", "其他", "var(--p4)"))
@@ -2209,17 +2318,11 @@ def _platform_charts(ss, total, raw_total):
     # 视图纵向 80（横向仍 100），按容器真实宽高拉伸；每条线 inline 指定颜色，
     # 覆盖 .spark polyline 的 var(--accent) 默认色。
     H, TOP = 80, 4
-    polys = []
-    for k, name, color in active:
-        pts = " ".join("%.2f,%.2f" % (i * 100.0 / (n - 1),
-                                      H - v / mx * (H - TOP - 2))
-                       for i, v in enumerate(buckets[k]))
-        polys.append('<polyline pathLength="100" points="%s" style="stroke:%s;stroke-width:1.7"/>' %
-                     (pts, color))
+    polys = _series_polys(active, buckets, n, mx, H, TOP)
     unit_cn = "天" if unit == "day" else "周"
     svg = ('<svg class="spark" viewBox="0 0 100 %d" preserveAspectRatio="none" '
            'role="img" aria-label="按%s、按平台的输入 token 走势">' %
-           (H, unit_cn) + "".join(polys) + '</svg>')
+           (H, unit_cn) + polys + '</svg>')
     # 悬停：图上叠一层 HTML 热区列（零 JS，复用 [data-tip] 气泡），一次列出
     # 该桶三个平台各自的输入量；焦点竖线按当天最高点同比例换算。
     step = 100.0 / n
@@ -2328,10 +2431,22 @@ def _model_charts(ss, total, raw_total):
              '<circle class="trk" cx="21" cy="21" r="15.9155"/>' +
              "".join(arcs) + '</svg>')
 
-    # 近 14 天按天，单条折线 + 面积（原口径）
+    # 近 14 天按天，单条折线 + 面积（原口径）。右界不写死「今天」：这个平台
+    # 如果最后一次会话在两周前，固定窗口会让整张图全 0，改成以最后活跃日为锚点。
+    today = datetime.date.today()
+    lastds = []
+    for s_ in ss:
+        bins = s_.get("days") or {}
+        ds = [d for d in bins.keys() if d] or [fmt_ts(s_["mtime"], "%Y-%m-%d", "")]
+        lastds += [d for d in ds if d]
+    right = today
+    if lastds:
+        try:
+            right = min(today, max(datetime.date.fromisoformat(d) for d in lastds))
+        except (ValueError, TypeError):
+            right = today
     days = 14
-    day_list = [datetime.date.today() - datetime.timedelta(days=days - 1 - i)
-                for i in range(days)]
+    day_list = [right - datetime.timedelta(days=days - 1 - i) for i in range(days)]
     day_idx = dict((d.strftime("%Y-%m-%d"), i) for i, d in enumerate(day_list))
     buckets = [0.0] * days
     for s in ss:
@@ -2364,7 +2479,9 @@ def _model_charts(ss, total, raw_total):
                     (i * step, step, d, kh(v), y / H * 100.0))
     line = '<div class="ovline">%s%s</div>' % (svg, "".join(cols))
     axis = ('<div class="ovaxis"><span>%s</span><span>峰值 %s token/天</span>'
-            '<span>今天</span></div>' % (day_list[0].strftime("%m-%d"), kh(mx)))
+            '<span>%s</span></div>' %
+            (day_list[0].strftime("%m-%d"), kh(mx),
+             "今天" if right == today else right.strftime("%m-%d")))
     return donut, (legend if usable else []), line, axis, "按时间 · 输入 token"
 
 
@@ -2700,18 +2817,11 @@ def v_index(q):
                 if ws else "")
     # 平台切换挂到大标题同一栏（header 里的 .platbar），不再挤在下方工具条。
     # 只在检测到外部源时出现，单平台用户看到的界面不变。
-    plat = ""
-    if has_ext:
-        plat = ('<div class="platbar"><span class="tb-lab">平台</span>'
-                '<span class="tb-seg">%s</span></div>' % "".join(
-                    '<a class="%s" href="/?%s">%s</a>' % (
-                        "on" if src == k else "",
-                        urlencode(dict((kk, vv) for kk, vv in
-                                       (("src", k), ("sort", "" if sort == "mtime" else sort)) if vv)),
-                        lab)
-                    for k, lab in (("", "全部"), ("workbuddy", "WorkBuddy"),
-                                   ("zcode", "ZCode"), ("codex", "Codex"),
-                                   ("dsh", "DSH"))))
+    # 平台切换挂到大标题同一栏（header 里的 .platbar）。
+    # 本机没有某个平台的会话时（没装、或还没写过记录），那一项不再可点：
+    # 渲染成置灰的 span 并挂 title 说明，避免点进去看到一页空白。
+    plat = plat_switch(ss_all, src, "/",
+                       keep=(("sort", "" if sort == "mtime" else sort),))
     src_bytes = 0
     for s in ss:
         try:
@@ -3178,14 +3288,17 @@ def v_search(q, sid=None):
         return v_find(q, sid)
     term = qstr(q, "q")
     scope = qstr(q, "scope", "all")
+    src = "" if sid else qstr(q, "src")
     d = STORE.get(sid) if sid else None
     t0 = time.time()
     with CALC_LOCK:
-        hits, warn = search(term, sid=sid, scope=scope)
+        hits, warn = search(term, sid=sid, scope=scope, src=src)
     ms = int((time.time() - t0) * 1000)
     action = "/s/%s/search" % sid if sid else "/search"
     crumbs = [("索引", "/")] + ([(d["title"][:24], "/s/%s" % sid)] if d else []) + [("搜索", "")]
-    body = search_box(action, term, "text", scope, "全文关键词 · 可切换「按块匹配」")
+    hidden = ('<input type="hidden" name="src" value="%s">' % esc(src)) if src else ""
+    body = search_box(action, term, "text", scope, "全文关键词 · 可切换「按块匹配」",
+                      extra=hidden)
     body += ('<div class="fine" style="margin:-8px 0 14px">切到「按块匹配」会按块聚合，'
              '给出块内命中总数并直跳命中分片。</div>')
     if warn:
@@ -3212,7 +3325,8 @@ def v_search(q, sid=None):
     else:
         body += '<div class="note">输入关键词搜索；结果里的每一条都能点进去看不截断的全文。</div>'
     return page("全文搜索", crumbs, body,
-                sub="服务端逐行扫描全库原文，不建索引、不落盘")
+                sub="服务端逐行扫描全库原文，不建索引、不落盘",
+                topbar="" if sid else plat_switch(STORE.sessions(), src, "/search"))
 
 
 def v_find(q, sid=None):
@@ -3280,7 +3394,8 @@ def v_tools(q, sid=None):
     if view not in ("tools", "progs"):
         view = "tools"
     p = qint(q, "p")
-    st = tool_stats_cached(sid=sid, refresh=qstr(q, "refresh") == "1")
+    src = "" if sid else qstr(q, "src")
+    st = tool_stats_cached(sid=sid, refresh=qstr(q, "refresh") == "1", src=src)
     base = "/s/%s/tools" % sid if sid else "/tools"
     d = STORE.get(sid) if sid else None
     crumbs = [("索引", "/")] + ([(d["title"][:24], "/s/%s" % sid)] if d else []) + [("工具与命令", "")]
@@ -3349,7 +3464,8 @@ def v_tools(q, sid=None):
                           nfmt(x["runs"]), nfmt(x["chars"])))
         body += pager(base, q, p, PAGE_CALLS, len(rows), "种")
     return page("工具与命令", crumbs, body,
-                sub="工具 usage 聚合 · Shell 程序 best-effort 提取")
+                sub="工具 usage 聚合 · Shell 程序 best-effort 提取",
+                topbar="" if sid else plat_switch(STORE.sessions(), src, "/tools"))
 
 
 def v_map(q, sid):
@@ -3564,9 +3680,12 @@ def v_compact(q, sid):
 
 def v_stats(q):
     t0 = time.time()
+    src = qstr(q, "src")
+    ss_all = STORE.sessions()
+    ss = ss_all if not src else [s for s in ss_all
+                                 if (s.get("src") or "workbuddy") == src]
     with CALC_LOCK:
-        st = global_stats()
-        ss = STORE.sessions()
+        st = global_stats(ss)
         compact_sid = next((s["id"] for s in ss
                             if STORE.get(s["id"])["compacts"]), "")
     ms = int((time.time() - t0) * 1000)
@@ -3629,7 +3748,8 @@ def v_stats(q):
     body += ('<div class="tabs"><a class="btn" href="/api/stats">同一份数据的 JSON</a>'
              '<a class="btn" href="/">← 回索引</a></div>')
     return page("全局统计", [("索引", "/"), ("全局统计", "")], body,
-                sub="跨会话全量聚合 · 每次访问现算，不缓存结论")
+                sub="跨会话全量聚合 · 每次访问现算，不缓存结论",
+                topbar=plat_switch(ss_all, src, "/stats"))
 
 
 # ------------------------------------------------ 逐块 / 逐调用排行（不做分组）

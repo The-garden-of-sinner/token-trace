@@ -389,12 +389,15 @@ def main():
               "单平台视图回到按模型环 + 按天单线，不再做平台拼接")
 
         print("== 全库画像：三平台三色折线 ==")
+        # 线可能被空档切成多段；只有一天有数据时该段退化成圆点，两者都算「图元」
         polys = re.findall(r'<polyline[^>]*style="stroke:([^;]+);stroke-width:([\d.]+)"', ov)
-        check(len(polys) == 3 and len(set(c for c, _ in polys)) == 3,
-              "折线换成三根且三色互不相同（%s）" % polys)
+        dots = re.findall(r'<circle cx="[\d.]+" cy="[\d.]+" r="[\d.]+" fill="([^"]+)"', ov)
+        marks = [c for c, _ in polys] + dots
+        check(len(marks) == 3 and len(set(marks)) == 3,
+              "折线换成三根且三色互不相同（%d 段 / %d 点）" % (len(polys), len(dots)))
         check("<polygon" not in ov, "折线改为纯线条，不再叠单色面积 polygon")
         hits = re.findall(r'<div class="hz"[^>]*data-tip="([^"]+)"', ov)
-        check(len(hits) in (12, 14)
+        check(7 <= len(hits) <= 26
               and all(all(n in h for n in ("WorkBuddy", "ZCode", "Codex")) for h in hits),
               "每个热区列都给出三平台用量（%d 列 / 自适应窗口）" % len(hits))
         check('<div class="ovline">' in ov and 'class="foc"' not in ov,
@@ -405,6 +408,34 @@ def main():
         check(npoly == 1 and "<polygon" in ovm2 and nhz == 14
               and "按平台拆分" not in ovm2,
               "单平台折线为单条带面积线 + 14 天热区（%d 条 / %d 列）" % (npoly, nhz))
+        # 平台切换：没有会话的平台置灰并写明原因，有数据的可点
+        sw = T.plat_switch(tri, "", "/stats")
+        check('class="off"' in sw and "无 DSH 会话记录" in sw,
+              "平台切换：本机没有 DSH 时该项置灰并给出原因")
+        sw2 = T.plat_switch(tri, "zcode", "/stats")
+        check('href="/stats?src=zcode"' in sw2 and 'class="on"' in sw2,
+              "平台切换：有数据的平台可点，当前平台高亮")
+        # 空档虚线：中间断掉的那几天用 gap 段连到 0，而不是直接连过去
+        gap = [_plat("g1", "workbuddy", 100, today),
+               _plat("g2", "workbuddy", 100,
+                     time.strftime("%Y-%m-%d",
+                                   time.localtime(time.time() - 9 * 86400)))]
+        check('class="gap"' in T.index_overview(gap),
+              "折线在无会话的桶上用虚线连到 0（gap 段）")
+        # 平台切换：没有会话的平台置灰并写明原因，有数据的可点
+        sw = T.plat_switch(tri, "", "/stats")
+        check('class="off"' in sw and "无 DSH 会话记录" in sw,
+              "平台切换：本机没有 DSH 时该项置灰并给出原因")
+        sw2 = T.plat_switch(tri, "zcode", "/stats")
+        check('href="/stats?src=zcode"' in sw2 and 'class="on"' in sw2,
+              "平台切换：有数据的平台可点，当前平台高亮")
+        # 空档虚线：中间断掉的那几天用 gap 段连到 0，而不是直接连过去
+        gap = [_plat("g1", "workbuddy", 100, today),
+               _plat("g2", "workbuddy", 100,
+                     time.strftime("%Y-%m-%d",
+                                   time.localtime(time.time() - 9 * 86400)))]
+        check('class="gap"' in T.index_overview(gap),
+              "折线在无会话的桶上用虚线连到 0（gap 段）")
         big = 10340000000
         fake_big = [{"id": "c", "ws": "D:/x/y", "title": "t", "model": "m",
                      "models": {"m": big}, "mtime": time.time(), "calls": 1,
