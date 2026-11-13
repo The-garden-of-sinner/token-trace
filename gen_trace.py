@@ -301,7 +301,7 @@ def brief(args):
 def build(path, full=False):
     """返回 (ctx, calls, meta, turns)。
 
-    path 支持伪路径 codex://<sid> / zcode://<sid> / dsh://<sid>，交给 sources.bridge 解析；
+    path 支持伪路径 codex:// / zcode:// / dsh:// / antigravity://<sid>，交给 sources.bridge 解析；
     其余按 WorkBuddy 的 jsonl 路径处理。
 
     ctx 是「按时间顺序进入上下文的内容块」，只放会作为历史重发给模型的东西：
@@ -320,7 +320,8 @@ def build(path, full=False):
     因此不删任何块（块索引 / 分片 / URL 全部不变），只给每次调用记 vf（visible_from，
     可见区间起点块号）与 compact（该调用是否紧随压缩）。所有统计用 [vf, ctxN)。
     """
-    if isinstance(path, str) and path.startswith(("codex://", "zcode://", "dsh://")):
+    if isinstance(path, str) and path.startswith(
+            ("codex://", "zcode://", "dsh://", "antigravity://")):
         from sources import bridge
         ctx, calls, meta, turns = bridge.build(path)
         if not full:

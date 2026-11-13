@@ -410,8 +410,8 @@ def main():
               "单平台折线为单条带面积线 + 14 天热区（%d 条 / %d 列）" % (npoly, nhz))
         # 平台切换：没有会话的平台置灰并写明原因，有数据的可点
         sw = T.plat_switch(tri, "", "/stats")
-        check('class="off"' in sw and "无 DSH 会话记录" in sw,
-              "平台切换：本机没有 DSH 时该项置灰并给出原因")
+        check('class="off"' in sw and "无 DeepSeek Harness 会话记录" in sw,
+              "平台切换：本机没有 DeepSeek Harness 时该项置灰并给出原因")
         sw2 = T.plat_switch(tri, "zcode", "/stats")
         check('href="/stats?src=zcode"' in sw2 and 'class="on"' in sw2,
               "平台切换：有数据的平台可点，当前平台高亮")
@@ -422,20 +422,15 @@ def main():
                                    time.localtime(time.time() - 9 * 86400)))]
         check('class="gap"' in T.index_overview(gap),
               "折线在无会话的桶上用虚线连到 0（gap 段）")
-        # 平台切换：没有会话的平台置灰并写明原因，有数据的可点
+        # 平台注册表与切换栏：全称给宽屏、短名留给窄屏，无数据的新平台置灰
         sw = T.plat_switch(tri, "", "/stats")
-        check('class="off"' in sw and "无 DSH 会话记录" in sw,
-              "平台切换：本机没有 DSH 时该项置灰并给出原因")
-        sw2 = T.plat_switch(tri, "zcode", "/stats")
-        check('href="/stats?src=zcode"' in sw2 and 'class="on"' in sw2,
-              "平台切换：有数据的平台可点，当前平台高亮")
-        # 空档虚线：中间断掉的那几天用 gap 段连到 0，而不是直接连过去
-        gap = [_plat("g1", "workbuddy", 100, today),
-               _plat("g2", "workbuddy", 100,
-                     time.strftime("%Y-%m-%d",
-                                   time.localtime(time.time() - 9 * 86400)))]
-        check('class="gap"' in T.index_overview(gap),
-              "折线在无会话的桶上用虚线连到 0（gap 段）")
+        check(len(T.PLATFORMS) == 5
+              and T.PLAT_NAME["dsh"] == "DeepSeek Harness"
+              and T.PLAT_SHORT["antigravity"] == "AG"
+              and '<span class="pfull">DeepSeek Harness</span>' in sw
+              and '<span class="pshort">DSH</span>' in sw
+              and "无 Antigravity 会话记录" in sw,
+              "平台注册表：DSH 全称、Antigravity 短名，新平台无数据置灰")
         big = 10340000000
         fake_big = [{"id": "c", "ws": "D:/x/y", "title": "t", "model": "m",
                      "models": {"m": big}, "mtime": time.time(), "calls": 1,

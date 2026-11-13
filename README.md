@@ -4,7 +4,7 @@
 
 ![会话索引](docs/demo.png)
 
-*会话索引：全库画像（「全部」视图按平台拆分输入 token 与三平台走势，切到单个平台回到按模型环与单条按天走势，另有工作区递归关系）与会话列表。截图中的数据由 `scripts/make_demo.py` 虚构生成，模型 ID 为平台公开标识，不含任何真实用户数据。*
+*会话索引：全库画像（「全部」视图按平台拆分输入 token 与各平台走势，切到单个平台回到按模型环与单条按天走势，另有工作区递归关系）与会话列表。截图中的数据由 `scripts/make_demo.py` 虚构生成，模型 ID 为平台公开标识，不含任何真实用户数据。*
 
 ![Python](https://img.shields.io/badge/python-3.8%2B-blue) ![Linux](https://img.shields.io/badge/Linux-Kylin%20%7C%20UOS%20%7C%20Deepin-blue) ![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen) ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -89,16 +89,18 @@
 
 | 层 | 职责 | 刻意不做 |
 | --- | --- | --- |
-| 数据源 | `sources/` 下每平台一个模块：WorkBuddy（`projects/**/*.jsonl` + `workbuddy.db`）、Codex（`~/.codex/sessions/**/rollout-*.jsonl[.zst]`）、ZCode（`~/.zcode/cli/db/db.sqlite` + model-io 补充源）、DSH（`~/.dsh/sessions/**/session.v4.jsonl.zstd` 事件流），全程只读 | 不写回、不复制一份数据 |
+| 数据源 | `sources/` 下每平台一个模块：WorkBuddy（`projects/**/*.jsonl` + `workbuddy.db`）、Codex（`~/.codex/sessions/**/rollout-*.jsonl[.zst]`）、ZCode（`~/.zcode/cli/db/db.sqlite` + model-io 补充源）、DeepSeek Harness（`~/.dsh/sessions/**/session.v4.jsonl.zstd` 事件流）、Antigravity（`~/.gemini/antigravity/conversations/*.db` protobuf 遥测），全程只读 | 不写回、不复制一份数据 |
 | 数据层 | `build(path, full=True)` 重建块序列，`Store` LRU 常驻 + 前缀和派生索引 | 不建倒排索引、不落盘 |
 | 计算层 | `call_state` / `call_outline` / `block_users` / `search` / `trend_rows` 等，O(1) 或二分 | 不把整段上下文展开到页面 |
 | 渲染 / API 层 | 每请求只产出一屏 HTML 或一条 `{ok,data,meta}` JSON | 不一次性注入大 JSON、不截断全文 |
 
-外部源统一走 `sources/bridge.py`：会话 id 带平台前缀（`codex-` / `zcode-`），
-伪路径 `codex://<sid>`、`zcode://<sid>` 在 `build()` 入口分发，下游的统计、
-检索、路由不需要知道原始数据是 JSONL 还是 SQLite。单个源不可用时只跳过该源。
+外部源统一走 `sources/bridge.py`：会话 id 带平台前缀
+（`codex-` / `zcode-` / `dsh-` / `antigravity-`），伪路径 `<src>://<sid>`
+在 `build()` 入口分发，下游的统计、检索、路由不需要知道原始数据是 JSONL、
+SQLite 还是 protobuf blob。单个源不可用时只跳过该源。平台名称、短名与配色
+集中在 `trace_server.PLATFORMS`，新增平台只改这一处加适配器与 bridge 注册。
 
-两个平台的硬约束（实测得出，不是推测）：
+各平台的硬约束（实测得出，不是推测）：
 
 - Codex 的 `token_usage_record.usage` **就是本次调用增量**，累计值在
   `turn_token_usage` / `thread_token_usage`；对 usage 再差分会重复计数。
@@ -113,6 +115,15 @@
   命中 / `cacheWriteTokens` / `outputTokens`），本工具按 `pin = 三者之和`、`hit = cacheRead`
   映射，与 WorkBuddy 侧同口径；模型取 `message.source.model`，`delegationDepth > 0`
   标为子代理会话。事件流只到消息粒度，**不宣称** DSH projection 里的 surface 级 token 归属。
+- Antigravity 的 `gen_metadata.data` 是 protobuf：用量在 `f1.f4`（`f2` 未缓存输入 /
+  `f3` 输出 / `f5` 缓存命中），模型在 `f1.f19`，故 `pin = f2 + f5`、`hit = f5`。
+  时间戳取自 `steps.metadata.f1`（秒 + 纳秒），与 `gen_metadata.idx` 共享索引空间，
+  本机 14 个库 1425 次调用覆盖率 100%。**`gen_metadata.idx` 与 `step_type=15`
+  的 idx 并非一一对应**（实测交集仅 691/1425），所以逐调用只认 `gen_metadata`，
+  `ctxN` 按 idx 顺序二分推进作近似；用户 / 助手 / 工具正文来自 `steps.step_payload`
+  （`f19.f2` / `f20.f3` / `f5.f4.{f2,f3}`），标题来自 `annotations/<sid>.pbtxt`。
+  **不宣称**精确到单次调用的工具归属，`tool` 留空。Antigravity 的 Gemini 模型
+  未收录进 `pricing.py`，成本按 `FALLBACK` 中端估算档计算并明确标记，不冒充官方价。
 - 同一会话在 Codex 侧可能对应多个 rollout（每次 resume 新开一个文件并重放历史），
   `scan()` 按 `session_id` 分组、按 `(ts, pin, pout, model)` 去重后合并，否则同一次调用
   会被重复计入、会话列表出现重复项。
@@ -143,7 +154,7 @@
 - **命中块折叠**：调用详情里连续命中块默认折成一枚紧凑胶囊「#a–#b 块缓存命中」，展开时才铺成全宽标题条并拉出逐块清单；「按调用浏览」每行也带同样的折叠摘要；主动选「只看命中」时全部展开
 - **轮来源标签**：`role=user` 的消息并不都是你输入的。每轮标为「用户消息 / 后台任务 / 压缩摘要 / 系统注入 / 内部消息」，非真人输入显示可读摘要而不是整段 XML；会话页可按类别筛选，单轮详情也按来源改标题
 - **子代理隶属树**：子代理是独立的 `agent-*` 会话文件，且工作区常与主会话不同。首页把同一页内的父子收编成「父会话行 → 缩进子树」（原生 `<details>` 折叠、零脚本），子行带 `└` 连接符并注明「派生自「父会话标题」」，分组标题标「含 N 个子代理」；父子跨页或无法定位父级时改在行内注明，关系不会凭空消失。匹配优先用子会话的 `rootRequestId` 精确对照派发它的 `Agent` 调用，字段缺失时才退回 5 秒时间窗兜底
-- **首页全库画像**：按视图分两套口径。「全部」视图是**按平台拼接**的输入 token 环（WorkBuddy / ZCode / Codex / DSH 各一段，弧宽对 <1.2% 的段做可见性保底，图例给真实占比）与**按平台着色的走势线**（共用纵轴；14 天内活跃平台不足两个时自动退到近 12 周按周，避免旧会话全落在窗口外）。切到**单个平台**则回到**按模型的输入 token 环**（按 `providerData.model` 分组、忽略展示名大小写差异，不依赖 db；**低于 1% 的模型并入「其他」，图例只列 ≥1% 的主模型**）与**单条按天折线**。两视图都复用 `data-tip` 零 JS 悬停气泡、带焦点竖线，另有工作区路径递归树（两级 + 占比条）；「按时间」分桶一律按**每次调用实际发生的日期**（`scan_all()` 预聚合的 `days`），不把整个会话压到文件最后修改日，跨天会话也能落到各自那天
+- **首页全库画像**：按视图分两套口径。「全部」视图是**按平台拼接**的输入 token 环（WorkBuddy / ZCode / Codex / DeepSeek Harness / Antigravity 各一段，弧宽对 <1.2% 的段做可见性保底，图例给真实占比）与**按平台着色的走势线**（共用纵轴；14 天内活跃平台不足两个时自动退到近 12 周按周，避免旧会话全落在窗口外）。切到**单个平台**则回到**按模型的输入 token 环**（按 `providerData.model` 分组、忽略展示名大小写差异，不依赖 db；**低于 1% 的模型并入「其他」，图例只列 ≥1% 的主模型**）与**单条按天折线**。两视图都复用 `data-tip` 零 JS 悬停气泡、带焦点竖线，另有工作区路径递归树（两级 + 占比条）；「按时间」分桶一律按**每次调用实际发生的日期**（`scan_all()` 预聚合的 `days`），不把整个会话压到文件最后修改日，跨天会话也能落到各自那天
 - **同机互链**：服务端用一次 loopback `/api/ping`（150 ms 超时、结果缓存 15 s）判断同机的 WorkBuddy 用量监视是否在跑，在跑才在工具条与页脚放「实时用量 ↗」，没跑就不渲染——页面上不会出现死链；地址可用 `TRACE_MONITOR_URL` 改
 - **统一检索入口**：单行搜索区，左侧用零脚本分段开关切换「按字符匹配 / 按块匹配」并由服务端分流，输入框吃掉剩余宽度、按钮贴右；会话页入口改为无边框渐变卡片（分类色侧条）+ 分段浏览控件，次要链接降级
 - 缓存命中率统一显示到小数点后一位
@@ -238,6 +249,24 @@ TRACE_NO_BROWSER=1 ./start.sh  # 只起服务、不开浏览器（无头 / 自�
 数据目录默认 `%USERPROFILE%\.workbuddy`；客户端装在别处时用 `-WorkBuddyHome`
 或环境变量 `WORKBUDDY_HOME` 覆盖。
 
+#### 关于「实时用量 ↗」
+
+首页工具条与页脚的「实时用量 ↗」**不是固定链接**：服务端会探测**同机**
+`127.0.0.1:8791/api/ping`，只有 WorkBuddy 用量监视的 Web 服务在跑时才渲染，
+否则整段不输出（页面上不留死链）。
+
+`TokenTrace.bat` 只启动 Token 轨迹（默认 8765），**不会**顺带启动用量监视——
+两者是独立程序。Windows 上要看到这个入口，需另外双击用量监视项目 Release 里的
+`WorkBuddyTokenMonitor.bat`（默认 8791 开浏览器）。监视器换了端口时，启动 Token
+轨迹前设 `TRACE_MONITOR_URL=http://127.0.0.1:<端口>/`；置空则完全关闭探测。
+
+探测由**服务端进程**发起，不是浏览器：`127.0.0.1` 指向运行 `trace_server.py` 的那台
+机器。若服务跑在 WSL / 容器 / 远程而浏览器在 Windows 宿主，即使宿主开了监视器也探不到，
+此时要把 `TRACE_MONITOR_URL` 指向服务所在环境可达的地址。改环境变量需重启服务；
+探测结果缓存 15 s，所以「先起本服务、后起监视器」最多等 15 s 即出现。
+自查：`/api/health` 的 `data.monitor` 为 `up` / `down` / `disabled`，
+`data.monitor_url` 是实际探测地址。
+
 ### 命令行
 
 ```bash
@@ -281,11 +310,17 @@ TRACE_PORT=9000 token-trace  # 换端口
 
 #### Windows：单文件 bat
 
-`TokenTrace.bat` 是**自包含**的：`trace_server.py`、`gen_trace.py` 与
-`assets/TokenTrace.ico` 经 zlib + base64 压缩后内嵌在文件尾部。双击时脚本自动寻找
-Python 3.8+（`py -3` → PATH → 常见安装目录 → WorkBuddy 内置运行时），把一段纯 ASCII
-loader 释放到 `%LOCALAPPDATA%\TokenTrace\launcher.py`，由它在内存里注册 `gen_trace`
-并启动服务，等就绪后打开浏览器。
+`TokenTrace.bat` 是**自包含**的：**全部运行期模块**（`trace_server.py`、
+`gen_trace.py`、`pricing.py` 与整个 `sources/` 包）加 `assets/TokenTrace.ico`，
+经 zlib + base64 压缩后内嵌在文件尾部。双击时脚本自动寻找 Python 3.8+
+（`py -3` → PATH → 常见安装目录 → WorkBuddy 内置运行时），把一段纯 ASCII
+loader 释放到 `%LOCALAPPDATA%\TokenTrace\launcher.py`，由它装一个内存
+`MetaPathFinder`（按模块名解析 `xxx.py` / `xxx/__init__.py`，支持包与相对导入）
+后启动服务，等就绪再打开浏览器。
+
+> 维护提醒：新增任何运行期模块（顶层 `import X` 或新包），必须同时更新
+> `scripts/build_win_bat.py` 的 `SOURCES`、`scripts/build_deb.sh` 与
+> `scripts/build_deb.py` 的安装清单，否则 deb / bat 会在目标机 `ImportError`。
 
 - **不需要** clone 仓库、同目录放 `.py`、`pip install` 或管理员权限；
 - 正常启动只写 `launcher.py`（纯 ASCII），两个真实源码始终在内存里，避开中文 Windows

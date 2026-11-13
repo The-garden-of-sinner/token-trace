@@ -59,6 +59,21 @@ MAX_CHARS = 10_000_000  # 块/输出全文的字符 offset 上限，与 limit �
 MONITOR_URL = (os.environ.get("TRACE_MONITOR_URL") or "http://127.0.0.1:8791/").strip()
 MONITOR_TTL = 15       # 探测结果缓存秒数：成功失败都缓存，翻页不会每页连一次
 
+# 平台注册表：切换栏 / 全库画像 / 会话行 chip 的名称与配色全从这里取。
+# 新增平台时这里加一行，另在 sources/ 加适配器、在 bridge 注册即可。
+# (key, 全称, 窄屏短名, 分类色)。全称用于图例、说明与宽屏切换栏；短名只在
+# 窄屏顶替全称，避免 6 个长标签把标题栏挤成两行（hover 的 title 始终给全称）。
+PLATFORMS = (
+    ("workbuddy", "WorkBuddy", "WB", "var(--p0)"),
+    ("zcode", "ZCode", "ZCode", "var(--p1)"),
+    ("codex", "Codex", "Codex", "var(--p2)"),
+    ("dsh", "DeepSeek Harness", "DSH", "var(--p3)"),
+    ("antigravity", "Antigravity", "AG", "var(--p4)"),
+)
+PLAT_NAME = dict((k, full) for k, full, _s, _c in PLATFORMS)
+PLAT_SHORT = dict((k, short) for k, _f, short, _c in PLATFORMS)
+PLAT_COLOR = dict((k, c) for k, _f, _s, c in PLATFORMS)
+
 TYPES = {"user": "你的输入", "injected": "系统注入", "tool_result": "工具结果",
          "tool_call": "工具调用参数", "assistant": "助手回答"}
 ORDER = ["tool_result", "injected", "user", "tool_call", "assistant"]
@@ -972,16 +987,26 @@ h1{font-size:19px;font-weight:500;margin:0 0 3px}
 /* 首页：平台切换与大标题同栏。这里自带一份分段控件样式，不依赖 CSS_INDEX
    片段是否加载；其余页面不渲染 .platbar，不受影响。 */
 .sub.sub-wide{margin-left:0;text-align:left;max-width:none;margin-top:5px}
-.platbar{display:inline-flex;align-items:center;gap:9px;margin-left:auto;flex-wrap:wrap}
+.platbar{display:inline-flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap}
 .platbar .tb-lab{font-size:10.5px;letter-spacing:.06em;color:var(--faint)}
-.platbar .tb-seg{display:inline-flex;background:var(--track);border-radius:999px;padding:2px}
-.platbar .tb-seg a{padding:5px 14px;border-radius:999px;font-size:11px;color:var(--muted);
- text-decoration:none;transition:background-color .28s var(--ease),color .28s var(--ease)}
+.platbar .tb-seg{display:inline-flex;background:var(--track);border-radius:999px;padding:2px;
+ flex-wrap:wrap;justify-content:flex-end}
+.platbar .tb-seg a,.platbar .tb-seg .off{padding:4px 10px;border-radius:999px;font-size:10.5px;
+ color:var(--muted);white-space:nowrap}
+.platbar .tb-seg a{text-decoration:none;
+ transition:background-color .28s var(--ease),color .28s var(--ease)}
 .platbar .tb-seg a:hover{color:var(--link-h)}
 .platbar .tb-seg a.on{background:var(--bg);color:var(--fg);font-weight:600;box-shadow:var(--shadow)}
+/* 平台多、其中两个全称偏长：常规宽度一律显示全称，只有很窄的视口才换短名，
+   免得把「大标题 + 平台」这一栏挤成两行；hover 的 title 始终给全称。 */
+.platbar .pshort{display:none}
+@media(max-width:900px){
+ .platbar .pfull{display:none}
+ .platbar .pshort{display:inline}
+ .platbar .tb-seg a,.platbar .tb-seg .off{padding:4px 8px}
+}
 /* 本机没有该平台的会话：不可点，靠 title 说明原因（无 X 会话记录） */
-.platbar .tb-seg .off{padding:5px 14px;border-radius:999px;font-size:11px;color:var(--faint);
- opacity:.55;cursor:not-allowed;user-select:none}
+.platbar .tb-seg .off{color:var(--faint);opacity:.55;cursor:not-allowed;user-select:none}
 @media(max-width:720px){.platbar{margin-left:0}}
 .badge{display:inline-block;font-size:10.5px;color:var(--ok-fg);background:var(--ok-bg);border-radius:9px;padding:0 8px;line-height:17px;margin-left:8px;vertical-align:2px}
 h2{font-size:13px;font-weight:500;margin:24px 0 9px;padding-bottom:6px;border-bottom:1px solid var(--line);color:var(--fg)}
@@ -1910,16 +1935,21 @@ def plat_switch(ss_all, src, path, keep=()):
         return ""
     have = Counter(s.get("src") or "workbuddy" for s in ss_all)
     items = []
-    for k, lab in (("", "全部"), ("workbuddy", "WorkBuddy"), ("zcode", "ZCode"),
-                   ("codex", "Codex"), ("dsh", "DSH")):
+    for k, full, short, _color in (("", "全部", "全部", ""),) + PLATFORMS:
+        n = have.get(k, 0) if k else sum(have.values())
+        title = ("%s · %d 个会话" % (full, n) if k
+                 else "全部平台 · %d 个会话" % n)
+        # 宽屏给全称，窄屏由 CSS 换成短名；hover 的 title 始终是全称。
+        lab = ('<span class="pfull">%s</span><span class="pshort">%s</span>'
+               % (esc(full), esc(short)))
         if k and not have.get(k):
             items.append('<span class="off" title="无 %s 会话记录">%s</span>'
-                         % (esc(lab), esc(lab)))
+                         % (esc(full), lab))
             continue
         qs = ([("src", k)] if k else []) + [(kk, vv) for kk, vv in keep if vv]
         href = path + ("?" + urlencode(qs) if qs else "")
-        items.append('<a class="%s" href="%s">%s</a>'
-                     % ("on" if src == k else "", esc(href), esc(lab)))
+        items.append('<a class="%s" href="%s" title="%s">%s</a>'
+                     % ("on" if src == k else "", esc(href), esc(title), lab))
     return ('<div class="platbar"><span class="tb-lab">平台</span>'
             '<span class="tb-seg">%s</span></div>' % "".join(items))
 
@@ -2211,10 +2241,7 @@ def _platform_charts(ss, total, raw_total):
     # 1) 按平台：输入 token 拼接环。三个平台各占一段，不再把 WorkBuddy 的
     #    模型分布和 Codex/ZCode 混进同一个「跨平台全量聚合模型」环。
     #    颜色与下面的折线、图例共用同一组变量，两套主题各有取值。
-    platforms = (("workbuddy", "WorkBuddy", "var(--p0)"),
-                 ("zcode", "ZCode", "var(--p1)"),
-                 ("codex", "Codex", "var(--p2)"),
-                 ("dsh", "DSH", "var(--p3)"))
+    platforms = [(k, full, color) for k, full, _s, color in PLATFORMS]
     by_src = Counter()
     for s in ss:
         by_src[s.get("src") or "workbuddy"] += s["pin"]
@@ -2523,8 +2550,7 @@ def index_overview(ss, focus=""):
     if focus:
         donut, legend, line, axis, ovt2 = _model_charts(ss, total, raw_total)
         cell = _donut_cell(donut, legend, total, "会话记录未写模型名，此图暂不可用")
-        label = {"workbuddy": "WorkBuddy", "zcode": "ZCode",
-                 "codex": "Codex"}.get(focus, focus)
+        label = PLAT_NAME.get(focus, focus)
         return _overview_shell(cell, "按模型 · 输入 token", ovt2, line, axis,
                                ws_cell, "输入 token 口径 · %s 平台内 · 只读索引" % esc(label))
     donut, legend, line, axis, ovt2 = _platform_charts(ss, total, raw_total)
@@ -2862,10 +2888,11 @@ def v_index(q):
         src = s.get("src") or "workbuddy"
         if src != "workbuddy":
             # 外部平台没有积分字段，用刊例价估算成本代替，避免整列显示 0.0 分
-            name = {"codex": "Codex", "zcode": "ZCode"}.get(src, src)
+            name = PLAT_SHORT.get(src, src)
             cost = s.get("cost")
             money = ("≈¥%.2f" % cost) if cost is not None else "—"
-            tag = ('<span class="chip ks">%s</span>' % esc(name)) + tag
+            tag = ('<span class="chip ks" title="%s">%s</span>'
+                   % (esc(PLAT_NAME.get(src, src)), esc(name))) + tag
         else:
             money = "%.1f 分" % s["credit"]
         return ('<a class="%s" href="/s/%s" style="grid-template-columns:1fr 96px 108px 92px 92px 82px 70px">'

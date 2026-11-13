@@ -1,10 +1,10 @@
-"""外部源桥接：把 Codex / ZCode / DSH 的会话接进 gen_trace 的 scan_all / build。
+"""外部源桥接：把 Codex / ZCode / DSH / Antigravity 接进 gen_trace 的 scan_all / build。
 
 对外只暴露两个函数，形状与 gen_trace 内部契约一致：
     scan_external(force=False) -> [会话摘要 dict]
     build(path)                -> (ctx, calls, meta, turns)
 
-会话 id 带平台前缀（codex- / zcode- / dsh-），伪路径走 <src>://<sid>，
+会话 id 带平台前缀（codex- / zcode- / dsh- / antigravity-），伪路径走 <src>://<sid>，
 因此下游（Store / 统计 / 搜索 / 路由）不需要知道数据来自 JSONL 还是 SQLite。
 
 单个源不可用时只跳过该源并打印一行，不影响其他平台与 WorkBuddy 主源。
@@ -12,14 +12,15 @@
 import os
 
 try:                      # 作为包导入（gen_trace / trace_server）
-    from . import codex, zcode, dsh
+    from . import codex, zcode, dsh, antigravity
 except ImportError:       # 直接运行本文件自测
     import codex
     import zcode
     import dsh
+    import antigravity
 
 _CACHE = {"sig": None, "out": []}
-_PREFIX = ("codex://", "zcode://", "dsh://")
+_PREFIX = ("codex://", "zcode://", "dsh://", "antigravity://")
 
 
 def _sig():
@@ -37,6 +38,14 @@ def _sig():
         except OSError:
             continue
         parts.append((f, st.st_mtime_ns, st.st_size))
+    # Antigravity 用会话库 + WAL，签名要连 -wal 一起看。
+    for f in antigravity.session_files():
+        for suf in ("", "-wal", "-shm"):
+            try:
+                st = os.stat(f + suf)
+            except OSError:
+                continue
+            parts.append((f + suf, st.st_mtime_ns, st.st_size))
     zp = zcode.db_path()
     for suf in ("", "-wal"):
         try:
@@ -69,6 +78,10 @@ def scan_external(force=False):
         out.extend(dsh.scan())
     except Exception as e:
         print("token-trace: DSH 源跳过（%s: %s）" % (type(e).__name__, e))
+    try:
+        out.extend(antigravity.scan())
+    except Exception as e:
+        print("token-trace: Antigravity 源跳过（%s: %s）" % (type(e).__name__, e))
 
     _CACHE["sig"] = sig
     _CACHE["out"] = out
@@ -90,6 +103,8 @@ def build(path):
             con.close()
     elif path.startswith("dsh://"):
         ctx, calls, meta, _ = dsh.build(path)
+    elif path.startswith("antigravity://"):
+        ctx, calls, meta, _ = antigravity.build(path)
     else:
         raise KeyError(path)
     return _turn_objects(ctx, calls, meta)
