@@ -19,7 +19,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 OUT = Path(sys.argv[1] if len(sys.argv) > 1 else ".demo-data").resolve()
-BASE = datetime(2026, 3, 2, 9, 12, 4, tzinfo=timezone.utc)
+# 截图要看起来像「刚刚发生」：锚点取当前时间往回 6 天。内容仍由固定种子生成，
+# 因此每次跑出来的文案、数字一致，只有日期跟着当天走。
+BASE = (datetime.now(timezone.utc) - timedelta(days=6)).replace(
+    hour=1, minute=12, second=4, microsecond=0)
 T0 = int(BASE.timestamp() * 1000)
 
 MODEL = "deepseek-v4.1-flash"          # 平台公开的模型 ID
@@ -383,6 +386,7 @@ def Rf(path, out, think, say):
 
 MAIN = dict(
     sid=sid_of("order-service-p99"),
+    day_off=0,
     title="订单服务 /checkout P99 延迟排查：慢查询与连接池",
     turns=[
         dict(q="线上 /v1/checkout 的 P99 从 180ms 涨到 1.2s，昨晚 22:10 左右开始，先帮我看下慢在哪",
@@ -608,6 +612,7 @@ MAIN = dict(
 
 SIDE = [
     dict(sid=sid_of("idempotency-key"),
+         day_off=3,
          title="为 checkout 补幂等键与重试测试",
          turns=[
              dict(q="支付回调偶发重复扣款，给 /v1/checkout 加个幂等键吧，Redis 存 24 小时",
@@ -636,6 +641,7 @@ SIDE = [
                   ]),
          ]),
     dict(sid=sid_of("release-notes"),
+         day_off=5,
          title="整理 v2.3.1 发布说明与回滚预案",
          turns=[
              dict(q="把这次的改动列成发布说明，再写个回滚预案",
@@ -682,7 +688,7 @@ def write_session(s, idx, counter):
     d = OUT / "projects" / PROJ_DIR
     d.mkdir(parents=True, exist_ok=True)
     path = d / (s["sid"] + ".jsonl")
-    ts = T0 + idx * 3600_000
+    ts = T0 + s.get("day_off", idx) * 86400_000 + idx * 3600_000
     rows = [{"type": "session-meta", "sessionId": s["sid"], "timestamp": ts,
              "cwd": CWD, "aiTitle": s["title"]}]
     n = counter
@@ -724,6 +730,161 @@ def write_session(s, idx, counter):
     return len(rows), n
 
 
+
+# ---------------------------------------------------------------- 外部源
+# Codex / DSH 的演示数据写在输出目录下的 codex/ 与 dsh/，启动服务时用
+# CODEX_HOME / DSH_HOME 指过去。这样截图里能看到平台切换真正在切数据，
+# 而不是只画一个 WorkBuddy 的壳子。
+
+def _fmt_ts(ms):
+    return datetime.fromtimestamp(ms / 1000, timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+
+
+def _zstd_frames(chunks):
+    """多帧压缩：返回 None 表示本机没有可用的 zstd，跳过该源。"""
+    try:
+        from compression import zstd as _z            # Python 3.14+
+        return b"".join(_z.compress(c.encode()) for c in chunks)
+    except Exception:
+        pass
+    try:
+        import subprocess
+        return b"".join(subprocess.run(["zstd", "-q", "-c"], input=c.encode(),
+                                       stdout=subprocess.PIPE, check=True).stdout
+                        for c in chunks)
+    except Exception:
+        return None
+
+
+CODEX_CWD = "/home/linwei/work/order-service"
+DSH_CWD = "/home/linwei/work/order-service"
+
+
+def write_codex(day_off=1):
+    """一个 Codex rollout：session_meta → turn_context → 消息 / 工具 / usage。"""
+    sid = str(uuid.uuid5(uuid.NAMESPACE_URL, "token-trace/demo/codex-index-check"))
+    d = OUT / "codex" / "sessions" / "2026" / "01" / "01"
+    d.mkdir(parents=True, exist_ok=True)
+    ts = T0 + day_off * 86400_000 - 5400_000
+    rows = [{"timestamp": ts, "type": "session_meta",
+             "payload": {"session_id": sid, "cwd": CODEX_CWD,
+                         "cli_version": "0.52.0", "model_provider": "openai"}},
+            {"timestamp": ts, "type": "turn_context",
+             "payload": {"model": "gpt-5.1-codex"}}]
+    steps = [
+        ("复核 orders 索引上线后 /checkout 的 P99，顺带看连接池水位",
+         None, None, None, 0),
+        (None, "shell", {"cmd": "psql -Atc \"select indexrelname, idx_scan from pg_stat_user_indexes where relname='orders'\""},
+         "orders_user_id_idx|184203\norders_pkey|90211\n-- 2 rows", (86_000, 71_000, 320)),
+        (None, "shell", {"cmd": "kubectl -n prod top pod -l app=order-api --containers"},
+         "NAME                          CPU(cores)   MEMORY(bytes)\norder-api-7d9c4b8f-2xk4p   118m         412Mi\n"
+         "order-api-7d9c4b8f-9vq7n   121m         409Mi", (128_000, 118_000, 410)),
+        (None, "apply_patch", {"patch": "*** Begin Patch\n*** Update File: deploy/prod/values.yaml\n@@\n-  max_connections: 40\n+  max_connections: 80\n+  statement_timeout: 800ms\n*** End Patch"},
+         "Done", (96_000, 90_000, 260)),
+        (None, "shell", {"cmd": "kubectl -n prod rollout status deploy/order-api --timeout=180s"},
+         "Waiting for deployment \"order-api\" rollout to finish: 2 of 6 updated replicas are available...\n"
+         "deployment \"order-api\" successfully rolled out", (74_000, 70_000, 380)),
+    ]
+    for q, tool, inp, out, usage in steps:
+        ts += 42_000
+        if q:
+            rows.append({"timestamp": ts, "type": "response_item",
+                         "payload": {"type": "message", "role": "user",
+                                     "content": [{"type": "input_text", "text": q}]}})
+            continue
+        rows.append({"timestamp": ts, "type": "response_item",
+                     "payload": {"type": "message", "role": "assistant",
+                                 "content": [{"type": "output_text",
+                                              "text": "先看索引命中与连接数，再决定加不加池子。"}]}})
+        ts += 900
+        rows.append({"timestamp": ts, "type": "response_item",
+                     "payload": {"type": "function_call", "name": tool,
+                                 "arguments": json.dumps(inp, ensure_ascii=False)}})
+        ts += 1200
+        rows.append({"timestamp": ts, "type": "response_item",
+                     "payload": {"type": "function_call_output", "name": tool, "output": out}})
+        ts += 600
+        pin, hit, pout = usage
+        rows.append({"timestamp": ts, "type": "token_usage_record",
+                     "payload": {"turn_id": "turn-%d" % (len(rows) // 4 + 1),
+                                 "usage": {"input_tokens": pin, "cached_input_tokens": hit,
+                                           "output_tokens": pout}}})
+    path = d / ("rollout-%s-%s.jsonl" % (_fmt_ts(T0 + day_off * 86400_000), sid))
+    with open(path, "w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    return path
+
+
+def _dsh_session(name, day_off, depth, turns):
+    """turns: [(提问, [(工具名, 入参, 输出, (pin, hit, pout), 回答)])]"""
+    sid = str(uuid.uuid5(uuid.NAMESPACE_URL, "token-trace/demo/dsh-" + name))
+    d = OUT / "dsh" / "sessions" / "--home-linwei-work-order-service--" / ("session-" + sid)
+    d.mkdir(parents=True, exist_ok=True)
+    t = T0 + day_off * 86400_000 + 3_600_000
+    ev = [{"type": "session", "version": 4, "id": sid, "createdAt": t,
+           "cwd": DSH_CWD, "isSeeded": False, "delegationDepth": depth}]
+    seq = 0
+    for q, steps in turns:
+        ev.append({"type": "turn/start", "seq": seq, "time": t, "data": {}}); seq += 1
+        t += 800
+        ev.append({"type": "user/message", "seq": seq, "time": t,
+                   "data": {"content": [{"type": "text", "text": q}]}}); seq += 1
+        for tool, inp, out, usage, say in steps:
+            t += 1500
+            ev.append({"type": "assistant/message", "seq": seq, "time": t,
+                       "data": {"message": {"source": {"provider": "deepseek",
+                                                       "model": "deepseek-v4.1-flash"},
+                                            "content": [{"type": "text", "text": say}]},
+                                "usage": {"inputTokens": usage[0], "cacheReadTokens": usage[1],
+                                          "cacheWriteTokens": 0, "outputTokens": usage[2]}}})
+            seq += 1
+            t += 600
+            ev.append({"type": "tool/call", "seq": seq, "time": t,
+                       "data": {"name": tool, "input": inp}}); seq += 1
+            t += 900
+            ev.append({"type": "tool/result", "seq": seq, "time": t,
+                       "data": {"content": out}}); seq += 1
+    lines = [json.dumps(e, ensure_ascii=False) for e in ev]
+    # 追加写 = 多个 zstd 帧，验证「只解首帧会丢内容」这条也被覆盖
+    cut = max(1, len(lines) // 2)
+    blob = _zstd_frames(["\n".join(lines[:cut]) + "\n", "\n".join(lines[cut:]) + "\n"])
+    if blob is None:
+        return None
+    path = d / "session.v4.jsonl.zstd"
+    with open(path, "wb") as f:
+        f.write(blob)
+    return path
+
+
+def write_ext_sources():
+    co = write_codex(day_off=1)
+    d1 = _dsh_session("pool-check", day_off=2, depth=0, turns=[
+        ("把连接池打满的那段时间拉出来，看看是哪些语句占着",
+         [("bash", {"cmd": "grep -c 'pool_wait>500' /var/log/order-api/slow.log"},
+           "318", (18_400, 96_000, 280),
+           "慢查询日志里有 318 条等待超过 500ms，集中在 09:14–09:22。"),
+          ("bash", {"cmd": "awk '{print $NF}' slow.log | sort | uniq -c | sort -rn | head"},
+           "  211 db_wait\n   83 pool_wait\n   24 lock_wait\n-- 3 类", (9_800, 74_000, 260),
+           "绝大多数是 db_wait，说明池子只是被慢查询占满，不是配置问题。"),
+          ("bash", {"cmd": "psql -Atc \"select query, mean_exec_time from pg_stat_statements order by mean_exec_time desc limit 3\""},
+           "select * from orders where user_id=$1|713.4\nupdate inventory set ...|182.9\nselect sku from ...|97.2",
+           (12_600, 88_000, 300), "第一条全表扫，就是它在吃连接。")]),
+        ("建索引的时候要不要停写",
+         [("read", {"path": "migrations/0021_orders_user_idx.sql"},
+           "CREATE INDEX CONCURRENTLY IF NOT EXISTS orders_user_id_idx ON orders (user_id);",
+           (6_400, 52_000, 210),
+           "用 CONCURRENTLY 就不阻塞写入，回滚只需 DROP INDEX，先把脚本补上。")]),
+    ])
+    d2 = _dsh_session("pool-verify", day_off=2, depth=1, turns=[
+        ("并行核一下三台机器上的 max_connections 是不是都改了",
+         [("bash", {"cmd": "for h in api-1 api-2 api-3; do ssh $h 'grep max_connections /etc/pgbouncer/pgbouncer.ini'; done"},
+           "max_connections = 80 (api-1)\nmax_connections = 80 (api-2)\nmax_connections = 40 (api-3)",
+           (7_200, 61_000, 240), "api-3 还是 40，配置没下发到那台。")]),
+    ])
+    return co, d1, d2
+
+
 def main():
     (OUT / "projects").mkdir(parents=True, exist_ok=True)
     db = OUT / "workbuddy.db"
@@ -741,10 +902,14 @@ def main():
     for i, s in enumerate(all_s):
         r, n = write_session(s, i, n)
         total += r
+    ext = write_ext_sources()
     print("demo 数据: %s" % OUT)
-    print("%d 个会话 / %d 条记录 / %d 次带用量的模型调用" % (len(all_s), total, n - 1))
+    print("%d 个 WorkBuddy 会话 / %d 条记录 / %d 次带用量的模型调用" % (len(all_s), total, n - 1))
+    print("外部源: Codex %s / DSH %s" %
+          ("ok" if ext[0] else "跳过", "ok" if ext[1] else "跳过（无 zstd）"))
     print("主会话 id: %s" % MAIN["sid"])
-    print("启动: WORKBUDDY_HOME=%s python3 -B trace_server.py --port 8917" % OUT)
+    print("启动: WORKBUDDY_HOME=%s CODEX_HOME=%s/../codex DSH_HOME=%s/../dsh "
+          "python3 -B trace_server.py --port 8917" % (OUT, OUT, OUT))
 
 
 if __name__ == "__main__":

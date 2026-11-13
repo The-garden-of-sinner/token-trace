@@ -1,9 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 700" width="1000" height="700" role="img" aria-label="Token 轨迹架构图：只读数据源经过数据层、计算层，分别到 HTML 渲染层与 JSON API 层，最终每请求只返回一屏">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 660" width="1000" height="660" role="img" aria-label="Token 轨迹架构图：四个只读数据源经 bridge 归一，进入数据层与计算层，最后渲染成一屏 HTML 或一条 JSON">
   <title>Token 轨迹 · 架构</title>
-  <desc>两个只读数据源汇入数据层，派生索引供计算层使用，再分别渲染成一屏 HTML 或一条 JSON。</desc>
+  <desc>WorkBuddy / Codex / ZCode / DSH 四个只读数据源经 sources/bridge.py 归一到同一套块与调用模型，由数据层与计算层处理后，每请求只返回一屏 HTML 或一条 JSON。</desc>
   <defs>
     <marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path class="arw" d="M0 0 L10 5 L0 10 z"/>
+      <path class="arw" d="M0 0 L10 5 L0 10 Z"/>
     </marker>
   </defs>
   <style>
@@ -21,11 +21,12 @@
     .term{fill:#f6f8fa;stroke:#57606a}
     .arw{fill:#8c959f}
     .h1{font-size:22px;font-weight:700}
-    .h2{font-size:16px;font-weight:700}
-    .b{font-size:14px;font-weight:600}
-    .n{font-size:13px}
+    .h2{font-size:15px;font-weight:700}
+    .b{font-size:13px;font-weight:600}
+    .n{font-size:12.5px}
     .s{font-size:12px}
-    .xs{font-size:11px}
+    .xs{font-size:10.5px}
+    .mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace}
     @media (prefers-color-scheme: dark){
       .bg{fill:#0d1117}
       .t{fill:#e6edf3}
@@ -43,91 +44,109 @@
     }
   </style>
 
-  <rect class="bg" x="0" y="0" width="1000" height="700"/>
+  <rect class="bg" x="0" y="0" width="1000" height="660"/>
   <text class="t h1" x="40" y="38">Token 轨迹 · 架构</text>
-  <text class="t sub s" x="40" y="59">只读数据源 → 后端算完 → 每请求只返回一屏</text>
-  <rect class="term" x="760" y="20" width="200" height="28" rx="14" stroke-width="1"/>
-  <text class="t sub xs" x="860" y="38" text-anchor="middle">零 JS · 零写盘 · 纯标准库</text>
-  <path class="line" d="M40 70 H960" stroke-width="1" opacity=".45"/>
+  <text class="t sub s" x="40" y="60">四个只读数据源 → 统一成块与调用 → 每请求只返回一屏</text>
+  <rect class="term" x="742" y="20" width="218" height="28" rx="14" stroke-width="1"/>
+  <text class="t sub xs" x="851" y="38" text-anchor="middle">零 JS · 零第三方包 · 零写盘</text>
+  <path class="line" d="M40 72 H960" stroke-width="1" opacity=".45"/>
 
   <!-- 数据源 -->
-  <rect class="blue" x="60" y="88" width="410" height="74" rx="10" stroke-width="1.5"/>
-  <text class="t b" x="80" y="116">会话记录  projects/**/*.jsonl</text>
-  <text class="t sub s" x="80" y="139">消息 / 工具调用 / rawUsage（token · 积分）</text>
-  <rect class="pill" x="404" y="98" width="50" height="21" rx="10" stroke-width="1"/>
-  <text class="t sub xs" x="429" y="112" text-anchor="middle">只读</text>
+  <text class="t sub xs" x="60" y="94">数据源（只读）</text>
+  <text class="t sub xs" x="960" y="94" text-anchor="end">路径可用环境变量覆盖；单源不可用只跳过该源</text>
 
-  <rect class="blue" x="530" y="88" width="410" height="74" rx="10" stroke-width="1.5"/>
-  <text class="t b" x="550" y="116">workbuddy.db · sessions</text>
-  <text class="t sub s" x="550" y="139">cwd / 标题 / 模型名（sqlite mode=ro）</text>
-  <rect class="pill" x="874" y="98" width="50" height="21" rx="10" stroke-width="1"/>
-  <text class="t sub xs" x="899" y="112" text-anchor="middle">只读</text>
+  <rect class="blue" x="60" y="102" width="204" height="80" rx="10" stroke-width="1.5"/>
+  <text class="t b" x="74" y="126">WorkBuddy</text>
+  <text class="t sub xs mono" x="74" y="146">projects/**/*.jsonl</text>
+  <text class="t sub xs mono" x="74" y="162">+ workbuddy.db</text>
+  <text class="t sub xs" x="74" y="176">token · 积分 · 上下文块</text>
 
-  <path class="line" d="M265 162 V190" marker-end="url(#arw)"/>
-  <path class="line" d="M735 162 V190" marker-end="url(#arw)"/>
-  <text class="t sub xs" x="500" y="180" text-anchor="middle">不写回 · 不复制一份数据</text>
+  <rect class="blue" x="292" y="102" width="204" height="80" rx="10" stroke-width="1.5"/>
+  <text class="t b" x="306" y="126">Codex</text>
+  <text class="t sub xs mono" x="306" y="146">sessions/**/rollout-*</text>
+  <text class="t sub xs mono" x="306" y="162">.jsonl / .jsonl.zst</text>
+  <text class="t sub xs" x="306" y="176">token · 工具 · 轮次</text>
+
+  <rect class="blue" x="524" y="102" width="204" height="80" rx="10" stroke-width="1.5"/>
+  <text class="t b" x="538" y="126">ZCode</text>
+  <text class="t sub xs mono" x="538" y="146">cli/db/db.sqlite</text>
+  <text class="t sub xs mono" x="538" y="162">+ model-io-*.jsonl</text>
+  <text class="t sub xs" x="538" y="176">token · 工具 · 会话</text>
+
+  <rect class="blue" x="756" y="102" width="204" height="80" rx="10" stroke-width="1.5"/>
+  <text class="t b" x="770" y="126">DSH</text>
+  <text class="t sub xs mono" x="770" y="146">sessions/**/session.v4</text>
+  <text class="t sub xs mono" x="770" y="162">.jsonl.zstd（多帧）</text>
+  <text class="t sub xs" x="770" y="176">usage · 事件流</text>
+
+  <!-- 汇入 bridge -->
+  <path class="line" d="M162 182 V200 H500" marker-end="url(#arw)"/>
+  <path class="line" d="M394 182 V200 H500" marker-end="url(#arw)"/>
+  <path class="line" d="M626 182 V200 H500" marker-end="url(#arw)"/>
+  <path class="line" d="M858 182 V200 H500" marker-end="url(#arw)"/>
+
+  <rect class="pill" x="60" y="204" width="900" height="54" rx="10" stroke-width="1.4"/>
+  <text class="t b" x="78" y="226">sources/bridge.py　统一入口</text>
+  <text class="t sub s" x="78" y="245">scan_all() 合并四源摘要 · build(&lt;src&gt;://&lt;sid&gt;) 分发 · 下游统计 / 检索 / 路由不关心原始格式</text>
+  <text class="t sub xs" x="942" y="245" text-anchor="end">zstd 走 ctypes</text>
+
+  <path class="line" d="M500 258 V282" marker-end="url(#arw)"/>
+  <text class="t sub xs" x="516" y="276">归一成同一套 ctx[] / calls[]</text>
 
   <!-- 数据层 -->
-  <rect class="purple" x="60" y="194" width="880" height="114" rx="12" stroke-width="1.5"/>
-  <text class="t h2" x="84" y="222">① 数据层   gen_trace.build(path, full=True) + Store(LRU 32)</text>
-  <rect class="pill" x="84" y="236" width="264" height="54" rx="8" stroke-width="1"/>
-  <text class="t n" x="216" y="258" text-anchor="middle">全文常驻 · 每块一个 URL</text>
-  <text class="t sub xs" x="216" y="277" text-anchor="middle">12 000 字/片，原文一字不丢</text>
-  <rect class="pill" x="368" y="236" width="264" height="54" rx="8" stroke-width="1"/>
-  <text class="t n" x="500" y="258" text-anchor="middle">pref[] · ctxns[] · vfs[]</text>
-  <text class="t sub xs" x="500" y="277" text-anchor="middle">O(1) 求可见区间字数</text>
-  <rect class="pill" x="652" y="236" width="264" height="54" rx="8" stroke-width="1"/>
-  <text class="t n" x="784" y="258" text-anchor="middle">acc[k] · cold · compacts</text>
-  <text class="t sub xs" x="784" y="277" text-anchor="middle">压缩感知 [vf, ctxN)</text>
+  <rect class="purple" x="60" y="286" width="900" height="100" rx="12" stroke-width="1.5"/>
+  <text class="t h2" x="80" y="312">① 数据层　build(path) 重建块序列 + Store 常驻</text>
+  <rect class="pill" x="80" y="324" width="264" height="50" rx="8" stroke-width="1"/>
+  <text class="t n" x="212" y="345" text-anchor="middle">全文常驻 · 每块一个 URL</text>
+  <text class="t sub xs" x="212" y="363" text-anchor="middle">12 000 字/片，原文一字不丢</text>
+  <rect class="pill" x="362" y="324" width="264" height="50" rx="8" stroke-width="1"/>
+  <text class="t n" x="494" y="345" text-anchor="middle">pref[] · ctxns[] · vfs[]</text>
+  <text class="t sub xs" x="494" y="363" text-anchor="middle">O(1) 求可见区间字数</text>
+  <rect class="pill" x="644" y="324" width="300" height="50" rx="8" stroke-width="1"/>
+  <text class="t n" x="794" y="345" text-anchor="middle">acc[k] · cold · compacts</text>
+  <text class="t sub xs" x="794" y="363" text-anchor="middle">压缩感知 [vf, ctxN)，只算真带上的块</text>
 
-  <path class="line" d="M500 308 V336" marker-end="url(#arw)"/>
-  <text class="t sub xs" x="516" y="326">一次解析，派生索引一次算好</text>
+  <path class="line" d="M500 386 V410" marker-end="url(#arw)"/>
+  <text class="t sub xs" x="516" y="404">一次解析，派生索引一次算好</text>
 
   <!-- 计算层 -->
-  <rect class="amber" x="60" y="340" width="880" height="112" rx="12" stroke-width="1.5"/>
-  <text class="t h2" x="84" y="368">② 计算层   重活全在后端，不把上下文展开到页面</text>
+  <rect class="amber" x="60" y="414" width="900" height="96" rx="12" stroke-width="1.5"/>
+  <text class="t h2" x="80" y="440">② 计算层　重活全在后端，不把上下文展开到页面</text>
   <g class="pill" stroke-width="1">
-    <rect x="84" y="380" width="200" height="28" rx="14"/>
-    <rect x="296" y="380" width="200" height="28" rx="14"/>
-    <rect x="508" y="380" width="200" height="28" rx="14"/>
-    <rect x="720" y="380" width="200" height="28" rx="14"/>
-    <rect x="84" y="414" width="200" height="28" rx="14"/>
-    <rect x="296" y="414" width="200" height="28" rx="14"/>
-    <rect x="508" y="414" width="200" height="28" rx="14"/>
-    <rect x="720" y="414" width="200" height="28" rx="14"/>
+    <rect x="80" y="450" width="206" height="24" rx="12"/>
+    <rect x="298" y="450" width="206" height="24" rx="12"/>
+    <rect x="516" y="450" width="206" height="24" rx="12"/>
+    <rect x="734" y="450" width="206" height="24" rx="12"/>
+    <rect x="80" y="478" width="206" height="24" rx="12"/>
+    <rect x="298" y="478" width="206" height="24" rx="12"/>
+    <rect x="516" y="478" width="206" height="24" rx="12"/>
+    <rect x="734" y="478" width="206" height="24" rx="12"/>
   </g>
   <g class="t s" text-anchor="middle">
-    <text x="184" y="399">call_state · O(1)</text>
-    <text x="396" y="399">call_outline</text>
-    <text x="608" y="399">block_users · 二分</text>
-    <text x="820" y="399">find_blocks · search</text>
-    <text x="184" y="433">trend_rows · 前缀和</text>
-    <text x="396" y="433">tool_stats · prog_of</text>
-    <text x="608" y="433">compact_rows</text>
-    <text x="820" y="433">clamp_p · pager</text>
+    <text x="183" y="466">call_state · O(1)</text>
+    <text x="401" y="466">call_outline</text>
+    <text x="619" y="466">block_users · 二分</text>
+    <text x="837" y="466">find_blocks · search</text>
+    <text x="183" y="494">trend_rows · 前缀和</text>
+    <text x="401" y="494">tool_stats · prog_of</text>
+    <text x="619" y="494">compact_rows</text>
+    <text x="837" y="494">clamp_p · pager</text>
   </g>
 
   <!-- 分叉 -->
-  <path class="line" d="M500 452 V470 H270 V490" marker-end="url(#arw)"/>
-  <path class="line" d="M500 452 V470 H730 V490" marker-end="url(#arw)"/>
+  <path class="line" d="M500 510 V528 H270 V546" marker-end="url(#arw)"/>
+  <path class="line" d="M500 510 V528 H730 V546" marker-end="url(#arw)"/>
 
   <!-- 渲染层 / API 层 -->
-  <rect class="green" x="60" y="494" width="420" height="108" rx="12" stroke-width="1.5"/>
-  <text class="t h2" x="84" y="522">③ HTML 渲染层</text>
-  <text class="t sub s" x="84" y="545">page() 统一外壳 · 面包屑 · 状态 chip</text>
-  <text class="t sub s" x="84" y="565">每页只渲染一屏（10–53 KB）</text>
-  <text class="t sub s" x="84" y="585">零 &lt;script&gt;；&lt;a href&gt; + 原生 &lt;details&gt;</text>
+  <rect class="green" x="60" y="550" width="420" height="86" rx="12" stroke-width="1.5"/>
+  <text class="t h2" x="80" y="576">③ HTML 渲染层</text>
+  <text class="t sub s" x="80" y="596">page() 统一外壳 · 按页注入 CSS · 面包屑</text>
+  <text class="t sub s" x="80" y="614">每页一屏 10–65 KB　&lt;a href&gt; + 原生 &lt;details&gt;</text>
 
-  <rect class="red" x="520" y="494" width="420" height="108" rx="12" stroke-width="1.5"/>
-  <text class="t h2" x="544" y="522">③ JSON API 层</text>
-  <text class="t sub s" x="544" y="545">17 个端点 · 统一 {ok, data, meta}</text>
-  <text class="t sub s" x="544" y="565">offset/limit 分页 · Range 语义</text>
-  <text class="t sub s" x="544" y="585">/api 文档由 ROUTE_SPEC 生成</text>
+  <rect class="red" x="540" y="550" width="420" height="86" rx="12" stroke-width="1.5"/>
+  <text class="t h2" x="560" y="576">③ JSON API 层</text>
+  <text class="t sub s" x="560" y="596">18 个端点 · 统一 {ok, data, meta}</text>
+  <text class="t sub s" x="560" y="614">offset/limit 分页 · /api 文档由 ROUTE_SPEC 生成</text>
 
-  <path class="line" d="M270 602 V620 H500 V632" marker-end="url(#arw)"/>
-  <path class="line" d="M730 602 V620 H500 V632" marker-end="url(#arw)"/>
-
-  <rect class="term" x="280" y="636" width="440" height="36" rx="18" stroke-width="1.2"/>
-  <text class="t b" x="500" y="659" text-anchor="middle">浏览器（零 JS / 零构建） · 脚本 curl</text>
-  <text class="t sub xs" x="500" y="690" text-anchor="middle">一次请求 = 一屏　|　运行期 0 字节写盘　|　Python 3.8+ 标准库　|　默认 127.0.0.1:8765</text>
+  <text class="t sub xs" x="500" y="652" text-anchor="middle">浏览器只拿一屏：0 个 &lt;script&gt;、0 个外链、禁用脚本照样能用　|　运行期 0 字节写盘　|　Python 3.8+ 标准库</text>
 </svg>

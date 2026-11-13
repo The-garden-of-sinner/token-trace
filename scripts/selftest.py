@@ -397,7 +397,7 @@ def main():
               "折线换成三根且三色互不相同（%d 段 / %d 点）" % (len(polys), len(dots)))
         check("<polygon" not in ov, "折线改为纯线条，不再叠单色面积 polygon")
         hits = re.findall(r'<div class="hz"[^>]*data-tip="([^"]+)"', ov)
-        check(7 <= len(hits) <= 26
+        check(7 <= len(hits) <= 35
               and all(all(n in h for n in ("WorkBuddy", "ZCode", "Codex")) for h in hits),
               "每个热区列都给出三平台用量（%d 列 / 自适应窗口）" % len(hits))
         check('<div class="ovline">' in ov and 'class="foc"' not in ov,

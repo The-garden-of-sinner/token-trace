@@ -251,7 +251,7 @@ def _summary(path, r, mtime):
         "miss": pin - hit, "rate": (hit / pin) if pin else 0,
         "models": models, "votes": {k: {k: v} for k, v in models.items()},
         "days": days,
-        "agent": "DSH" if r["depth"] <= 0 else "DSH·子代理 %d" % r["depth"],
+        "agent": "DSH",          # 子代理由 is_sub 标注，列表里显示「子代理 · DSH」
         "is_sub": 1 if r["depth"] > 0 else 0,
         "root": "", "first_ts": r["calls"][0]["ts"] if r["calls"] else 0,
         "agent_calls": [], "agent_reqs": [], "skipped": r["bad"], "meta_ok": True,
