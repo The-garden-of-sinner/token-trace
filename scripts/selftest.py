@@ -336,10 +336,12 @@ def main():
             T.STORE = _FakeStore(same)
             p0 = T.v_index({"p": ["0"]})
             p1 = T.v_index({"p": ["1"]})
-            check("60 个会话 · 90.0 分" in p0 and "本页 40" in p0,
-                  "分页第 1 页：分组标题用全量（60 个会话 · 90.0 分 · 本页 40）")
-            check("60 个会话 · 90.0 分" in p1 and "本页 20" in p1,
-                  "分页第 2 页：标题口径一致（60 个会话 · 90.0 分 · 本页 20）")
+            n1 = min(T.PAGE_SESSIONS, 60)
+            n2 = 60 - n1
+            check(n2 > 0 and "60 个会话 · 90.0 分" in p0 and "本页 %d" % n1 in p0,
+                  "分页第 1 页：分组标题用全量（60 个会话 · 90.0 分 · 本页 %d）" % n1)
+            check(n2 > 0 and "60 个会话 · 90.0 分" in p1 and "本页 %d" % n2 in p1,
+                  "分页第 2 页：标题口径一致（60 个会话 · 90.0 分 · 本页 %d）" % n2)
         finally:
             T.STORE = orig_store
 

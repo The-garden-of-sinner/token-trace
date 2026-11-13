@@ -39,7 +39,8 @@ import pricing  # noqa: E402  按刊例价估算成本，只用于排序与横�
 PAGE_TURNS = 20        # 会话页每页轮数
 PAGE_CALLS = 40        # 调用列表每页条数
 PAGE_BLOCKS = 40       # 单次调用的上下文块列表每页条数
-PAGE_SESSIONS = 40     # 首页每页会话数：约 0.6 KB/会话，40 条约 25 KB，留足余量
+PAGE_SESSIONS = 32     # 首页每页会话数：约 0.6 KB/会话，32 条约 20 KB；
+                       # 多平台接入后单页基数变大，40 条会贴到 80 KB 硬闸
 PART_CHARS = 12000     # 全文每片字数（约 30 KB HTML）
 SEARCH_MAX = 80        # 搜索结果上限
 FIND_MAX_BLOCKS = 40   # 块检索结果每页块数（与 PAGE_BLOCKS 同量级）
@@ -1645,6 +1646,57 @@ def monitor_link(cls="tb-ext"):
             '实时用量 ↗</a>' % (cls, esc(url)))
 
 
+_CSS_MIN = {}
+
+
+def _squeeze_css(css):
+    """去掉注释、把连续空白折成一个空格。
+
+    只动字符串之外的内容：选择器、声明、@media 的空格一个不改，因此不会
+    破坏 `content:"…"`、`calc(100% - 1px)` 这类需要精确空白的写法。
+    样式片段在进程内只有几种组合，压缩结果按原串缓存，运行期只多一次字典查找。
+    """
+    hit = _CSS_MIN.get(css)
+    if hit is not None:
+        return hit
+    out, i, n = [], 0, len(css)
+    quote = ""
+    while i < n:
+        c = css[i]
+        if quote:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(css[i + 1])
+                i += 2
+                continue
+            if c == quote:
+                quote = ""
+            i += 1
+            continue
+        if c in "\"'":
+            quote = c
+            out.append(c)
+            i += 1
+            continue
+        if c == "/" and i + 1 < n and css[i + 1] == "*":
+            j = css.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+            continue
+        if c in " \t\r\n":
+            j = i
+            while j < n and css[j] in " \t\r\n":
+                j += 1
+            out.append(" ")
+            i = j
+            continue
+        out.append(c)
+        i += 1
+    res = "".join(out).replace("; }", "}").replace(";} ", "}").replace(";} ", "}")
+    res = res.replace("} ", "}")
+    _CSS_MIN[css] = res
+    return res
+
+
 def page(title, crumbs, body, sub="", extra_head="", need=(), topbar=""):
     """need 显式声明本页需要的图表样式片段（"viz"/"hm"/"map"/"chart"/
     "fold"/"nav"/"index"），与 body 探测取并集。
@@ -1671,7 +1723,7 @@ def page(title, crumbs, body, sub="", extra_head="", need=(), topbar=""):
         css += CSS_INDEX
     head = ('<!DOCTYPE html><html lang="zh-CN"><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
-            '<title>%s · Token 轨迹</title><style>%s</style>' % (esc(title), css))
+            '<title>%s · Token 轨迹</title><style>%s</style>' % (esc(title), _squeeze_css(css)))
     back = back_link(crumbs)
     h1 = '<h1>%s<span class="badge">完整模式 · 零截断</span></h1>' % esc(title)
     if topbar:
