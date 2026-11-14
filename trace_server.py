@@ -1367,7 +1367,8 @@ CSS_VIZ = """
    颜色连续靠内层 <i> 的 opacity（0.10→1.00）：纯色透出白底就是同一种色的
    深浅渐变，两套主题自动跟随，不写死分档色；0 值只留 --track 底。
    放大写在 i 上、气泡挂在外层 div——直接 scale 外层会把气泡一起放大成糊字。
-   .fut 是本月还没到的日子，虚线框表示「未来」而不是「无记录」。 */
+   .pad（月初补位）与 .fut（本月未到）都不显示任何底色或边框，只占位保对齐；
+   「有格子但没记录」才是 --track 实底。 */
 .cal{display:flex;gap:16px;margin-top:3px}
 .cal-m{flex:1;min-width:0}
 .cal-t{display:flex;align-items:baseline;gap:5px;font-size:10px;line-height:1;
@@ -1379,9 +1380,8 @@ CSS_VIZ = """
 .cal-c i{display:block;width:100%;height:100%;border-radius:2.5px;
  transition:transform .12s var(--ease),box-shadow .12s var(--ease)}
 .cal-c:hover i{transform:scale(1.18);box-shadow:0 0 0 1px var(--fg)}
-.cal-c.pad{background:transparent}
-/* 本月还没到的日子：只留细边，和「有格子但没记录」（--track 实底）区分开 */
-.cal-c.fut{background:transparent;box-shadow:inset 0 0 0 1px var(--line)}
+/* 未来日期直接留白：不要细边框，否则月末会多出一片空心格子抢视觉 */
+.cal-c.pad,.cal-c.fut{background:transparent}
 @media(max-width:560px){.cal{gap:9px}.cal-t{font-size:9px}.cal-g{gap:2px}}
 """
 
@@ -1539,19 +1539,28 @@ CSS_INDEX = """
 .wsbar i{display:block;height:100%;background:var(--accent);opacity:.72}
 .wsrow.top .wsbar i{opacity:1}
 .wsn{text-align:right;color:var(--faint);font-variant-numeric:tabular-nums}
-/* 递归关系默认收成一行摘要，展开才铺开；箭头旋转与 hover 沿用全站缓动 */
-.wsfold>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:8px;
+/* 递归关系收起时是三行树状摘要：parent 目录 → 工作区 → 会话，逐层右移，
+   展开才铺开完整递归树；箭头旋转与 hover 沿用全站缓动。 */
+.wsfold>summary{list-style:none;cursor:pointer;display:flex;align-items:flex-start;gap:8px;
  padding:8px 11px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);
  font-size:10.5px;color:var(--muted);
  transition:border-color .28s var(--ease),background-color .28s var(--ease),color .28s var(--ease)}
 .wsfold>summary::-webkit-details-marker{display:none}
-.wsfold>summary:before{content:"";flex:none;width:0;height:0;border-left:5px solid var(--faint);
+.wsfold>summary:before{content:"";flex:none;width:0;height:0;margin-top:4px;
+ border-left:5px solid var(--faint);
  border-top:4px solid transparent;border-bottom:4px solid transparent;transition:transform .28s var(--ease)}
 .wsfold[open]>summary:before{transform:rotate(90deg)}
 .wsfold>summary:hover{border-color:var(--accent);color:var(--fg)}
-.wsfold-h{margin-left:auto;color:var(--faint);font-size:10px}
+.wsfold-h{margin-left:auto;margin-top:3px;color:var(--faint);font-size:10px}
 .wsfold[open] .wsfold-h{font-size:0}
 .wsfold[open] .wsfold-h:after{content:"收起";font-size:10px}
+/* 连接符用等宽字体固定宽度，三行的数字才各自对齐成一条竖线 */
+.wstree{display:flex;flex-direction:column;gap:3px;line-height:1.3;min-width:0}
+.wsl{display:block;white-space:nowrap;font-variant-numeric:tabular-nums}
+.wsl i{font-style:normal;display:inline-block;color:var(--dim);
+ font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+.wsl.l0 i{width:0}.wsl.l1 i{width:24px}.wsl.l2 i{width:48px}
+.wsl b{font-weight:600;color:var(--fg)}
 .wsfold .in{padding-top:9px}
 .wsrow.more{color:var(--faint);padding-left:9px;font-size:10px}
 /* 首页工具条：文字导航（细分隔）+ 右侧排序分段控件 + 元信息，一条横带三个分区。
@@ -2436,10 +2445,14 @@ def _workspace_cell(ss, total):
             tree.append('<div class="wsrow sub more">└ 其余 %d 个…</div>' % (len(kids) - 4))
     if len(parents) > 8:
         tree.append('<div class="wsrow more">另有 %d 个父目录…</div>' % (len(parents) - 8))
-    # 递归关系收进展开卡片：默认只留一行摘要，避免把整列拉得比另外两列长一截
+    # 收起状态不再把三层数量挤成一行：按 parent 目录 → 工作区 → 会话分三行、
+    # 逐层右移成一棵小树；展开后仍是完整递归树。
     ws_cell = ('<details class="wsfold"><summary>'
-               '<span class="wsfold-t">%d 个 parent 目录 · %d 个工作区 · %d 个会话</span>'
-               '<span class="wsfold-h">展开</span></summary>'
+               '<span class="wstree">'
+               '<span class="wsl l0"><i></i><b>%d</b> 个 parent 目录</span>'
+               '<span class="wsl l1"><i>├─</i><b>%d</b> 个工作区</span>'
+               '<span class="wsl l2"><i>│ └─</i><b>%d</b> 个会话</span>'
+               '</span><span class="wsfold-h">展开</span></summary>'
                '<div class="in">%s</div></details>' %
                (len(parents), len(leaf), len(ss), "".join(tree)))
     return ws_cell

@@ -118,7 +118,7 @@ python3 trace_server.py        # http://127.0.0.1:8765/，Ctrl+C 退出
 
 **概览与图表**
 
-- **首页全库画像**：「全部」视图是按平台拼接的输入 token 环（弧宽对极小占比做可见性保底、图例给真实占比）+ 近三个自然月并排的**月历热力图**（每月 7 列 × 6 行方块，竖向周一→周日；格子涂当天全平台合计、颜色连续，气泡里再按平台拆开；月初补位 / 本月未到 / 无记录三种空格分开画）；切到单个平台回到按模型环 + 同一套月历（改用该平台颜色）
+- **首页全库画像**：「全部」视图是按平台拼接的输入 token 环（弧宽对极小占比做可见性保底、图例给真实占比）+ 近三个自然月并排的**月历热力图**（每月 7 列 × 6 行方块，竖向周一→周日；格子涂当天全平台合计、颜色连续，气泡里再按平台拆开；月初补位与本月未到的日子直接留白，只有「有格子但无记录」才留实底）；切到单个平台回到按模型环 + 同一套月历（改用该平台颜色）
 - **上下文趋势**：五类内容的累计组成与净变化（25% 网格、左侧刻度、命中率折线、压缩 / 冷启动旗标），按调用 / 按轮切换
 - **上下文块地图**：面积 ∝ 字数的 SVG treemap，按类型着色、同色深浅二次编码，点任意块直跳全文
 - **活动日历**：GitHub 式 7 × 26 周贡献图，按每次调用的真实发生日分色
@@ -307,7 +307,7 @@ tar 成员与 gzip 容器头的 `mtime` 都固定为 0（`GzipFile(..., mtime=0)
 当前版本 **v1.4.0**（版本号写在 `scripts/VERSION`）：
 
 - **Antigravity 接入**：解析 `~/.gemini/antigravity/conversations/*.db` 里的 protobuf 遥测（手写 wire 格式解码，不引依赖），平台增至五个，`DeepSeek Harness` 改用全称、平台切换栏按短名收紧
-- **首页走势改成月历**：近三个自然月并排，每月 7 列 × 6 行方块；「全部」视图格子涂当天全平台合计、气泡按平台拆分，单平台视图改用平台色；色阶连续（`0.10 + 0.90 × √(当天/窗口峰值)`），三种空格语义分开
+- **首页走势改成月历**：近三个自然月并排，每月 7 列 × 6 行方块；「全部」视图格子涂当天全平台合计、气泡按平台拆分，单平台视图改用平台色；色阶连续（`0.10 + 0.90 × √(当天/窗口峰值)`），补位与未来日期留白、无记录留实底
 - **环图闭合弦修复**：`stroke-dasharray` 两段之和恰好等于周长时，Chrome 的浮点误差会把多出的那一小段画成跨圆直线弦，改 `"seg 200"` 让周期远大于周长
 - **平台筛选覆盖到底**：首页 / 全局统计 / 工具与命令 / 全文搜索共用同一套切换；本机没有该平台会话时置灰并写明原因，不做死链
 - **DSH 接入**：解析 `session.v4.jsonl.zstd` 事件流（多帧 zstd），会话 id 前缀 `dsh-`
@@ -613,7 +613,7 @@ token（按 `providerData.model` 分组，展示名取全库得票最多的写�
 | --- | --- | --- |
 | 设计令牌 + 深浅色 | `CSS` 的 `:root` 与末尾 `prefers-color-scheme` media；主色 `--accent` 为低饱和墨青，文字链接用 `--link` / `--link-h` 并有全局 `a` 兜底；分类色 `--p0..--p4` 同时供行内 style、SVG 与渐变 | 基础 CSS 每页固定 +1.4 KB；行内颜色不再写死，深浅色各切一次 |
 | 连续数字带与概览面板 | `kpi()` 先用 `kpi_cols()` 按项数选列（6/7/4…），再用 `kpi_weights()` 按每格「文字宽度估算」输出 `--kcols` 的 `fr` 表：CJK 记 1em、西文 0.56em，同一列的多个单元格取最宽值，加固定底盘并按 2.6 倍封顶。grid + 1px 间隙露出底色当分隔线，数值 `white-space:nowrap`；首页 `CSS_INDEX` 的 `.hero` 再把 KPI 与三张图合成一块面板、细竖线分栏 | 列数固定后每行填满，列宽随内容伸缩（28 项实测 1 : 1.9），窄屏 3 列 / 2 列自动降级；纯服务端算宽度，无脚本 |
-| 工作区递归卡片 | 第三列的「父目录 → 工作区」树收进原生 `<details class="wsfold">`，摘要只留「N 个 parent 目录 · M 个工作区 · K 个会话」，展开才铺开（父目录最多 8 个、每个最多 4 个子项，其余折叠计数） | 零 JS；默认高度约一行，不会把三列拉得高低差一截 |
+| 工作区递归卡片 | 第三列的「父目录 → 工作区」树收进原生 `<details class="wsfold">`，收起时是**三行树状摘要**（`N 个 parent 目录` / `├─ M 个工作区` / `│ └─ K 个会话`，逐层右移、连接符等宽对齐），展开才铺开（父目录最多 8 个、每个最多 4 个子项，其余折叠计数） | 零 JS；折叠状态三层数量一眼可读，不像一行摘要那样要自己去数 |
 | 构成环 | `compose_bar()` 用 `stroke-dasharray` 画 5 段，配明细行与 ≈ 口径标注 | 5 个 `<circle>` |
 | 渐变色带柱 | `gradient_segments()` 只输出 5 个累计百分比 `--s0..--s4`，渐变本体写在 `.trend a i` 一条规则里 | 40 根柱从约 200 个 DOM 降到 40 个，趋势页反而更小 |
 | 热力图 / 块地图 / 走势线 | `activity_heatmap()` 复用已缓存的会话索引；`block_treemap()` 只在 `/map` 页排序一次块列表；`visible_series()` 直接读 `_derive()` 的前缀和 | 不新增索引、不缓存大对象 |
@@ -626,7 +626,7 @@ token（按 `providerData.model` 分组，展示名取全库得票最多的写�
 | 轮来源标签 | `gen_trace.user_kind()` 按 `isCompacted` / `isSummary` / `<cb_summary`、`<task-notification` / `<task-id>`、`isMeta`、`startsNewUserRequest` / `<user_query` 依次判定；`user_disp()` 给非真人输入一句可读摘要，`q` 原文保留供全文检索；`turn_chip()` 输出标签，`v_session` 按 `?kind=` 筛选 | 复用解析时已在手的字段，零额外遍历、零新增索引 |
 | 静态模式同步 | `gen_trace.render()` 的每轮概要同样显示类别标签与可读摘要 | 离线兜底口径一致 |
 | 子代理标注 | `scan_all()` 在同一次逐行遍历里记 `isSubAgent` / `agent` / `rootRequestId` / 首条时间戳 / `Agent` 调用的时间与 `conversationRequestId`（`agent_reqs`）；`subagent_relations()` 先用 `rootRequestId` 精确匹配，匹配不到再退回 5 秒时间窗，会话列表按结果打「子代理」/「N 个子代理」标签 | 零额外全库遍历；精确匹配 O(子代理数)，只有未命中的才走时间窗；无子代理时无标签，页面不多一块高度 |
-| 首页全库画像 | `index_overview(ss, focus)` 按视图分发：`focus` 为空（全部）走 `_platform_charts()` 输出平台拼接环 + 月历热力图，非空走 `_model_charts()` 输出模型环 + 同款月历（平台色）；`_workspace_cell()` / `_donut_cell()` / `_overview_shell()` 复用外壳。只聚合 `STORE.sessions()` 的 `src / models / model / days / mtime / ws / pin`。平台环对 <1.2% 的段做弧宽保底后等比归一，图例仍给真实占比；模型环按占比 ≥1% 筛选主模型、其余并入「其他 N 个模型」。热力图走 `_by_day()` → `_cal_window()`（近 `CAL_MONTHS=3` 个自然月）→ `_cal_block()`：每月 7 列 × 6 行方格、`opacity=0.10+0.90*√(v/窗口峰值)` 做**连续**色阶，补位 / 未来 / 无记录三种空格分色；全部视图格子涂全天合计，`[data-tip]` 气泡给日期与各平台输入 token | 零额外全库遍历、零新增索引、不依赖 `workbuddy.db`；旧索引无 `days` 时回退 `mtime` 兜底；悬停零 JS |
+| 首页全库画像 | `index_overview(ss, focus)` 按视图分发：`focus` 为空（全部）走 `_platform_charts()` 输出平台拼接环 + 月历热力图，非空走 `_model_charts()` 输出模型环 + 同款月历（平台色）；`_workspace_cell()` / `_donut_cell()` / `_overview_shell()` 复用外壳。只聚合 `STORE.sessions()` 的 `src / models / model / days / mtime / ws / pin`。平台环对 <1.2% 的段做弧宽保底后等比归一，图例仍给真实占比；模型环按占比 ≥1% 筛选主模型、其余并入「其他 N 个模型」。热力图走 `_by_day()` → `_cal_window()`（近 `CAL_MONTHS=3` 个自然月）→ `_cal_block()`：每月 7 列 × 6 行方格、`opacity=0.10+0.90*√(v/窗口峰值)` 做**连续**色阶，补位与未来日期只占位不显示、无记录才留 `--track` 实底；全部视图格子涂全天合计，`[data-tip]` 气泡给日期与各平台输入 token | 零额外全库遍历、零新增索引、不依赖 `workbuddy.db`；旧索引无 `days` 时回退 `mtime` 兜底；悬停零 JS |
 | 同机互链 | `monitor_url()` 用 `http.client` 直连 loopback 的 `/api/ping`（不走 `http_proxy`、150 ms 超时），成功与失败都按 `MONITOR_TTL` 缓存；`monitor_link()` 只在探测通过时输出 `<a target="_blank" rel="noopener">` | 每 15 s 最多一次本地连接；不通时输出 0 字节，页面不留死链 |
 | 统一检索 | `search_box()` 用 `radio + label` 分段开关（无 `id`、无脚本、同页可复用），固定 form action，`v_search()` 按 `mode` 分流到 `v_find()` | 零 JS、零新增路由；分页仍直连 `/find` |
 | 按需 CSS（续） | `CSS_FOLD` / `CSS_NAV` / `CSS_INDEX` 分别按 `hitfold` / `navgrid` / `ovgrid` 注入 | 只有用到的页面才带对应图表样式 |

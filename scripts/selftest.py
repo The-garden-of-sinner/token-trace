@@ -402,8 +402,16 @@ def main():
               "每格都有「日期 + 合计 + 平台拆分」气泡（%d 格）" % len(tips))
         check(any(t.endswith("无记录") for t in tips),
               "没有会话的那天留空格（--track 底），不写成 0 token")
-        check('class="cal-c fut"' in ov and 'class="cal-c pad"' in ov,
-              "本月未到的日子是虚线空槽、月初按星期补齐空位（不和「无记录」混同）")
+        check('class="cal-c fut"' in ov and 'class="cal-c pad"' in ov
+              and '.cal-c.pad,.cal-c.fut{background:transparent}' in T.CSS_VIZ,
+              "本月未到与月初补位都只占位、不显示任何底色或边框")
+        check('.cal-c.fut{background:transparent;box-shadow' not in T.CSS_VIZ,
+              "未来日期不再画细边空心框，月末不会多出一片空心格")
+        fold = T._workspace_cell(tri, sum(s["pin"] for s in tri))
+        check(fold.count('<span class="wsl l') == 3
+              and '个 parent 目录' in fold and '个工作区' in fold
+              and '个会话' in fold and '<span class="wsfold-t">' not in fold,
+              "工作区折叠摘要分三行树状展示（parent → 工作区 → 会话），不再挤成一行")
         # 连续色：同一平台三天给 100 / 400 / 1600，opacity 必须是三个不同值
         d1 = time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400))
         d2 = time.strftime("%Y-%m-%d", time.localtime(time.time() - 2 * 86400))
@@ -565,8 +573,11 @@ def main():
               and "按每次调用实际发生日" not in ov
               and "右侧数字为会话数" not in ov,
               "首页三栏下方的小字脚注已移除")
-        check(re.search(r"\d+ 个 parent 目录 · \d+ 个工作区 · \d+ 个会话", ov),
-              "递归关系摘要含 parent 目录 / 工作区 / 会话三项")
+        check(re.search(r"<b>\d+</b> 个 parent 目录", ov)
+              and re.search(r"<b>\d+</b> 个工作区", ov)
+              and re.search(r"<b>\d+</b> 个会话", ov)
+              and ov.count('<span class="wsl l') == 3,
+              "递归关系摘要分三行树状展示 parent 目录 / 工作区 / 会话")
 
         print("== 子代理关系推断 ==")
 
