@@ -1349,7 +1349,7 @@ CSS_VIZ = """
 .spark polyline.gap{stroke-dasharray:1.6 1.3;stroke-width:1.4;opacity:.75;animation:none}
 /* 单日孤点：零长度线段 + 圆头线帽 = 屏幕上的正圆。用 <circle> 会被非等比
    拉伸成扁椭圆（viewBox 100×80 → 容器 400×72），实测看着像一条小横杠。 */
-.spark .dot{stroke-width:2.8;stroke-linecap:round;animation:none;
+.spark .dot{stroke-width:3.2;stroke-linecap:round;animation:none;
  vector-effect:non-scaling-stroke}
 /* 0 值参考线：所有平台的空档竖线都落到这条中性虚线上，共用一条、不按平台
    各画（四条同高会叠成一条，颜色互相盖住） */
@@ -2195,8 +2195,7 @@ def subagent_relations(ss):
 
 
 
-TREND_MAX_DAYS = 370      # 逐日窗口上限：更早的会话不画，避免一天不到 1px
-TREND_MIN_DAYS = 7        # 窗口下限：只在今天跑过时也给出前后文，而不是孤点
+TREND_DAYS = 30           # 首页折线窗口：固定近 30 天（逐日），更早的不画
 
 def _plot_base(H):
     """折线图的 0 值 y 坐标：留 2 个 viewBox 单位给底边，避免线被裁掉半条。"""
@@ -2241,25 +2240,18 @@ def _by_day(ss, key_of):
     return out
 
 
-def _daily_series(series, keys, today, min_days=TREND_MIN_DAYS,
-                  max_days=TREND_MAX_DAYS):
-    """把逐日数据摊成等长的逐日序列，返回 (日期列表, {平台: [每天输入 token]})。
+def _daily_series(series, keys, right, days=TREND_DAYS):
+    """把逐日数据摊成等长的逐日序列，窗口固定 [right-days+1, right]。
 
-    右端固定「今天」，左端取这些会话里最早的一天，至少 min_days、至多
-    max_days 天。**不做周聚合**：窗口再长也是一天一桶，悬停与折线都是逐日
-    精度；超长历史只在左端裁掉最旧的部分，不改变粒度。
+    返回 (日期列表, {平台: [每天输入 token]})。窗口**不随数据跨度伸缩**：
+    换个平台横轴还是同一条，切换视图不会「刻度悄悄变了」；代价是更早的
+    会话不画（用户 2026-11-14 明确接受）。也**不做周聚合**——按周会把
+    「那天有 6800 万」这种真实尖峰抹平，也看不出到底是哪天跑的。
     """
-    days = sorted(set(d for m in series.values() for d in m if d))
-    span = min_days
-    if days:
-        try:
-            span = (today - datetime.date.fromisoformat(days[0])).days + 1
-        except (ValueError, TypeError):
-            span = min_days
-    n = max(min_days, min(max_days, span))
-    day_list = [today - datetime.timedelta(days=n - 1 - i) for i in range(n)]
+    day_list = [right - datetime.timedelta(days=days - 1 - i)
+                for i in range(days)]
     pos = dict((d.strftime("%Y-%m-%d"), i) for i, d in enumerate(day_list))
-    out = dict((k, [0.0] * n) for k in keys)
+    out = dict((k, [0.0] * days) for k in keys)
     for k in keys:
         for d, v in (series.get(k) or {}).items():
             j = pos.get(d)
@@ -2374,10 +2366,10 @@ def _platform_charts(ss, total, raw_total):
              "".join(arcs) + '</svg>')
 
     # 2) 按时间 × 按平台：每个平台一条不同颜色的折线，共用同一纵轴（全平台
-    #    峰值），才能比出各平台每天的用量级差。窗口**逐日**：右端固定今天，
-    #    左端取这些会话里最早的一天。原来「14 天内活跃平台不足两个就退到按
-    #    周」会让 Codex / ZCode / DSH 这些几个月前跑过的平台只剩几个周桶，
-    #    既看不出哪天跑过，也会把「那天有 6800 万」这种真实尖峰抹平。
+    #    峰值），才能比出各平台每天的用量级差。窗口**逐日、近 30 天**：一天
+    #    一个桶，悬停和折线都是逐日精度；再老的会话不画（铺到 66 天时一半
+    #    宽度是空的，读起来还不如截断）。不做周聚合——按周会把「那天有
+    #    6800 万」这种真实尖峰抹平，也看不出到底是哪天跑的。
     today = datetime.date.today()
     keys = [k for k, _, _ in platforms] + ["other"]
 
@@ -2476,6 +2468,9 @@ def _model_charts(ss, total, raw_total):
         else:
             by_model[s.get("model") or "未知模型"] += s["pin"]
     by_model = Counter(G.merge_model_counter(by_model))
+    # 只有模型名、没有输入 token 的条目（外部平台偶有 0 值记录）不画进图例：
+    # 会多出一行「其他 1 个模型 0 0.0%」，纯噪声。
+    by_model = Counter(dict((k, v) for k, v in by_model.items() if v > 0))
     residual = raw_total - sum(by_model.values())
     if residual > 0:
         by_model["未知模型"] += residual
@@ -2506,11 +2501,21 @@ def _model_charts(ss, total, raw_total):
              '<circle class="trk" cx="21" cy="21" r="15.9155"/>' +
              "".join(arcs) + '</svg>')
 
-    # 逐日单条折线 + 面积，空档同样剪到 0 用虚线连。窗口与「全部」视图同一
-    # 口径：右端今天、左端本视图最早的一天，**不写死 14 天**——固定 14 天会把
-    # 更早的会话整段切掉，长历史平台看起来像只有最近两周跑过。
+    # 逐日单条折线 + 面积，空档同样剪到 0。窗口与「全部」视图同一口径：近
+    # 30 天逐日、右端今天。**但如果这 30 天里这个平台一次都没跑**（ZCode /
+    # Antigravity 这类只在一段时间内用过的），把右端挪到它最后一次活跃的
+    # 那天，否则整张图是空的——那才是真的「什么也看不到」。
     today = datetime.date.today()
-    day_list, buckets = _daily_series(_by_day(ss, lambda _s: "all"), ["all"], today)
+    series = _by_day(ss, lambda _s: "all")
+    right = today
+    day_list, buckets = _daily_series(series, ["all"], right)
+    if not any(buckets["all"]):
+        last = max((d for d in (series.get("all") or {}) if d), default="")
+        try:
+            right = datetime.date.fromisoformat(last)
+        except (ValueError, TypeError):
+            right = today
+        day_list, buckets = _daily_series(series, ["all"], right)
     n = len(day_list)
     vals = buckets["all"]
     peak = max(vals) or 0
@@ -2531,8 +2536,9 @@ def _model_charts(ss, total, raw_total):
                     (i * step, step, d, kh(v), y / H * 100.0))
     line = '<div class="ovline">%s%s</div>' % (svg, "".join(cols))
     axis = ('<div class="ovaxis"><span>%s</span><span>峰值 %s token/天</span>'
-            '<span>今天</span></div>' %
-            (day_list[0].strftime("%m-%d"), kh(peak)))
+            '<span>%s</span></div>' %
+            (day_list[0].strftime("%m-%d"), kh(peak),
+             "今天" if right == today else right.strftime("%m-%d")))
     return donut, (legend if usable else []), line, axis, "按时间 · 输入 token · 逐日"
 
 

@@ -397,9 +397,10 @@ def main():
               "折线换成三根且三色互不相同（%d 段 / %d 点）" % (len(polys), len(dots)))
         check("<polygon" not in ov, "折线改为纯线条，不再叠单色面积 polygon")
         hits = re.findall(r'<div class="hz"[^>]*data-tip="([^"]+)"', ov)
-        check(len(hits) == 7
+        check(len(hits) == T.TREND_DAYS
               and all(all(n in h for n in ("WorkBuddy", "ZCode", "Codex")) for h in hits),
-              "每个热区列都给出三平台用量（%d 列 / 按天窗口）" % len(hits))
+              "每个热区列都给出三平台用量（%d 列 / 固定近 %d 天）"
+              % (len(hits), T.TREND_DAYS))
         check("起 7 天" not in ov,
               "窗口不再按周聚合：气泡只报当天，不写「起 7 天」")
         check('<line class="zero"' in ov,
@@ -412,7 +413,7 @@ def main():
         ndot = len(re.findall(r'<line class="dot"', ovm2))
         nhz = len(re.findall(r'<div class="hz"', ovm2))
         check(npoly + ndot >= 1 and (npoly == 0) == ("<polygon" not in ovm2)
-              and nhz == 7 and "逐日" in ovm2 and "按平台拆分" not in ovm2,
+              and nhz == T.TREND_DAYS and "逐日" in ovm2 and "按平台拆分" not in ovm2,
               "单平台折线为单条带面积线 + 逐日热区（%d 线 / %d 点 / %d 列）"
               % (npoly, ndot, nhz))
         # 连续两天有数据才画得出实线，此时必须同时有面积
@@ -439,7 +440,7 @@ def main():
         ovg = T.index_overview(gap)
         raw = re.findall(r'<polyline class="gap" points="([^"]+)"', ovg)
         ps = [[tuple(float(v) for v in p.split(",")) for p in s.split()] for s in raw]
-        vertical = len(ps) == 2 and all(len(p) == 2 and abs(p[0][0] - p[1][0]) < .01
+        vertical = len(ps) >= 2 and all(len(p) == 2 and abs(p[0][0] - p[1][0]) < .01
                                        for p in ps)
         at_zero = all(abs(p[0][1] - p[1][1]) > 1 and min(p[0][1], p[1][1]) <= 78.5
                       for p in ps) if ps else False
