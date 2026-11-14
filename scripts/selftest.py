@@ -384,46 +384,45 @@ def main():
         check("其他" in ovx and len(pctsx) == 4 and abs(sum(pctsx) - 100) < 0.15,
               "未知来源归「其他」，环仍闭合到 100%%（%s）" % pctsx)
         ovm = T.index_overview(tri, focus="zcode")
-        check("按模型 · 输入 token" in ovm and "按时间 · 输入 token" in ovm
+        check("按模型 · 输入 token" in ovm and "按时间 · 逐日热力图" in ovm
               and "按平台 · 输入 token" not in ovm and "ZCode 平台内" in ovm,
-              "单平台视图回到按模型环 + 按天单线，不再做平台拼接")
+              "单平台视图回到按模型环 + 单行热力图，不再做平台拼接")
 
-        print("== 全库画像：三平台三色折线 ==")
-        # 线可能被空档切成多段；只有一天有数据时该段退化成圆点，两者都算「图元」
-        polys = re.findall(r'<polyline[^>]*style="stroke:([^;]+);stroke-width:([\d.]+)"', ov)
-        dots = re.findall(r'<line class="dot"[^>]*style="stroke:([^"]+)"', ov)
-        marks = [c for c, _ in polys] + dots
-        check(len(marks) == 3 and len(set(marks)) == 3,
-              "折线换成三根且三色互不相同（%d 段 / %d 点）" % (len(polys), len(dots)))
-        check("<polygon" not in ov, "折线改为纯线条，不再叠单色面积 polygon")
-        hits = re.findall(r'<div class="hz"[^>]*data-tip="([^"]+)"', ov)
-        check(len(hits) == T.TREND_DAYS
-              and all(all(n in h for n in ("WorkBuddy", "ZCode", "Codex")) for h in hits),
-              "每个热区列都给出三平台用量（%d 列 / 固定近 %d 天）"
-              % (len(hits), T.TREND_DAYS))
-        check("起 7 天" not in ov,
-              "窗口不再按周聚合：气泡只报当天，不写「起 7 天」")
-        check('<line class="zero"' in ov,
-              "折线底部有 0 值参考线，空档虚线贴着它走")
-        check('<div class="ovline">' in ov and 'class="foc"' not in ov,
-              "折线用 .ovline 叠热区列（零 JS），不再画静态焦点线")
+        print("== 全库画像：逐日热力图（连续色） ==")
+        check("<polyline" not in ov and "<svg class=\"spark\"" not in ov,
+              "折线图已整体换成热力图，不再输出 polyline")
+        rows = re.findall(r'<div class="hrow">(.*?)</div></div>', ov, re.S)
+        labs = re.findall(r'<span class="hlab">([^<]+)</span>', ov)
+        tips = re.findall(r'<div class="hcell" data-tip="([^"]+)"', ov)
+        check(len(labs) == 3 and labs == ["WB", "ZCode", "Codex"],
+              "热力图一行一个平台、行标用短名（%s）" % labs)
+        check(len(tips) == 3 * T.TREND_DAYS and all("&#10;" in t for t in tips),
+              "每格一天、每格都有日期+用量气泡（%d 格 / %d 天×3 行）"
+              % (len(tips), T.TREND_DAYS))
+        check(ov.count('<div class="hcell" data-tip="%s&#10;无记录">'
+                       % today[5:].replace("-", "-")) >= 1
+              or '无记录' in ov,
+              "没有会话的那天留空格（--track 底），不写成 0 token")
+        # 连续色：同一平台三天给 100 / 400 / 1600，opacity 必须是三个不同值
+        d1 = time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400))
+        d2 = time.strftime("%Y-%m-%d", time.localtime(time.time() - 2 * 86400))
+        cont = [_plat("h1", "workbuddy", 100, today),
+                _plat("h2", "workbuddy", 400, d1),
+                _plat("h3", "workbuddy", 1600, d2)]
+        ovc = T.index_overview(cont)
+        ops = re.findall(r'background:var\(--p0\);opacity:([\d.]+)', ovc)
+        vals = sorted(set(float(o) for o in ops))
+        check(len(vals) == 3 and vals[0] > 0.1 and abs(vals[-1] - 1.0) < .01,
+              "同一平台色深按值连续变化，不是分档（%s）" % vals)
+        check(all(0.10 < v <= 1.0 for v in vals),
+              "最浅不早于 10%% 不透明，0 值才用空底，浅色仍可辨")
         ovm2 = T.index_overview(tri, focus="zcode")
-        # 只有一天有数据时实线退化成圆点（polyline 画不出一个点），面积也不画
-        npoly = len(re.findall(r'<polyline pathLength=', ovm2))
-        ndot = len(re.findall(r'<line class="dot"', ovm2))
-        nhz = len(re.findall(r'<div class="hz"', ovm2))
-        check(npoly + ndot >= 1 and (npoly == 0) == ("<polygon" not in ovm2)
-              and nhz == T.TREND_DAYS and "逐日" in ovm2 and "按平台拆分" not in ovm2,
-              "单平台折线为单条带面积线 + 逐日热区（%d 线 / %d 点 / %d 列）"
-              % (npoly, ndot, nhz))
-        # 连续两天有数据才画得出实线，此时必须同时有面积
-        two = [_plat("e", "zcode", 100, today),
-               _plat("f", "zcode", 50,
-                     time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400)))]
-        ov2 = T.index_overview(two, focus="zcode")
-        check(len(re.findall(r'<polyline pathLength=', ov2)) == 1
-              and "<polygon" in ov2 and "逐日" in ov2,
-              "单平台连续两天有数据时画出实线并补面积")
+        check(ovm2.count('class="hmap tall"') == 1
+              and len(re.findall(r'<div class="hcell"', ovm2)) == T.TREND_DAYS
+              and "逐日热力图" in ovm2 and "按平台拆分" not in ovm2,
+              "单平台视图是单行加高热力图（%d 格）"
+              % len(re.findall(r'<div class="hcell"', ovm2)))
+        check("<polyline" not in ovm2, "单平台视图也不再画折线")
         # 平台切换：没有会话的平台置灰并写明原因，有数据的可点
         sw = T.plat_switch(tri, "", "/stats")
         check('class="off"' in sw and "无 DeepSeek Harness 会话记录" in sw,
@@ -431,21 +430,6 @@ def main():
         sw2 = T.plat_switch(tri, "zcode", "/stats")
         check('href="/stats?src=zcode"' in sw2 and 'class="on"' in sw2,
               "平台切换：有数据的平台可点，当前平台高亮")
-        # 空档：不斜着连过去，而是在最后一个有数据的点垂直剪到 0 线、再从
-        # 下一个有数据的点垂直抬起来。断言几何形状，而不只是「有 gap 段」。
-        gap = [_plat("g1", "workbuddy", 100, today),
-               _plat("g2", "workbuddy", 100,
-                     time.strftime("%Y-%m-%d",
-                                   time.localtime(time.time() - 9 * 86400)))]
-        ovg = T.index_overview(gap)
-        raw = re.findall(r'<polyline class="gap" points="([^"]+)"', ovg)
-        ps = [[tuple(float(v) for v in p.split(",")) for p in s.split()] for s in raw]
-        vertical = len(ps) >= 2 and all(len(p) == 2 and abs(p[0][0] - p[1][0]) < .01
-                                       for p in ps)
-        at_zero = all(abs(p[0][1] - p[1][1]) > 1 and min(p[0][1], p[1][1]) <= 78.5
-                      for p in ps) if ps else False
-        check(vertical and at_zero,
-              "空档两端垂直剪到 0 线，中间不留斜线（%d 段竖线）" % len(ps))
         # 平台注册表与切换栏：全称给宽屏、短名留给窄屏，无数据的新平台置灰
         sw = T.plat_switch(tri, "", "/stats")
         check(len(T.PLATFORMS) == 5

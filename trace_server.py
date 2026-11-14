@@ -1343,34 +1343,24 @@ CSS_VIZ = """
 .spark polyline{fill:none;stroke:var(--accent);stroke-width:1.6;vector-effect:non-scaling-stroke;
  stroke-dasharray:100;animation:tt-draw .88s var(--ease-in) backwards}
 .spark polygon{fill:var(--accent);opacity:.11;animation:tt-area .72s .18s var(--ease-in) backwards}
-/* 空档：没有会话的那几桶从前一点垂直剪到 0 线，隔一段再垂直抬起来，与
-   「用量真的掉到 0」区分开。dasharray 用 viewBox 单位（这条不设 pathLength），
-   不做描线动画、直接显示。 */
-.spark polyline.gap{stroke-dasharray:1.6 1.3;stroke-width:1.4;opacity:.75;animation:none}
-/* 单日孤点：零长度线段 + 圆头线帽 = 屏幕上的正圆。用 <circle> 会被非等比
-   拉伸成扁椭圆（viewBox 100×80 → 容器 400×72），实测看着像一条小横杠。 */
-.spark .dot{stroke-width:3.2;stroke-linecap:round;animation:none;
- vector-effect:non-scaling-stroke}
-/* 0 值参考线：所有平台的空档竖线都落到这条中性虚线上，共用一条、不按平台
-   各画（四条同高会叠成一条，颜色互相盖住） */
-.spark .zero{stroke:var(--line2);stroke-width:1.2;stroke-dasharray:2.2 2.6;
- vector-effect:non-scaling-stroke}
 @keyframes tt-draw{from{stroke-dashoffset:100}to{stroke-dashoffset:0}}
 @keyframes tt-area{from{opacity:0;transform:translateY(4px)}to{opacity:.11;transform:none}}
-/* 首页「按时间」折线：viewBox 纵向 80px，渲染高由 .ovline 给定，折线不再被
-   横拉压扁；其上的热区列复用 [data-tip] 气泡（零 JS），悬停出焦点竖线。
-   容器定位在绝对层，动画交给里面的 polyline，不再整块禁用。 */
-.ovline{position:relative;height:72px;margin-top:2px}
-.ovline .spark{position:absolute;inset:0;height:100%}
-/* 三平台三条线的共用图例 */
-.ovlegend{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:10px;
- color:var(--muted);margin-top:5px}
-.ovlegend .lg{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
-.ovlegend .lg i{width:11px;height:2px;border-radius:2px;flex:none}
-.ovline .hz{position:absolute;top:0;bottom:0;cursor:default}
-.ovline .hz i{position:absolute;left:50%;width:0;height:0;border-left:1px dashed var(--accent);
- opacity:0;transition:opacity .12s}
-.ovline .hz:hover i{opacity:.55;height:100%;top:0}
+/* 首页「按时间」热力图：一行一个平台、一格一天。
+   颜色连续靠 opacity（0.10→1.00）：格子里是纯平台色，透出白底就是同一种
+   色的深浅渐变，两套主题都自动跟随，不写死 20 个分档色。
+   0 值不透明度、只留 --track 底，和「有数据但很小」区分开。 */
+.hmap{display:flex;flex-direction:column;gap:2px;margin-top:4px}
+.hrow{display:flex;align-items:center;gap:7px}
+.hlab{flex:none;width:30px;font-size:9px;line-height:1;color:var(--faint);
+ text-align:right;letter-spacing:.02em}
+.hcells{flex:1;display:grid;gap:1px;min-width:0}
+.hcell{position:relative;height:15px;border-radius:2px;background:var(--track);
+ cursor:default;transition:transform .12s var(--ease)}
+.hcell i{display:block;width:100%;height:100%;border-radius:2px}
+.hcell:hover{transform:scale(1.18);outline:1px solid var(--fg);outline-offset:0}
+/* 单平台只有一行：格子给足高度，否则 13px 的一条看不出深浅 */
+.hmap.tall .hcell{height:30px}
+.hmap.tall .hcells{gap:2px}
 """
 
 CSS_HM = """
@@ -1990,8 +1980,8 @@ def compose_bar(comp):
         seg = max(0.0, length - gap)
         # rotate 写进属性而非 CSS：每段独立定位，避免 CSS transform 覆盖 SVG transform
         arcs.append('<circle cx="21" cy="21" r="15.9155" style="stroke:%s" '
-                    'stroke-dasharray="%.3f %.3f" transform="rotate(%.2f 21 21)"/>' %
-                    (PALETTE[k], seg, 100 - seg, -90 + acc * 3.6))
+                    'stroke-dasharray="%.3f 200" transform="rotate(%.2f 21 21)"/>' %
+                    (PALETTE[k], seg, -90 + acc * 3.6))
         rows.append('<div class="sl"><i style="background:%s"></i>'
                     '<span class="g">%s</span><b>≈ %s 字</b><em>%.1f%%</em></div>' %
                     (PALETTE[k], esc(TYPES[k]), nfmt(v), v / total * 100))
@@ -2197,24 +2187,37 @@ def subagent_relations(ss):
 
 TREND_DAYS = 30           # 首页折线窗口：固定近 30 天（逐日），更早的不画
 
-def _plot_base(H):
-    """折线图的 0 值 y 坐标：留 2 个 viewBox 单位给底边，避免线被裁掉半条。"""
-    return H - 2.0
+def _heat_block(rows, day_list, tall=False):
+    """逐日热力图：一行一个平台，一格一天，颜色连续。
 
+    rows = [(标签, 颜色, [每天输入 token])]，长度与 day_list 对齐。
 
-def _plot_y(v, mx, H=80, TOP=4):
-    base = _plot_base(H)
-    return base - v / mx * (base - TOP)
-
-
-def _zero_rule(H, lift=2.0):
-    """0 值参考线：整条底线的虚线基准。
-
-    所有平台的空档竖线都落到这条线上，所以只需要一条中性线，不必给每个
-    平台各画一条横向虚线——四条同高会叠成一条、颜色互相盖住。
+    颜色是**连续**的（不是分档）：同一行内 `opacity = 0.10 + 0.90 * √(v/峰值)`，
+    格子在白底上就是同一种色的深浅渐变。取 √ 是因为日用量是重尾分布——
+    WorkBuddy 峰值 222M、平常 50M，线性映射会把大半个月压成同一个浅色。
+    每行按**自身峰值**归一：Codex 峰值只有 68K，跟 222M 共用一条色标的话
+    整行都会是近乎透明的白。代价是跨行的深浅不可直接比大小，所以气泡里
+    一律给绝对 token 数。
     """
-    y = H - lift
-    return '<line class="zero" x1="0" y1="%.1f" x2="100" y2="%.1f"/>' % (y, y)
+    out = ['<div class="hmap%s">' % (" tall" if tall else "")]
+    for label, color, vals in rows:
+        mx = max(vals) or 1
+        cells = []
+        for i, v in enumerate(vals):
+            d = day_list[i].strftime("%m-%d")
+            if v <= 0:
+                cells.append('<div class="hcell" data-tip="%s&#10;无记录">'
+                             '<i></i></div>' % d)
+            else:
+                cells.append('<div class="hcell" data-tip="%s&#10;%s token">'
+                             '<i style="background:%s;opacity:%.3f"></i></div>'
+                             % (d, kh(v), color, 0.10 + 0.90 * (v / mx) ** .5))
+        out.append('<div class="hrow">%s<span class="hcells" style="'
+                   'grid-template-columns:repeat(%d,1fr)">%s</span></div>'
+                   % (('<span class="hlab">%s</span>' % esc(label)) if label else "",
+                      len(vals), "".join(cells)))
+    out.append('</div>')
+    return "".join(out)
 
 
 def _by_day(ss, key_of):
@@ -2246,7 +2249,7 @@ def _daily_series(series, keys, right, days=TREND_DAYS):
     返回 (日期列表, {平台: [每天输入 token]})。窗口**不随数据跨度伸缩**：
     换个平台横轴还是同一条，切换视图不会「刻度悄悄变了」；代价是更早的
     会话不画（用户 2026-11-14 明确接受）。也**不做周聚合**——按周会把
-    「那天有 6800 万」这种真实尖峰抹平，也看不出到底是哪天跑的。
+    「那天有 6800 万」这种真实尖峰抹平。
     """
     day_list = [right - datetime.timedelta(days=days - 1 - i)
                 for i in range(days)]
@@ -2258,75 +2261,6 @@ def _daily_series(series, keys, right, days=TREND_DAYS):
             if j is not None:
                 out[k][j] += v
     return day_list, out
-
-
-def _series_polys(active, buckets, n, mx, H=80, TOP=4, area=False):
-    """逐桶画「有数据处实线、空档剪到 0」的多平台折线。
-
-    连续有数据的桶连成实线；中间没有会话的桶**不斜着连过去**——那样会画出
-    一条又长又缓的假下降线，看着像用量真的在衰减。改成：在最后一个有数据
-    的点垂直剪到 0 参考线，隔一段再从下一个有数据的点垂直抬起来，读起来是
-    「这几天没跑」。横向的零段共用 `_zero_rule()` 那条中性虚线，不按平台各
-    画一条（四条同高会叠成一条、颜色互相盖住）。
-    只有一个桶有数据时画成圆点（polyline 画不出一个点）。
-    area=True 时给每段实线补一块面积，空档处不填，避免把断档盖成连续。
-    """
-    base = _plot_base(H)               # 与 _zero_rule 的 lift 保持一致
-
-    def y_of(v):
-        # 真实 0 落在 base 上，不落到 H：贴着 viewBox 底边画会被裁掉半条线
-        return _plot_y(v, mx, H, TOP)
-
-    # 数据点画在「热区列中心」而不是列边界：悬停列按 left=i*100/n、宽 100/n
-    # 切开，点若落在 i*100/(n-1)（首尾贴边）会和气泡错开小半列。
-    x_of = lambda i: (i + 0.5) * 100.0 / max(1, n)
-
-    out = []
-    for idx, (k, _name, color) in enumerate(active):
-        vals = buckets[k]
-        delay = idx * 0.13
-        i = 0
-        while i < n:
-            if vals[i] > 0:
-                j = i
-                while j < n and vals[j] > 0:
-                    j += 1
-                if j - i == 1:
-                    # 圆点不能用 <circle>：viewBox 100×80 被非等比拉伸到容器后，
-                    # 圆会变成横向的扁椭圆（实测像一条小横杠）。改画零长度线段
-                    # + 圆头线帽 + non-scaling-stroke，屏幕上是正圆且不随缩放变形。
-                    out.append('<line class="dot" x1="%.2f" y1="%.2f" x2="%.2f" y2="%.2f" '
-                               'style="stroke:%s"/>'
-                               % (x_of(i), y_of(vals[i]), x_of(i),
-                                  y_of(vals[i]) + .01, color))
-                else:
-                    pts = " ".join("%.2f,%.2f" % (x_of(x), y_of(vals[x]))
-                                   for x in range(i, j))
-                    out.append('<polyline pathLength="100" points="%s" '
-                               'style="stroke:%s;stroke-width:1.7;animation-delay:%.2fs"/>'
-                               % (pts, color, delay))
-                    if area:
-                        out.append('<polygon class="area" points="%.2f,%.1f %s %.2f,%.1f" '
-                                   'style="fill:%s;animation-delay:%.2fs"/>'
-                                   % (x_of(i), base, pts, x_of(j - 1), base, color, delay))
-                i = j
-            else:
-                j = i
-                while j < n and vals[j] == 0:
-                    j += 1
-                # 进入空档：从最后一个有数据的点垂直剪到 0 线
-                if i > 0:
-                    out.append('<polyline class="gap" points="%.2f,%.2f %.2f,%.1f" '
-                               'style="stroke:%s"/>'
-                               % (x_of(i - 1), y_of(vals[i - 1]),
-                                  x_of(i - 1), base, color))
-                # 离开空档：从 0 线垂直抬到下一个有数据的点
-                if j < n:
-                    out.append('<polyline class="gap" points="%.2f,%.1f %.2f,%.2f" '
-                               'style="stroke:%s"/>'
-                               % (x_of(j), base, x_of(j), y_of(vals[j]), color))
-                i = j
-    return "".join(out)
 
 
 def _platform_charts(ss, total, raw_total):
@@ -2354,8 +2288,8 @@ def _platform_charts(ss, total, raw_total):
     for (_key, name, color, val), frac, vfrac in zip(segs, fracs, vis):
         seg = max(0.0, vfrac - min(.6, vfrac * .2))
         arcs.append('<circle cx="21" cy="21" r="15.9155" style="stroke:%s;animation-delay:%.2fs" '
-                    'stroke-dasharray="%.3f %.3f" transform="rotate(%.2f 21 21)"/>' %
-                    (color, .03 + acc / 100.0 * .42, seg, 100 - seg, -90 + acc * 3.6))
+                    'stroke-dasharray="%.3f 200" transform="rotate(%.2f 21 21)"/>' %
+                    (color, .03 + acc / 100.0 * .42, seg, -90 + acc * 3.6))
         legend.append('<div class="sl"><i style="background:%s"></i>'
                       '<span class="g">%s</span><b>%s</b><em>%.1f%%</em></div>' %
                       (color, esc(name), kh(val), frac))
@@ -2365,11 +2299,10 @@ def _platform_charts(ss, total, raw_total):
              '<circle class="trk" cx="21" cy="21" r="15.9155"/>' +
              "".join(arcs) + '</svg>')
 
-    # 2) 按时间 × 按平台：每个平台一条不同颜色的折线，共用同一纵轴（全平台
-    #    峰值），才能比出各平台每天的用量级差。窗口**逐日、近 30 天**：一天
-    #    一个桶，悬停和折线都是逐日精度；再老的会话不画（铺到 66 天时一半
-    #    宽度是空的，读起来还不如截断）。不做周聚合——按周会把「那天有
-    #    6800 万」这种真实尖峰抹平，也看不出到底是哪天跑的。
+    # 2) 按时间 × 按平台：一行一个平台、一格一天的逐日热力图，颜色连续。
+    #    窗口**逐日、近 30 天**：一天一格，鼠标停在哪天就是哪天的绝对 token
+    #    数；再老的会话不画（铺到 66 天时一半宽度是空的，读起来还不如截断）。
+    #    不做周聚合——按周会把「那天有 6800 万」这种真实尖峰抹平。
     today = datetime.date.today()
     keys = [k for k, _, _ in platforms] + ["other"]
 
@@ -2383,37 +2316,17 @@ def _platform_charts(ss, total, raw_total):
     if any(buckets["other"]):
         active.append(("other", "其他", "var(--p4)"))
     peak = max((v for k in buckets for v in buckets[k]), default=0) or 0
-    mx = peak or 1
-    # 视图纵向 80（横向仍 100），按容器真实宽高拉伸；每条线 inline 指定颜色，
-    # 覆盖 .spark polyline 的 var(--accent) 默认色。
-    H, TOP = 80, 4
-    polys = _series_polys(active, buckets, n, mx, H, TOP)
-    svg = ('<svg class="spark" viewBox="0 0 100 %d" preserveAspectRatio="none" '
-           'role="img" aria-label="按天、按平台的输入 token 走势">' %
-           H + _zero_rule(H) + polys + '</svg>')
-    # 悬停：图上叠一层 HTML 热区列（零 JS，复用 [data-tip] 气泡），一次列出
-    # 当天三个平台各自的输入量；焦点竖线按当天最高点同比例换算。
-    step = 100.0 / n
-    cols = []
-    for i in range(n):
-        top = max((buckets[k][i] for k in buckets), default=0)
-        y = _plot_y(top, mx, H, TOP)
-        tip = day_list[i].strftime("%m-%d") + "".join(
-            "&#10;%s %s token" % (name, kh(buckets[k][i]))
-            for k, name, _ in active)
-        cols.append('<div class="hz" style="left:%.2f%%;width:%.2f%%" '
-                    'data-tip="%s"><i style="top:%.2f%%"></i></div>' %
-                    (i * step, step, tip, y / H * 100.0))
-    line_legend = ('<div class="ovlegend">' + "".join(
-        '<span class="lg"><i style="background:%s"></i>%s</span>' %
-        (color, esc(name))
-        for _k, name, color in active) + '</div>')
-    line = '<div class="ovline">%s%s</div>%s' % (svg, "".join(cols), line_legend)
-    axis = ('<div class="ovaxis"><span>%s</span><span>单平台峰值 %s token/天</span>'
+    # 每行用自己的平台色，色深按该行峰值连续映射；行标用短名（WB / ZC / CX /
+    # DSH / AG），全称在环的图例里，不重复占宽。
+    rows = [(PLAT_SHORT.get(key, key), color, buckets[key])
+            for key, _name, color in active]
+    heat = _heat_block(rows, day_list)
+    axis = ('<div class="ovaxis"><span>%s</span>'
+            '<span>每行按自身峰值上色 · 最暗 %s token/天</span>'
             '<span>今天</span></div>' %
             (day_list[0].strftime("%m-%d"), kh(peak)))
-    ovt2 = "按时间 × 平台 · 逐日 · 近 %d 天" % n
-    return donut, legend, line, axis, ovt2
+    ovt2 = "按时间 × 平台 · 逐日热力图 · 近 %d 天" % n
+    return donut, legend, heat, axis, ovt2
 
 
 def _workspace_cell(ss, total):
@@ -2490,8 +2403,8 @@ def _model_charts(ss, total, raw_total):
         seg = max(0.0, frac - min(.6, frac * .2))
         color = colors[i % len(colors)]
         arcs.append('<circle cx="21" cy="21" r="15.9155" style="stroke:%s;animation-delay:%.2fs" '
-                    'stroke-dasharray="%.3f %.3f" transform="rotate(%.2f 21 21)"/>' %
-                    (color, .03 + acc / 100.0 * .42, seg, 100 - seg, -90 + acc * 3.6))
+                    'stroke-dasharray="%.3f 200" transform="rotate(%.2f 21 21)"/>' %
+                    (color, .03 + acc / 100.0 * .42, seg, -90 + acc * 3.6))
         legend.append('<div class="sl"><i style="background:%s"></i>'
                       '<span class="g">%s</span><b>%s</b><em>%.1f%%</em></div>' %
                       (color, esc(cut(name, 20)), kh(val), frac))
@@ -2516,30 +2429,15 @@ def _model_charts(ss, total, raw_total):
         except (ValueError, TypeError):
             right = today
         day_list, buckets = _daily_series(series, ["all"], right)
-    n = len(day_list)
     vals = buckets["all"]
     peak = max(vals) or 0
-    mx = peak or 1
-    H, TOP = 80, 4
-    polys = _series_polys([("all", "", "var(--accent)")], buckets, n, mx, H, TOP,
-                          area=True)
-    svg = ('<svg class="spark" viewBox="0 0 100 %d" preserveAspectRatio="none" '
-           'role="img" aria-label="按天输入 token 走势">' %
-           H + _zero_rule(H) + polys + '</svg>')
-    step = 100.0 / n
-    cols = []
-    for i, v in enumerate(vals):
-        d = day_list[i].strftime("%m-%d")
-        y = _plot_y(v, mx, H, TOP)
-        cols.append('<div class="hz" style="left:%.2f%%;width:%.2f%%" '
-                    'data-tip="%s&#10;输入 %s token"><i style="top:%.2f%%"></i></div>' %
-                    (i * step, step, d, kh(v), y / H * 100.0))
-    line = '<div class="ovline">%s%s</div>' % (svg, "".join(cols))
-    axis = ('<div class="ovaxis"><span>%s</span><span>峰值 %s token/天</span>'
+    # 单平台只有一行，格子给足高度（12px 的一行像条细缝，看不出深浅）
+    heat = _heat_block([("", "var(--accent)", vals)], day_list, tall=True)
+    axis = ('<div class="ovaxis"><span>%s</span><span>最暗 = 峰值 %s token/天</span>'
             '<span>%s</span></div>' %
             (day_list[0].strftime("%m-%d"), kh(peak),
              "今天" if right == today else right.strftime("%m-%d")))
-    return donut, (legend if usable else []), line, axis, "按时间 · 输入 token · 逐日"
+    return donut, (legend if usable else []), heat, axis, "按时间 · 逐日热力图"
 
 
 def _donut_cell(donut, legend, total, empty_msg):
