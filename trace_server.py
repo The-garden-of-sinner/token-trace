@@ -13,6 +13,7 @@
 
 import argparse
 import bisect
+import calendar
 import datetime
 import hmac
 import html
@@ -1345,22 +1346,26 @@ CSS_VIZ = """
 .spark polygon{fill:var(--accent);opacity:.11;animation:tt-area .72s .18s var(--ease-in) backwards}
 @keyframes tt-draw{from{stroke-dashoffset:100}to{stroke-dashoffset:0}}
 @keyframes tt-area{from{opacity:0;transform:translateY(4px)}to{opacity:.11;transform:none}}
-/* 首页「按时间」热力图：一行一个平台、一格一天。
-   颜色连续靠 opacity（0.10→1.00）：格子里是纯平台色，透出白底就是同一种
-   色的深浅渐变，两套主题都自动跟随，不写死 20 个分档色。
-   0 值不透明度、只留 --track 底，和「有数据但很小」区分开。 */
-.hmap{display:flex;flex-direction:column;gap:2px;margin-top:4px}
-.hrow{display:flex;align-items:center;gap:7px}
-.hlab{flex:none;width:30px;font-size:9px;line-height:1;color:var(--faint);
- text-align:right;letter-spacing:.02em}
-.hcells{flex:1;display:grid;gap:1px;min-width:0}
-.hcell{position:relative;height:15px;border-radius:2px;background:var(--track);
- cursor:default;transition:transform .12s var(--ease)}
-.hcell i{display:block;width:100%;height:100%;border-radius:2px}
-.hcell:hover{transform:scale(1.18);outline:1px solid var(--fg);outline-offset:0}
-/* 单平台只有一行：格子给足高度，否则 13px 的一条看不出深浅 */
-.hmap.tall .hcell{height:30px}
-.hmap.tall .hcells{gap:2px}
+/* 首页「按时间」：按月日历，每月一块 7 列（周一→周日）× 6 行的方块阵。
+   颜色连续靠内层 <i> 的 opacity（0.10→1.00）：纯色透出白底就是同一种色的
+   深浅渐变，两套主题自动跟随，不写死分档色；0 值只留 --track 底。
+   放大写在 i 上、气泡挂在外层 div——直接 scale 外层会把气泡一起放大成糊字。
+   .fut 是本月还没到的日子，虚线框表示「未来」而不是「无记录」。 */
+.cal{display:flex;gap:16px;margin-top:3px}
+.cal-m{flex:1;min-width:0}
+.cal-t{display:flex;align-items:baseline;gap:5px;font-size:10px;line-height:1;
+ color:var(--faint);margin:0 0 6px;letter-spacing:.04em;white-space:nowrap}
+.cal-t em{font-style:normal;margin-left:auto;font-size:9.5px;opacity:.8;
+ font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis}
+.cal-g{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:2.5px}
+.cal-c{position:relative;aspect-ratio:1;border-radius:2.5px;background:var(--track)}
+.cal-c i{display:block;width:100%;height:100%;border-radius:2.5px;
+ transition:transform .12s var(--ease),box-shadow .12s var(--ease)}
+.cal-c:hover i{transform:scale(1.18);box-shadow:0 0 0 1px var(--fg)}
+.cal-c.pad{background:transparent}
+/* 本月还没到的日子：只留细边，和「有格子但没记录」（--track 实底）区分开 */
+.cal-c.fut{background:transparent;box-shadow:inset 0 0 0 1px var(--line)}
+@media(max-width:560px){.cal{gap:9px}.cal-t{font-size:9px}.cal-g{gap:2px}}
 """
 
 CSS_HM = """
@@ -1744,7 +1749,7 @@ def page(title, crumbs, body, sub="", extra_head="", need=(), topbar=""):
     """
     need = set(need or ())
     css = CSS
-    if "viz" in need or 'class="viz' in body:
+    if "viz" in need or 'class="viz' in body or 'class="cal"' in body:
         css += CSS_VIZ
     if "hm" in need or 'class="hm"' in body:
         css += CSS_HM
@@ -2185,39 +2190,94 @@ def subagent_relations(ss):
 
 
 
-TREND_DAYS = 30           # 首页折线窗口：固定近 30 天（逐日），更早的不画
+CAL_MONTHS = 3            # 首页日历窗口：本月 + 前两个自然月（3 块月历并排）
 
-def _heat_block(rows, day_list, tall=False):
-    """逐日热力图：一行一个平台，一格一天，颜色连续。
 
-    rows = [(标签, 颜色, [每天输入 token])]，长度与 day_list 对齐。
+def _month_list(right, n=CAL_MONTHS):
+    """从 right 所在月起往前数 n 个自然月，返回 [(年, 月)]，升序。"""
+    y, m = right.year, right.month
+    out = []
+    for _ in range(n):
+        out.append((y, m))
+        m -= 1
+        if m == 0:
+            y, m = y - 1, 12
+    return list(reversed(out))
 
-    颜色是**连续**的（不是分档）：同一行内 `opacity = 0.10 + 0.90 * √(v/峰值)`，
-    格子在白底上就是同一种色的深浅渐变。取 √ 是因为日用量是重尾分布——
-    WorkBuddy 峰值 222M、平常 50M，线性映射会把大半个月压成同一个浅色。
-    每行按**自身峰值**归一：Codex 峰值只有 68K，跟 222M 共用一条色标的话
-    整行都会是近乎透明的白。代价是跨行的深浅不可直接比大小，所以气泡里
-    一律给绝对 token 数。
+
+def _month_span(months):
+    """窗口的日期串区间 [起, 止]，用来判断窗口里到底有没有数据。"""
+    y0, m0 = months[0]
+    y1, m1 = months[-1]
+    return ("%04d-%02d-01" % (y0, m0),
+            "%04d-%02d-%02d" % (y1, m1, calendar.monthrange(y1, m1)[1]))
+
+
+def _cal_block(per_day, months, today, color, short=None):
+    """按月日历热力图：每月一块 7 列（周一→周日）× 6 行的方块。
+
+    per_day = {"YYYY-MM-DD": {平台: 输入 token}}，缺的日期当无记录。
+    short   给了就说明是「全部」视图：气泡里按平台拆开列明细，空格子是纯日期。
+    返回 (html, 单日峰值)，峰值给底部说明行用。
+
+    颜色连续：`opacity = 0.10 + 0.90 * √(v/峰值)`，取 √ 是因为日用量重尾
+    （WorkBuddy 峰值 2.2 亿、平常 5000 万，线性映射会把大半月压成同一个浅色）。
+    三个月共用**同一个**峰值，否则同一块日历内深浅不可比；代价是某月用量
+    整体偏小时会偏浅，气泡里一律给绝对 token 数。
     """
-    out = ['<div class="hmap%s">' % (" tall" if tall else "")]
-    for label, color, vals in rows:
-        mx = max(vals) or 1
-        cells = []
-        for i, v in enumerate(vals):
-            d = day_list[i].strftime("%m-%d")
+    mx = 0.0
+    for y, m in months:
+        for d in range(1, calendar.monthrange(y, m)[1] + 1):
+            day = datetime.date(y, m, d)
+            if day > today:
+                continue
+            v = sum((per_day.get(day.strftime("%Y-%m-%d")) or {}).values())
+            if v > mx:
+                mx = v
+    mx = mx or 1.0
+
+    out = ['<div class="cal">']
+    for y, m in months:
+        first = datetime.date(y, m, 1)
+        ndays = calendar.monthrange(y, m)[1]
+        # 周日/周六开头各有 6 / 5 个空位：用空白格补齐，日期才落在正确的星期列
+        cells = ['<div class="cal-c pad"></div>'] * first.weekday()
+        mon_tot = 0.0
+        for d in range(1, ndays + 1):
+            day = datetime.date(y, m, d)
+            k = day.strftime("%Y-%m-%d")
+            if day > today:
+                cells.append('<div class="cal-c fut"></div>')
+                continue
+            rec = per_day.get(k) or {}
+            v = sum(rec.values())
+            mon_tot += v
             if v <= 0:
-                cells.append('<div class="hcell" data-tip="%s&#10;无记录">'
-                             '<i></i></div>' % d)
-            else:
-                cells.append('<div class="hcell" data-tip="%s&#10;%s token">'
-                             '<i style="background:%s;opacity:%.3f"></i></div>'
-                             % (d, kh(v), color, 0.10 + 0.90 * (v / mx) ** .5))
-        out.append('<div class="hrow">%s<span class="hcells" style="'
-                   'grid-template-columns:repeat(%d,1fr)">%s</span></div>'
-                   % (('<span class="hlab">%s</span>' % esc(label)) if label else "",
-                      len(vals), "".join(cells)))
+                cells.append('<div class="cal-c" data-tip="%s&#10;无记录">'
+                             '<i></i></div>' % k)
+                continue
+            tip = [k, "%s token" % kh(v)]
+            if short:
+                # 只有一天一份数据时明细跟合计重复，省掉这一行，气泡更短
+                hits = [(pk, pv) for pk, pv in
+                        sorted(rec.items(), key=lambda x: -x[1]) if pv > 0]
+                if len(hits) > 1:
+                    for pk, pv in hits[:4]:
+                        tip.append("　%s %s" % (short.get(pk, pk), kh(pv)))
+                    if len(hits) > 4:
+                        tip.append("　其余 %d 个平台" % (len(hits) - 4))
+            cells.append('<div class="cal-c" data-tip="%s">'
+                         '<i style="background:%s;opacity:%.3f"></i></div>'
+                         % ("&#10;".join(tip), color,
+                            0.10 + 0.90 * (v / mx) ** .5))
+        # 补齐到整行，再补到 42 格（6 行）：三块月历高度一致，底部才平齐
+        cells += ['<div class="cal-c pad"></div>'] * (7 - len(cells) % 7)
+        cells += ['<div class="cal-c pad"></div>'] * (42 - len(cells))
+        out.append('<div class="cal-m"><span class="cal-t">%d月<em>%s</em></span>'
+                   '<div class="cal-g">%s</div></div>'
+                   % (m, kh(mon_tot), "".join(cells)))
     out.append('</div>')
-    return "".join(out)
+    return "".join(out), mx
 
 
 def _by_day(ss, key_of):
@@ -2243,24 +2303,23 @@ def _by_day(ss, key_of):
     return out
 
 
-def _daily_series(series, keys, right, days=TREND_DAYS):
-    """把逐日数据摊成等长的逐日序列，窗口固定 [right-days+1, right]。
-
-    返回 (日期列表, {平台: [每天输入 token]})。窗口**不随数据跨度伸缩**：
-    换个平台横轴还是同一条，切换视图不会「刻度悄悄变了」；代价是更早的
-    会话不画（用户 2026-11-14 明确接受）。也**不做周聚合**——按周会把
-    「那天有 6800 万」这种真实尖峰抹平。
+def _cal_window(per_day, today):
+    """日历窗口：默认近 3 个自然月。窗口里一次都没跑就把右端挪到最后一个
+    活跃月——ZCode / Antigravity 这类只在一段时间内用过的平台，否则整块日历
+    全是空格子，那才是真的「什么也看不到」。返回 (月份列表, 右端日期)。
     """
-    day_list = [right - datetime.timedelta(days=days - 1 - i)
-                for i in range(days)]
-    pos = dict((d.strftime("%Y-%m-%d"), i) for i, d in enumerate(day_list))
-    out = dict((k, [0.0] * days) for k in keys)
-    for k in keys:
-        for d, v in (series.get(k) or {}).items():
-            j = pos.get(d)
-            if j is not None:
-                out[k][j] += v
-    return day_list, out
+    months = _month_list(today)
+    lo, hi = _month_span(months)
+    if any(lo <= d <= hi and sum(r.values()) > 0 for d, r in per_day.items()):
+        return months, today
+    last = max((d for d, r in per_day.items() if d and sum(r.values()) > 0),
+               default="")
+    try:
+        y, m = int(last[:4]), int(last[5:7])
+        month_end = datetime.date(y, m, calendar.monthrange(y, m)[1])
+    except (ValueError, TypeError):
+        return months, today
+    return _month_list(month_end), month_end
 
 
 def _platform_charts(ss, total, raw_total):
@@ -2310,22 +2369,31 @@ def _platform_charts(ss, total, raw_total):
         k = s.get("src") or "workbuddy"
         return k if k in keys else "other"
 
-    day_list, buckets = _daily_series(_by_day(ss, key_of), keys, today)
-    n = len(day_list)
-    active = [(k, name, color) for k, name, color in platforms if any(buckets[k])]
-    if any(buckets["other"]):
-        active.append(("other", "其他", "var(--p4)"))
-    peak = max((v for k in buckets for v in buckets[k]), default=0) or 0
-    # 每行用自己的平台色，色深按该行峰值连续映射；行标用短名（WB / ZC / CX /
-    # DSH / AG），全称在环的图例里，不重复占宽。
-    rows = [(PLAT_SHORT.get(key, key), color, buckets[key])
-            for key, _name, color in active]
-    heat = _heat_block(rows, day_list)
-    axis = ('<div class="ovaxis"><span>%s</span>'
-            '<span>每行按自身峰值上色 · 最暗 %s token/天</span>'
-            '<span>今天</span></div>' %
-            (day_list[0].strftime("%m-%d"), kh(peak)))
-    ovt2 = "按时间 × 平台 · 逐日热力图 · 近 %d 天" % n
+    # 2) 按时间：近 3 个自然月的月历方块，格子涂的是**全平台合计**，气泡里
+    #    再按平台拆开。不做「一平台一行」——五行 15px 长条既难看又读不出星期，
+    #    平台维度的信息已经由左边的环 + 图例承担了。
+    today = datetime.date.today()
+    keys = [k for k, _, _ in platforms] + ["other"]
+
+    def key_of(s):
+        k = s.get("src") or "workbuddy"
+        return k if k in keys else "other"
+
+    per_day = {}
+    for k, days in _by_day(ss, key_of).items():
+        for d, v in days.items():
+            if v > 0:
+                b = per_day.setdefault(d, {})
+                b[k] = b.get(k, 0.0) + v
+    months, right = _cal_window(per_day, today)
+    heat, peak = _cal_block(per_day, months, right, "var(--accent)",
+                            dict(PLAT_NAME, other="其他"))
+    axis = ('<div class="ovaxis"><span>%d年%d月起</span>'
+            '<span>格 = 日 · 竖向周一→周日 · 最深 = 单日 %s</span>'
+            '<span>%s</span></div>' %
+            (months[0][0], months[0][1], kh(peak),
+             "今天" if right == today else right.strftime("%Y-%m")))
+    ovt2 = "按时间 · 近 %d 个月 · 输入 token" % len(months)
     return donut, legend, heat, axis, ovt2
 
 
@@ -2371,7 +2439,7 @@ def _workspace_cell(ss, total):
     return ws_cell
 
 
-def _model_charts(ss, total, raw_total):
+def _model_charts(ss, total, raw_total, focus=""):
     """单平台视图：接多平台前的口径——按模型输入 token 环 + 按天单条折线。"""
     by_model = Counter()
     for s in ss:
@@ -2414,30 +2482,23 @@ def _model_charts(ss, total, raw_total):
              '<circle class="trk" cx="21" cy="21" r="15.9155"/>' +
              "".join(arcs) + '</svg>')
 
-    # 逐日单条折线 + 面积，空档同样剪到 0。窗口与「全部」视图同一口径：近
-    # 30 天逐日、右端今天。**但如果这 30 天里这个平台一次都没跑**（ZCode /
-    # Antigravity 这类只在一段时间内用过的），把右端挪到它最后一次活跃的
-    # 那天，否则整张图是空的——那才是真的「什么也看不到」。
+    # 按时间：与「全部」视图同一套月历（近 3 个自然月），只是格子用该平台的
+    # 颜色、且只有一条色标。窗口内一次都没跑时右端挪到它最后的活跃月。
     today = datetime.date.today()
-    series = _by_day(ss, lambda _s: "all")
-    right = today
-    day_list, buckets = _daily_series(series, ["all"], right)
-    if not any(buckets["all"]):
-        last = max((d for d in (series.get("all") or {}) if d), default="")
-        try:
-            right = datetime.date.fromisoformat(last)
-        except (ValueError, TypeError):
-            right = today
-        day_list, buckets = _daily_series(series, ["all"], right)
-    vals = buckets["all"]
-    peak = max(vals) or 0
-    # 单平台只有一行，格子给足高度（12px 的一行像条细缝，看不出深浅）
-    heat = _heat_block([("", "var(--accent)", vals)], day_list, tall=True)
-    axis = ('<div class="ovaxis"><span>%s</span><span>最暗 = 峰值 %s token/天</span>'
+    per_day = {}
+    for d, v in (_by_day(ss, lambda _s: "all").get("all") or {}).items():
+        if v > 0:
+            per_day[d] = {"all": v}
+    months, right = _cal_window(per_day, today)
+    heat, peak = _cal_block(per_day, months, right,
+                            PLAT_COLOR.get(focus, "var(--accent)"))
+    axis = ('<div class="ovaxis"><span>%d年%d月起</span>'
+            '<span>格 = 日 · 竖向周一→周日 · 最深 = 单日 %s</span>'
             '<span>%s</span></div>' %
-            (day_list[0].strftime("%m-%d"), kh(peak),
-             "今天" if right == today else right.strftime("%m-%d")))
-    return donut, (legend if usable else []), heat, axis, "按时间 · 逐日热力图"
+            (months[0][0], months[0][1], kh(peak),
+             "今天" if right == today else right.strftime("%Y-%m")))
+    return (donut, (legend if usable else []), heat, axis,
+            "按时间 · 近 %d 个月 · 输入 token" % len(months))
 
 
 def _donut_cell(donut, legend, total, empty_msg):
@@ -2476,7 +2537,7 @@ def index_overview(ss, focus=""):
     total = raw_total or 1
     ws_cell = _workspace_cell(ss, total)
     if focus:
-        donut, legend, line, axis, ovt2 = _model_charts(ss, total, raw_total)
+        donut, legend, line, axis, ovt2 = _model_charts(ss, total, raw_total, focus)
         cell = _donut_cell(donut, legend, total, "会话记录未写模型名，此图暂不可用")
         label = PLAT_NAME.get(focus, focus)
         return _overview_shell(cell, "按模型 · 输入 token", ovt2, line, axis,

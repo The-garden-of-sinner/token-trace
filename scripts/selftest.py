@@ -384,25 +384,26 @@ def main():
         check("其他" in ovx and len(pctsx) == 4 and abs(sum(pctsx) - 100) < 0.15,
               "未知来源归「其他」，环仍闭合到 100%%（%s）" % pctsx)
         ovm = T.index_overview(tri, focus="zcode")
-        check("按模型 · 输入 token" in ovm and "按时间 · 逐日热力图" in ovm
+        check("按模型 · 输入 token" in ovm and "近 3 个月" in ovm
               and "按平台 · 输入 token" not in ovm and "ZCode 平台内" in ovm,
-              "单平台视图回到按模型环 + 单行热力图，不再做平台拼接")
+              "单平台视图回到按模型环 + 平台色月历，不再做平台拼接")
 
-        print("== 全库画像：逐日热力图（连续色） ==")
+        print("== 全库画像：月历热力图（连续色） ==")
         check("<polyline" not in ov and "<svg class=\"spark\"" not in ov,
               "折线图已整体换成热力图，不再输出 polyline")
-        rows = re.findall(r'<div class="hrow">(.*?)</div></div>', ov, re.S)
-        labs = re.findall(r'<span class="hlab">([^<]+)</span>', ov)
-        tips = re.findall(r'<div class="hcell" data-tip="([^"]+)"', ov)
-        check(len(labs) == 3 and labs == ["WB", "ZCode", "Codex"],
-              "热力图一行一个平台、行标用短名（%s）" % labs)
-        check(len(tips) == 3 * T.TREND_DAYS and all("&#10;" in t for t in tips),
-              "每格一天、每格都有日期+用量气泡（%d 格 / %d 天×3 行）"
-              % (len(tips), T.TREND_DAYS))
-        check(ov.count('<div class="hcell" data-tip="%s&#10;无记录">'
-                       % today[5:].replace("-", "-")) >= 1
-              or '无记录' in ov,
+        check(ov.count('<div class="cal-m">') == T.CAL_MONTHS
+              and len(re.findall(r'<div class="cal-c', ov)) == 42 * T.CAL_MONTHS,
+              "按自然月分块、每月 7×6 方格（%d 块 / %d 格）"
+              % (ov.count('<div class="cal-m">'),
+                 len(re.findall(r'<div class="cal-c', ov))))
+        tips = re.findall(r'<div class="cal-c" data-tip="([^"]+)"', ov)
+        check(all("&#10;" in t for t in tips) and
+              any(t.startswith(today) and "WorkBuddy" in t for t in tips),
+              "每格都有「日期 + 合计 + 平台拆分」气泡（%d 格）" % len(tips))
+        check(any(t.endswith("无记录") for t in tips),
               "没有会话的那天留空格（--track 底），不写成 0 token")
+        check('class="cal-c fut"' in ov and 'class="cal-c pad"' in ov,
+              "本月未到的日子是虚线空槽、月初按星期补齐空位（不和「无记录」混同）")
         # 连续色：同一平台三天给 100 / 400 / 1600，opacity 必须是三个不同值
         d1 = time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400))
         d2 = time.strftime("%Y-%m-%d", time.localtime(time.time() - 2 * 86400))
@@ -410,18 +411,17 @@ def main():
                 _plat("h2", "workbuddy", 400, d1),
                 _plat("h3", "workbuddy", 1600, d2)]
         ovc = T.index_overview(cont)
-        ops = re.findall(r'background:var\(--p0\);opacity:([\d.]+)', ovc)
+        ops = re.findall(r'background:var\(--accent\);opacity:([\d.]+)', ovc)
         vals = sorted(set(float(o) for o in ops))
         check(len(vals) == 3 and vals[0] > 0.1 and abs(vals[-1] - 1.0) < .01,
-              "同一平台色深按值连续变化，不是分档（%s）" % vals)
+              "同色色深按值连续变化，不是分档（%s）" % vals)
         check(all(0.10 < v <= 1.0 for v in vals),
               "最浅不早于 10%% 不透明，0 值才用空底，浅色仍可辨")
         ovm2 = T.index_overview(tri, focus="zcode")
-        check(ovm2.count('class="hmap tall"') == 1
-              and len(re.findall(r'<div class="hcell"', ovm2)) == T.TREND_DAYS
-              and "逐日热力图" in ovm2 and "按平台拆分" not in ovm2,
-              "单平台视图是单行加高热力图（%d 格）"
-              % len(re.findall(r'<div class="hcell"', ovm2)))
+        check(len(re.findall(r'<div class="cal-c', ovm2)) == 42 * T.CAL_MONTHS
+              and "background:var(--p1)" in ovm2
+              and "近 3 个月" in ovm2 and "按平台拆分" not in ovm2,
+              "单平台视图同一套月历，格子改用该平台色")
         check("<polyline" not in ovm2, "单平台视图也不再画折线")
         # 平台切换：没有会话的平台置灰并写明原因，有数据的可点
         sw = T.plat_switch(tri, "", "/stats")
