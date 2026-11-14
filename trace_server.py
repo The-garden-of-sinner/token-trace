@@ -1336,15 +1336,21 @@ CSS_VIZ = """
 .reserve{display:flex;height:14px;border-radius:4px;overflow:hidden;background:var(--track);margin:7px 0 4px}
 .reserve .used{background:var(--accent)}
 .reserve .retired{background:repeating-linear-gradient(45deg,var(--dim) 0 4px,var(--track) 4px 8px)}
-/* 折线图的绘制：polyline 带 pathLength="100"，CSS 用 dashoffset 把路径从
-   左往右「长」出来；面积延后淡入并轻微上浮，读起来像笔尖描过一遍，而不是
-   整张图被裁开。归一化长度让纯 CSS 就能精确描线，不需要测量路径。
-   只动合成属性（dashoffset / opacity / transform），不触发重排。 */
+/* 折线图的绘制：polyline 用 clip 从左往右揭开，读起来像笔尖描过一遍；
+   面积延后淡入并轻微上浮，两者错开半拍。裁剪只改可见区域，不碰描边几何，
+   因此 non-scaling-stroke 的等宽描边在任何缩放下都成立。 */
 .spark{width:100%;height:38px;display:block}
 .spark polyline{fill:none;stroke:var(--accent);stroke-width:1.6;vector-effect:non-scaling-stroke;
- stroke-dasharray:100;animation:tt-draw .88s var(--ease-in) backwards}
+ animation:tt-draw .82s var(--ease-in) backwards}
 .spark polygon{fill:var(--accent);opacity:.11;animation:tt-area .72s .18s var(--ease-in) backwards}
-@keyframes tt-draw{from{stroke-dashoffset:100}to{stroke-dashoffset:0}}
+/* 空档：没有会话的那几桶沿底部用虚线连过去，与「用量真的掉到 0」区分开。
+   dasharray 用 viewBox 单位，不参与描线动画、直接显示。 */
+.spark polyline.gap{stroke-dasharray:1.8 1.4;stroke-width:1.3;opacity:.62;animation:none}
+/* 描线用 clip 从左往右揭开，不用 dashoffset：non-scaling-stroke 下 Chromium 会
+   按屏幕像素解释 dasharray（pathLength 归一化被忽略），一条 330px 的折线会被
+   画成「实线 100px → 空 100px → 实线」——这就是之前 Codex 曲线断成两截、
+   单平台最后 1/4 没有线的原因。clip 只裁可见区域，描边粗细与缩放无关。 */
+@keyframes tt-draw{from{clip-path:inset(0 100% 0 0);opacity:.55}to{clip-path:inset(0 0 0 0);opacity:1}}
 @keyframes tt-area{from{opacity:0;transform:translateY(4px)}to{opacity:.11;transform:none}}
 /* 首页「按时间」：按月日历，每月一块 7 列（周一→周日）× 6 行的方块阵。
    颜色连续靠内层 <i> 的 opacity（0.10→1.00）：纯色透出白底就是同一种色的
@@ -1430,11 +1436,11 @@ CSS_TREND = """
 .trend a .mk{position:absolute;top:-3px;left:50%;transform:translateX(-50%);font-size:9px;line-height:1;color:var(--neg2)}
 .trend a .mk.c{color:var(--warn-fg)}
 .trend .ovl{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
-/* 命中率折线在柱子起势之后再描出来，否则两条动画同时起步会互相抢注意力 */
+/* 命中率折线在柱子起势之后再描出来，否则两条动画同时起步会互相抢注意力。
+   同样用 clip 而不是 dash：这里也有 non-scaling-stroke，dash 会被按屏幕
+   像素切段。 */
 .trend .ovl polyline{fill:none;stroke:var(--fg);stroke-width:1.2;opacity:.42;
- vector-effect:non-scaling-stroke;stroke-dasharray:100;
- animation:tt-draw .92s .3s var(--ease-in) backwards}
-.trend .ovl polyline{fill:none;stroke:var(--fg);stroke-width:1.2;opacity:.42;vector-effect:non-scaling-stroke}
+ vector-effect:non-scaling-stroke;animation:tt-draw .92s .3s var(--ease-in) backwards}
 @keyframes tt-rise{from{transform:scaleY(.02);opacity:.35}to{transform:scaleY(1);opacity:1}}
 """
 
@@ -2044,7 +2050,7 @@ def sparkline_svg(series):
     return ('<svg class="spark" viewBox="0 0 100 38" preserveAspectRatio="none" '
             'role="img" aria-label="可见上下文字数走势">'
             '<polygon points="0,38 %s 100,38"/>'
-            '<polyline pathLength="100" points="%s"/></svg>' % (pts, pts))
+            '<polyline points="%s"/></svg>' % (pts, pts))
 
 
 HM_ROWS = 7          # 周一..周日，与 GitHub 贡献图一致
@@ -2358,17 +2364,6 @@ def _platform_charts(ss, total, raw_total):
              '<circle class="trk" cx="21" cy="21" r="15.9155"/>' +
              "".join(arcs) + '</svg>')
 
-    # 2) 按时间 × 按平台：一行一个平台、一格一天的逐日热力图，颜色连续。
-    #    窗口**逐日、近 30 天**：一天一格，鼠标停在哪天就是哪天的绝对 token
-    #    数；再老的会话不画（铺到 66 天时一半宽度是空的，读起来还不如截断）。
-    #    不做周聚合——按周会把「那天有 6800 万」这种真实尖峰抹平。
-    today = datetime.date.today()
-    keys = [k for k, _, _ in platforms] + ["other"]
-
-    def key_of(s):
-        k = s.get("src") or "workbuddy"
-        return k if k in keys else "other"
-
     # 2) 按时间：近 3 个自然月的月历方块，格子涂的是**全平台合计**，气泡里
     #    再按平台拆开。不做「一平台一行」——五行 15px 长条既难看又读不出星期，
     #    平台维度的信息已经由左边的环 + 图例承担了。
@@ -2642,7 +2637,7 @@ def trend_overlay(rows):
     pts = " ".join("%.2f,%.2f" % ((i + .5) * 100.0 / n, 100 - r["rate"] * 100)
                    for i, r in enumerate(rows))
     return ('<svg class="ovl" viewBox="0 0 100 100" preserveAspectRatio="none" '
-            'aria-hidden="true"><polyline pathLength="100" points="%s"/></svg>' % pts)
+            'aria-hidden="true"><polyline points="%s"/></svg>' % pts)
 
 
 def rate_bar(c, width=True):
@@ -2791,8 +2786,10 @@ def v_index(q):
     kpis = [("会话", nfmt(len(ss))), ("工作区", nfmt(len(set(s["ws"] for s in ss)))),
             ("模型调用", nfmt(total_calls))]
     if has_ext:
-        # 积分只有 WorkBuddy 有；外部平台按刊例价估算，两套账并列但各自标清口径
-        kpis.append(("积分·WorkBuddy", "%.1f" % total_cr))
+        # 积分只有 WorkBuddy 有；外部平台按刊例价估算，两套账并列但各自标清口径。
+        # 切到没有积分的平台时，这一项直接不出现——显示 0 会被读成「用了但没扣钱」。
+        if total_cr > 0:
+            kpis.append(("积分·WorkBuddy" if not src else "累计积分", "%.1f" % total_cr))
         kpis.append(("估算成本", "¥%.2f" % total_cost))
     else:
         kpis.append(("累计积分", "%.1f" % total_cr))
@@ -2824,15 +2821,19 @@ def v_index(q):
                        "搜上下文块 / 输出 / 提问原文（跨全部会话）")
     # 一条分区工具条：左侧文字导航（细分隔线）、右侧排序分段控件，
     # 取代原先两行大小不一的 pill 按钮堆。窄屏时分区自动折行。
+    sort_opts = [("mtime", "最近修改")]
+    if any((s.get("credit") or 0) > 0 for s in shown):
+        sort_opts.append(("credit", "积分"))
+    sort_opts.append(("calls", "调用数"))
     sort_links = "".join(
-        '<a class="%s" href="/?sort=%s">%s</a>' %
-        ("on" if sort == k else "", k, lab)
-        for k, lab in (("mtime", "最近修改"), ("credit", "积分"), ("calls", "调用数")))
+        '<a class="%s" href="/?%s">%s</a>' %
+        ("on" if sort == k else "",
+         urlencode([("sort", k)] + ([("src", src)] if src else []) +
+                   ([("ws", ws)] if ws else [])), lab)
+        for k, lab in sort_opts)
     clear_ws = (('<a class="tb-clear" href="/">清除工作区筛选：%s ✕</a>' % esc(ws))
                 if ws else "")
-    # 平台切换挂到大标题同一栏（header 里的 .platbar），不再挤在下方工具条。
-    # 只在检测到外部源时出现，单平台用户看到的界面不变。
-    # 平台切换挂到大标题同一栏（header 里的 .platbar）。
+    # 平台切换挂到大标题同一栏（header 里的 .platbar）；只在检测到外部源时出现。
     # 本机没有某个平台的会话时（没装、或还没写过记录），那一项不再可点：
     # 渲染成置灰的 span 并挂 title 说明，避免点进去看到一页空白。
     plat = plat_switch(ss_all, src, "/",
@@ -2955,13 +2956,16 @@ def v_session(q, sid):
     p = qint(q, "p")
     view = qstr(q, "view", "turns")
     crumbs = [("索引", "/"), (d["title"][:30], "")]
-    body = kpi([("对话轮次", nfmt(st["turns"])), ("模型调用", nfmt(st["calls"])),
-                ("上下文块", nfmt(st["blocks"])), ("归档原文", nfmt(st["chars"]) + " 字"),
-                ("可见峰值", nfmt(st["visible_peak"]) + " 字"),
-                ("压缩次数", nfmt(st["compactions"])),
-                ("累计输入 token", nfmt(st["pin"])), ("缓存命中", "%.1f%%" % (st["rate"] * 100)),
-                ("未命中（计费）", nfmt(st["miss"])), ("输出 token", nfmt(st["pout"])),
-                ("累计积分", "%.2f" % st["credit"]), ("冷启动断点", nfmt(st["cold"]))])
+    items = [("对话轮次", nfmt(st["turns"])), ("模型调用", nfmt(st["calls"])),
+             ("上下文块", nfmt(st["blocks"])), ("归档原文", nfmt(st["chars"]) + " 字"),
+             ("可见峰值", nfmt(st["visible_peak"]) + " 字"),
+             ("压缩次数", nfmt(st["compactions"])),
+             ("累计输入 token", nfmt(st["pin"])), ("缓存命中", "%.1f%%" % (st["rate"] * 100)),
+             ("未命中（计费）", nfmt(st["miss"])), ("输出 token", nfmt(st["pout"]))]
+    if st["credit"] > 0:      # 积分只有 WorkBuddy 有，其他平台不显示 0
+        items.append(("累计积分", "%.2f" % st["credit"]))
+    items.append(("冷启动断点", nfmt(st["cold"])))
+    body = kpi(items)
     if st["compactions"]:
         body += ('<div class="warn">本会话发生过 <b>%d 次上下文压缩</b>：'
                  '历史被摘要替换，%s 字旧块已退役（仍可查全文，但不再计入后续调用）。'
@@ -3066,7 +3070,8 @@ def v_turn(q, sid, turn):
     if tb:
         body += kpi([("调用次数", nfmt(tb["calls"])), ("输入 token", nfmt(tb["pin"])),
                      ("命中率", "%.1f%%" % (tb["rate"] * 100)), ("输出 token", nfmt(tb["pout"])),
-                     ("积分", "%.2f" % tb["credit"]), ("系统注入", nfmt(tb["inj"]) + " 字")])
+                     ("系统注入", nfmt(tb["inj"]) + " 字")] +
+                    ([("积分", "%.2f" % tb["credit"])] if tb["credit"] > 0 else []))
         kind = tb["kind"]
         heads = {"user": "你这一轮问的是：",
                  "task": "后台任务通知（不是你输入的）：",
@@ -3109,9 +3114,10 @@ def v_call(q, sid, seq):
     body = kpi([("接口输入 token", nfmt(c["pin"])), ("缓存命中 token", nfmt(c["hit"])),
                 ("未命中 token", nfmt(c["pin"] - c["hit"])),
                 ("命中率", "%.1f%%" % (r * 100) if r is not None else "—"),
-                ("输出 token", nfmt(c["pout"])), ("积分", "%.2f" % (c.get("credit") or 0)),
+                ("输出 token", nfmt(c["pout"])),
                 ("可见上下文", "%s 块 / %s 字" % (nfmt(o["n"]), kh(o["chars"]))),
-                ("缓存边界", "#%s" % (o["boundary"] + 1) if o["boundary"] is not None else "—")])
+                ("缓存边界", "#%s" % (o["boundary"] + 1) if o["boundary"] is not None else "—")] +
+                ([("积分", "%.2f" % c["credit"])] if (c.get("credit") or 0) > 0 else []))
     if o["compacted"]:
         body += ('<div class="warn">这次调用之前发生过<b>上下文压缩</b>：'
                  '前 %s 个块已被摘要替换，不再计入本次可见上下文，'
@@ -3421,9 +3427,9 @@ def v_tools(q, sid=None):
     body += kpi([("工具种类", nfmt(len(st["tools"]))),
                  ("总调用", nfmt(st["total_calls"])),
                  ("Shell 执行", nfmt(st["shell_runs"])),
-                 ("程序种类", nfmt(len(st["progs"]))),
-                 ("累计积分", "%.2f" % st["total_credit"]),
-                 ("范围", "%d 个会话" % st["sessions"])])
+                 ("程序种类", nfmt(len(st["progs"])))] +
+                ([("累计积分", "%.2f" % st["total_credit"])] if st["total_credit"] > 0 else []) +
+                [("范围", "%d 个会话" % st["sessions"])])
     body += ('<div class="note">工具统计来自每次调用的 usage 与积分；程序名只从 '
              '<b>Bash / Shell 类工具</b>的命令摘要里 best-effort 提取：跳过 '
              '<code>cd / export / 控制流</code> 前缀段与装饰性 <code>echo</code>，'
@@ -3594,24 +3600,30 @@ def v_trend(q, sid):
             mark = '<span class="mk">●</span>'
         body += '<a href="%s" title="%s">%s%s</a>' % (esc(r["href"]), esc(tip), segs, mark)
     body += trend_overlay(shown) + '</div></div>'
+    # 积分列只在有积分的会话里出现（WorkBuddy）；其他平台不摆一列 0.00。
+    show_cr = any((r.get("credit") or 0) > 0 for r in rows)
     body += ('<div class="trow hd"><span>#调用</span><span>轮</span><span>块数</span>'
              '<span class="num">可见字</span><span class="num">Δ 字</span>'
-             '<span class="num">命中</span><span class="num">积分</span>'
-             '<span class="num">Δ 积分</span></div>')
+             '<span class="num">命中</span>'
+             + ('<span class="num">积分</span><span class="num">Δ 积分</span>' if show_cr else "")
+             + '</div>')
     for r in shown:
         dv, dc = r["delta"]["chars"], r["delta"]["credit"]
-        body += ('<a class="trow" href="%s" style="text-decoration:none;color:inherit">'
-                 '<span>#%d%s</span><span>%d</span><span>%s</span>'
-                 '<span class="num">%s</span>'
-                 '<span class="num" style="color:%s">%s%s</span>'
-                 '<span class="num">%.1f%%</span><span class="num">%.2f</span>'
-                 '<span class="num">%s%.2f</span></a>' %
-                 (esc(r["href"]), r["seq"],
-                  " ◆" if r.get("compact") else (" ●" if r["cold"] else ""), r["turn"],
-                  nfmt(r["blocks"]), nfmt(r["chars"]),
-                  "var(--accent)" if dv >= 0 else "var(--neg)",
-                  "+" if dv >= 0 else "-", nfmt(abs(dv)),
-                  r["rate"] * 100, r["credit"], "+" if dc >= 0 else "", dc))
+        row = ('<a class="trow" href="%s" style="text-decoration:none;color:inherit">'
+               '<span>#%d%s</span><span>%d</span><span>%s</span>'
+               '<span class="num">%s</span>'
+               '<span class="num" style="color:%s">%s%s</span>'
+               '<span class="num">%.1f%%</span>' %
+               (esc(r["href"]), r["seq"],
+                " ◆" if r.get("compact") else (" ●" if r["cold"] else ""), r["turn"],
+                nfmt(r["blocks"]), nfmt(r["chars"]),
+                "var(--accent)" if dv >= 0 else "var(--neg)",
+                "+" if dv >= 0 else "-", nfmt(abs(dv)),
+                r["rate"] * 100))
+        if show_cr:
+            row += ('<span class="num">%.2f</span><span class="num">%s%.2f</span>' %
+                    (r["credit"], "+" if dc >= 0 else "", dc))
+        body += row + '</a>'
     body += pager(base, q, p, PAGE_CALLS, len(rows),
                   "次调用" if g == "call" else "轮")
     return page("上下文趋势", crumbs, body, sub="逐调用演化 · 累计组成 / 净变化 · 零脚本")
@@ -3628,8 +3640,8 @@ def v_compact(q, sid):
                 ("可见峰值", nfmt(st["visible_peak"]) + " 字"),
                 ("末次可见", nfmt(st["visible_last"]) + " 字"),
                 ("已退役历史", nfmt(st["retired_chars"]) + " 字"),
-                ("真实累计输入", nfmt(st["pin"]) + " token"),
-                ("真实累计积分", "%.2f" % st["credit"])])
+                ("真实累计输入", nfmt(st["pin"]) + " token")] +
+               ([("真实累计积分", "%.2f" % st["credit"])] if st["credit"] > 0 else []))
     body += ('<div class="note"><b>怎么核对</b>：WorkBuddy 压缩会把历史替换成一条摘要，'
              '真实 <code>rawUsage.prompt_tokens</code> 应骤降。'
              '<b>修正前</b>我们把压缩前的旧块继续累加，可见字数反而上涨；'
@@ -3711,10 +3723,10 @@ def v_stats(q):
                 ("可见峰值合计", nfmt(st["visible_peak_sum"]) + " 字"),
                 ("压缩次数", nfmt(st["compactions"])),
                 ("累计输入 token", nfmt(st["pin"])), ("缓存命中率", "%.1f%%" % (st["rate"] * 100)),
-                ("未命中 token", nfmt(st["miss"])), ("输出 token", nfmt(st["pout"])),
-                ("累计积分", "%.2f" % st["credit"]),
-                ("积分/万未命中", "%.3f" % st["unit_miss"]),
-                ("按刊例估算", "¥%.2f" % st["cost"]),
+                ("未命中 token", nfmt(st["miss"])), ("输出 token", nfmt(st["pout"]))] +
+               ([("累计积分", "%.2f" % st["credit"]),
+                 ("积分/万未命中", "%.3f" % st["unit_miss"])] if st["credit"] > 0 else []) +
+               [("按刊例估算", "¥%.2f" % st["cost"]),
                 ("估算/万未命中", "¥%.3f" % st["unit_cost_miss"])])
     # 两张卡片内容都偏窄，各占整行时右边大片留白；并排成左右两栏（窄屏回落单列）。
     body += ('<div class="viz2">' + compose_bar(st["compose"]) +
