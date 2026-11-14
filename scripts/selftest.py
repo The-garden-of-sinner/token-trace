@@ -391,23 +391,38 @@ def main():
         print("== 全库画像：三平台三色折线 ==")
         # 线可能被空档切成多段；只有一天有数据时该段退化成圆点，两者都算「图元」
         polys = re.findall(r'<polyline[^>]*style="stroke:([^;]+);stroke-width:([\d.]+)"', ov)
-        dots = re.findall(r'<circle cx="[\d.]+" cy="[\d.]+" r="[\d.]+" fill="([^"]+)"', ov)
+        dots = re.findall(r'<line class="dot"[^>]*style="stroke:([^"]+)"', ov)
         marks = [c for c, _ in polys] + dots
         check(len(marks) == 3 and len(set(marks)) == 3,
               "折线换成三根且三色互不相同（%d 段 / %d 点）" % (len(polys), len(dots)))
         check("<polygon" not in ov, "折线改为纯线条，不再叠单色面积 polygon")
         hits = re.findall(r'<div class="hz"[^>]*data-tip="([^"]+)"', ov)
-        check(7 <= len(hits) <= 26
+        check(len(hits) == 7
               and all(all(n in h for n in ("WorkBuddy", "ZCode", "Codex")) for h in hits),
-              "每个热区列都给出三平台用量（%d 列 / 自适应窗口）" % len(hits))
+              "每个热区列都给出三平台用量（%d 列 / 按天窗口）" % len(hits))
+        check("起 7 天" not in ov,
+              "窗口不再按周聚合：气泡只报当天，不写「起 7 天」")
+        check('<line class="zero"' in ov,
+              "折线底部有 0 值参考线，空档虚线贴着它走")
         check('<div class="ovline">' in ov and 'class="foc"' not in ov,
               "折线用 .ovline 叠热区列（零 JS），不再画静态焦点线")
         ovm2 = T.index_overview(tri, focus="zcode")
-        npoly = len(re.findall(r'<polyline[^>]*points=', ovm2))
+        # 只有一天有数据时实线退化成圆点（polyline 画不出一个点），面积也不画
+        npoly = len(re.findall(r'<polyline pathLength=', ovm2))
+        ndot = len(re.findall(r'<line class="dot"', ovm2))
         nhz = len(re.findall(r'<div class="hz"', ovm2))
-        check(npoly == 1 and "<polygon" in ovm2 and nhz == 14
-              and "按平台拆分" not in ovm2,
-              "单平台折线为单条带面积线 + 14 天热区（%d 条 / %d 列）" % (npoly, nhz))
+        check(npoly + ndot >= 1 and (npoly == 0) == ("<polygon" not in ovm2)
+              and nhz == 7 and "逐日" in ovm2 and "按平台拆分" not in ovm2,
+              "单平台折线为单条带面积线 + 逐日热区（%d 线 / %d 点 / %d 列）"
+              % (npoly, ndot, nhz))
+        # 连续两天有数据才画得出实线，此时必须同时有面积
+        two = [_plat("e", "zcode", 100, today),
+               _plat("f", "zcode", 50,
+                     time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400)))]
+        ov2 = T.index_overview(two, focus="zcode")
+        check(len(re.findall(r'<polyline pathLength=', ov2)) == 1
+              and "<polygon" in ov2 and "逐日" in ov2,
+              "单平台连续两天有数据时画出实线并补面积")
         # 平台切换：没有会话的平台置灰并写明原因，有数据的可点
         sw = T.plat_switch(tri, "", "/stats")
         check('class="off"' in sw and "无 DeepSeek Harness 会话记录" in sw,
@@ -415,13 +430,21 @@ def main():
         sw2 = T.plat_switch(tri, "zcode", "/stats")
         check('href="/stats?src=zcode"' in sw2 and 'class="on"' in sw2,
               "平台切换：有数据的平台可点，当前平台高亮")
-        # 空档虚线：中间断掉的那几天用 gap 段连到 0，而不是直接连过去
+        # 空档：不斜着连过去，而是在最后一个有数据的点垂直剪到 0 线、再从
+        # 下一个有数据的点垂直抬起来。断言几何形状，而不只是「有 gap 段」。
         gap = [_plat("g1", "workbuddy", 100, today),
                _plat("g2", "workbuddy", 100,
                      time.strftime("%Y-%m-%d",
                                    time.localtime(time.time() - 9 * 86400)))]
-        check('class="gap"' in T.index_overview(gap),
-              "折线在无会话的桶上用虚线连到 0（gap 段）")
+        ovg = T.index_overview(gap)
+        raw = re.findall(r'<polyline class="gap" points="([^"]+)"', ovg)
+        ps = [[tuple(float(v) for v in p.split(",")) for p in s.split()] for s in raw]
+        vertical = len(ps) == 2 and all(len(p) == 2 and abs(p[0][0] - p[1][0]) < .01
+                                       for p in ps)
+        at_zero = all(abs(p[0][1] - p[1][1]) > 1 and min(p[0][1], p[1][1]) <= 78.5
+                      for p in ps) if ps else False
+        check(vertical and at_zero,
+              "空档两端垂直剪到 0 线，中间不留斜线（%d 段竖线）" % len(ps))
         # 平台注册表与切换栏：全称给宽屏、短名留给窄屏，无数据的新平台置灰
         sw = T.plat_switch(tri, "", "/stats")
         check(len(T.PLATFORMS) == 5

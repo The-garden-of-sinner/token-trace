@@ -1343,15 +1343,24 @@ CSS_VIZ = """
 .spark polyline{fill:none;stroke:var(--accent);stroke-width:1.6;vector-effect:non-scaling-stroke;
  stroke-dasharray:100;animation:tt-draw .88s var(--ease-in) backwards}
 .spark polygon{fill:var(--accent);opacity:.11;animation:tt-area .72s .18s var(--ease-in) backwards}
-/* 空档：没有会话的那几桶沿底部用虚线连过去，与「用量真的掉到 0」区分开。
-   dasharray 用 viewBox 单位（这条不设 pathLength），不做描线动画、直接显示。 */
-.spark polyline.gap{stroke-dasharray:1.8 1.4;stroke-width:1.3;opacity:.62;animation:none}
+/* 空档：没有会话的那几桶从前一点垂直剪到 0 线，隔一段再垂直抬起来，与
+   「用量真的掉到 0」区分开。dasharray 用 viewBox 单位（这条不设 pathLength），
+   不做描线动画、直接显示。 */
+.spark polyline.gap{stroke-dasharray:1.6 1.3;stroke-width:1.4;opacity:.75;animation:none}
+/* 单日孤点：零长度线段 + 圆头线帽 = 屏幕上的正圆。用 <circle> 会被非等比
+   拉伸成扁椭圆（viewBox 100×80 → 容器 400×72），实测看着像一条小横杠。 */
+.spark .dot{stroke-width:2.8;stroke-linecap:round;animation:none;
+ vector-effect:non-scaling-stroke}
+/* 0 值参考线：所有平台的空档竖线都落到这条中性虚线上，共用一条、不按平台
+   各画（四条同高会叠成一条，颜色互相盖住） */
+.spark .zero{stroke:var(--line2);stroke-width:1.2;stroke-dasharray:2.2 2.6;
+ vector-effect:non-scaling-stroke}
 @keyframes tt-draw{from{stroke-dashoffset:100}to{stroke-dashoffset:0}}
 @keyframes tt-area{from{opacity:0;transform:translateY(4px)}to{opacity:.11;transform:none}}
 /* 首页「按时间」折线：viewBox 纵向 80px，渲染高由 .ovline 给定，折线不再被
    横拉压扁；其上的热区列复用 [data-tip] 气泡（零 JS），悬停出焦点竖线。
    容器定位在绝对层，动画交给里面的 polyline，不再整块禁用。 */
-.ovline{position:relative;height:64px;margin-top:2px}
+.ovline{position:relative;height:72px;margin-top:2px}
 .ovline .spark{position:absolute;inset:0;height:100%}
 /* 三平台三条线的共用图例 */
 .ovlegend{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:10px;
@@ -1493,7 +1502,9 @@ CSS_INDEX = """
 .hero .viz{background:transparent;border:0;border-radius:0;box-shadow:none;margin:0;padding:16px 18px 18px}
 .hero .viz-hd{margin-bottom:14px}
 .hero .viz-hd b{font-size:12px;font-weight:600;letter-spacing:.02em}
-.ovgrid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0}
+/* 三列按 0.9 / 1.3 / 0.95 分：中间那条折线一天一个点，66 天要画得开，
+   平分三列时一天只有 4px，折线和悬停热区都会挤在一起 */
+.ovgrid{display:grid;grid-template-columns:.9fr 1.3fr .95fr;gap:0}
 .ovcell{min-width:0;padding:0 18px;border-right:1px solid var(--line2);display:flex;flex-direction:column}
 .ovcell:first-child{padding-left:0}
 .ovcell:last-child{border-right:0;padding-right:0}
@@ -2184,18 +2195,99 @@ def subagent_relations(ss):
 
 
 
-def _series_polys(active, buckets, n, mx, H=80, TOP=4):
-    """把每个平台的按桶序列画成「实线 + 空档虚线」。
+TREND_MAX_DAYS = 370      # 逐日窗口上限：更早的会话不画，避免一天不到 1px
+TREND_MIN_DAYS = 7        # 窗口下限：只在今天跑过时也给出前后文，而不是孤点
 
-    连续有数据的桶连成实线；跨越没有会话的桶时，从前一点落到 0、沿底部
-    走过去、再升到下一个点，这段用虚线 —— 读起来是「这里没有会话」，
-    而不是「用量真的掉到 0」。单点段画成圆点，polyline 画不出一个点。
+def _plot_base(H):
+    """折线图的 0 值 y 坐标：留 2 个 viewBox 单位给底边，避免线被裁掉半条。"""
+    return H - 2.0
+
+
+def _plot_y(v, mx, H=80, TOP=4):
+    base = _plot_base(H)
+    return base - v / mx * (base - TOP)
+
+
+def _zero_rule(H, lift=2.0):
+    """0 值参考线：整条底线的虚线基准。
+
+    所有平台的空档竖线都落到这条线上，所以只需要一条中性线，不必给每个
+    平台各画一条横向虚线——四条同高会叠成一条、颜色互相盖住。
     """
-    def y_of(v):
-        return H - v / mx * (H - TOP - 2)
+    y = H - lift
+    return '<line class="zero" x1="0" y1="%.1f" x2="100" y2="%.1f"/>' % (y, y)
 
-    def x_of(i):
-        return i * 100.0 / (n - 1)
+
+def _by_day(ss, key_of):
+    """把会话索引摊成 {平台: {日期: 输入 token}}，逐日累加。
+
+    `days` 是 scan_all 预聚合的「每次调用真实发生日」，没有它的老索引 /
+    外部构造的会话退回到 mtime + pin 兜底（与旧口径一致）。
+    """
+    out = {}
+    for s in ss:
+        bins = s.get("days") or {}
+        if not bins and not s.get("pin"):
+            # 空会话（只有元数据、0 次调用）：mtime 可能很新也可能很旧，
+            # 拿它当一天会把窗口左界拉出去，却不贡献任何用量。
+            continue
+        pairs = bins.items() if bins else [(fmt_ts(s["mtime"], "%Y-%m-%d", ""),
+                                            (s["pin"], 0))]
+        k = key_of(s)
+        bucket = out.setdefault(k, {})
+        for day, pair in pairs:
+            if day:
+                bucket[day] = bucket.get(day, 0.0) + pair[0]
+    return out
+
+
+def _daily_series(series, keys, today, min_days=TREND_MIN_DAYS,
+                  max_days=TREND_MAX_DAYS):
+    """把逐日数据摊成等长的逐日序列，返回 (日期列表, {平台: [每天输入 token]})。
+
+    右端固定「今天」，左端取这些会话里最早的一天，至少 min_days、至多
+    max_days 天。**不做周聚合**：窗口再长也是一天一桶，悬停与折线都是逐日
+    精度；超长历史只在左端裁掉最旧的部分，不改变粒度。
+    """
+    days = sorted(set(d for m in series.values() for d in m if d))
+    span = min_days
+    if days:
+        try:
+            span = (today - datetime.date.fromisoformat(days[0])).days + 1
+        except (ValueError, TypeError):
+            span = min_days
+    n = max(min_days, min(max_days, span))
+    day_list = [today - datetime.timedelta(days=n - 1 - i) for i in range(n)]
+    pos = dict((d.strftime("%Y-%m-%d"), i) for i, d in enumerate(day_list))
+    out = dict((k, [0.0] * n) for k in keys)
+    for k in keys:
+        for d, v in (series.get(k) or {}).items():
+            j = pos.get(d)
+            if j is not None:
+                out[k][j] += v
+    return day_list, out
+
+
+def _series_polys(active, buckets, n, mx, H=80, TOP=4, area=False):
+    """逐桶画「有数据处实线、空档剪到 0」的多平台折线。
+
+    连续有数据的桶连成实线；中间没有会话的桶**不斜着连过去**——那样会画出
+    一条又长又缓的假下降线，看着像用量真的在衰减。改成：在最后一个有数据
+    的点垂直剪到 0 参考线，隔一段再从下一个有数据的点垂直抬起来，读起来是
+    「这几天没跑」。横向的零段共用 `_zero_rule()` 那条中性虚线，不按平台各
+    画一条（四条同高会叠成一条、颜色互相盖住）。
+    只有一个桶有数据时画成圆点（polyline 画不出一个点）。
+    area=True 时给每段实线补一块面积，空档处不填，避免把断档盖成连续。
+    """
+    base = _plot_base(H)               # 与 _zero_rule 的 lift 保持一致
+
+    def y_of(v):
+        # 真实 0 落在 base 上，不落到 H：贴着 viewBox 底边画会被裁掉半条线
+        return _plot_y(v, mx, H, TOP)
+
+    # 数据点画在「热区列中心」而不是列边界：悬停列按 left=i*100/n、宽 100/n
+    # 切开，点若落在 i*100/(n-1)（首尾贴边）会和气泡错开小半列。
+    x_of = lambda i: (i + 0.5) * 100.0 / max(1, n)
 
     out = []
     for idx, (k, _name, color) in enumerate(active):
@@ -2208,30 +2300,39 @@ def _series_polys(active, buckets, n, mx, H=80, TOP=4):
                 while j < n and vals[j] > 0:
                     j += 1
                 if j - i == 1:
-                    out.append('<circle cx="%.2f" cy="%.2f" r="1.5" fill="%s"/>'
-                               % (x_of(i), y_of(vals[i]), color))
+                    # 圆点不能用 <circle>：viewBox 100×80 被非等比拉伸到容器后，
+                    # 圆会变成横向的扁椭圆（实测像一条小横杠）。改画零长度线段
+                    # + 圆头线帽 + non-scaling-stroke，屏幕上是正圆且不随缩放变形。
+                    out.append('<line class="dot" x1="%.2f" y1="%.2f" x2="%.2f" y2="%.2f" '
+                               'style="stroke:%s"/>'
+                               % (x_of(i), y_of(vals[i]), x_of(i),
+                                  y_of(vals[i]) + .01, color))
                 else:
                     pts = " ".join("%.2f,%.2f" % (x_of(x), y_of(vals[x]))
                                    for x in range(i, j))
                     out.append('<polyline pathLength="100" points="%s" '
                                'style="stroke:%s;stroke-width:1.7;animation-delay:%.2fs"/>'
                                % (pts, color, delay))
+                    if area:
+                        out.append('<polygon class="area" points="%.2f,%.1f %s %.2f,%.1f" '
+                                   'style="fill:%s;animation-delay:%.2fs"/>'
+                                   % (x_of(i), base, pts, x_of(j - 1), base, color, delay))
                 i = j
             else:
                 j = i
                 while j < n and vals[j] == 0:
                     j += 1
-                # 多个平台的空档线都贴底，全画在 y=H 会叠成一条；按平台错开 1.6
-                base = H - 1.6 * (idx % 3)
-                seg = []
+                # 进入空档：从最后一个有数据的点垂直剪到 0 线
                 if i > 0:
-                    seg.append("%.2f,%.2f" % (x_of(i - 1), y_of(vals[i - 1])))
-                seg.append("%.2f,%.1f" % (x_of(i), base))
-                seg.append("%.2f,%.1f" % (x_of(j - 1), base))
+                    out.append('<polyline class="gap" points="%.2f,%.2f %.2f,%.1f" '
+                               'style="stroke:%s"/>'
+                               % (x_of(i - 1), y_of(vals[i - 1]),
+                                  x_of(i - 1), base, color))
+                # 离开空档：从 0 线垂直抬到下一个有数据的点
                 if j < n:
-                    seg.append("%.2f,%.2f" % (x_of(j), y_of(vals[j])))
-                out.append('<polyline class="gap" points="%s" style="stroke:%s"/>'
-                           % (" ".join(seg), color))
+                    out.append('<polyline class="gap" points="%.2f,%.1f %.2f,%.2f" '
+                               'style="stroke:%s"/>'
+                               % (x_of(j), base, x_of(j), y_of(vals[j]), color))
                 i = j
     return "".join(out)
 
@@ -2272,92 +2373,40 @@ def _platform_charts(ss, total, raw_total):
              '<circle class="trk" cx="21" cy="21" r="15.9155"/>' +
              "".join(arcs) + '</svg>')
 
-    # 2) 按时间 × 按平台：三条不同颜色的折线，共用同一纵轴（全平台峰值）。
-    #    窗口自适应：默认近 14 天按天；若这 14 天里不足两个平台有数据
-    #    （Codex / ZCode 的会话往往更旧），退到近 12 周按周，保证三色对比图
-    #    真的有三条线，而不是只剩 WorkBuddy 一条。
+    # 2) 按时间 × 按平台：每个平台一条不同颜色的折线，共用同一纵轴（全平台
+    #    峰值），才能比出各平台每天的用量级差。窗口**逐日**：右端固定今天，
+    #    左端取这些会话里最早的一天。原来「14 天内活跃平台不足两个就退到按
+    #    周」会让 Codex / ZCode / DSH 这些几个月前跑过的平台只剩几个周桶，
+    #    既看不出哪天跑过，也会把「那天有 6800 万」这种真实尖峰抹平。
     today = datetime.date.today()
     keys = [k for k, _, _ in platforms] + ["other"]
 
-    def collect(unit, n):
-        """返回 (每桶起始日, {平台: [每桶输入 token]})。"""
-        if unit == "day":
-            labels = [today - datetime.timedelta(days=n - 1 - i) for i in range(n)]
-        else:
-            labels = [today - datetime.timedelta(days=(n - i) * 7 - 1) for i in range(n)]
-        idx = dict((d.strftime("%Y-%m-%d"), i) for i, d in enumerate(labels)) if unit == "day" else None
-        out = dict((k, [0.0] * n) for k in keys)
-
-        def slot(day):
-            if unit == "day":
-                return idx.get(day)
-            try:
-                age = (today - datetime.date.fromisoformat(day)).days
-            except (ValueError, TypeError):
-                return None
-            return n - 1 - age // 7 if 0 <= age < n * 7 else None
-
-        for s in ss:
-            k = s.get("src") or "workbuddy"
-            if k not in out:
-                k = "other"
-            bins = s.get("days")
-            pairs = bins.items() if bins else [(fmt_ts(s["mtime"], "%Y-%m-%d", ""), (s["pin"], 0))]
-            for day, pair in pairs:
-                j = slot(day)
-                if j is not None:
-                    out[k][j] += pair[0]
-        return labels, out
-
-    # 窗口左界跟着「最老的那个平台最后一次出会话」走：只在两个月前跑过几次的
-    # 平台（典型是 DSH / Codex），固定近 14 天会让它整条线落在窗口外，看起来
-    # 像没有数据。跨度 ≤14 天按天，否则按周，上限 26 周（半年外的会话不纳入）。
-    last_day = {}
-    for s in ss:
-        # 空会话（只有元数据、0 次调用）不参与：它们的文件 mtime 可能很新，
-        # 会把平台真实的最后活跃日往后推，窗口反而盖不到真正有数据的那天。
-        if not s.get("calls"):
-            continue
+    def key_of(s):
         k = s.get("src") or "workbuddy"
-        if k not in keys:
-            k = "other"
-        bins = s.get("days") or {}
-        ds = [d for d in bins.keys() if d] or [fmt_ts(s["mtime"], "%Y-%m-%d", "")]
-        ds = [d for d in ds if d]
-        if ds:
-            last_day[k] = max(max(ds), last_day.get(k, ""))
-    anchor = min(last_day.values()) if last_day else today.strftime("%Y-%m-%d")
-    try:
-        span = (today - datetime.date.fromisoformat(anchor)).days
-    except (ValueError, TypeError):
-        span = 0
-    if span <= 13:
-        # 最少 7 天：只在今天跑过一次时也有上下文，不至于整张图只剩一个点；
-        # 前 6 天会以空档虚线的形式落到 0，一眼看出「之前没有会话」。
-        unit, n = "day", max(7, min(14, span + 1))
-    else:
-        unit, n = "week", max(2, min(26, span // 7 + 1))
-    day_list, buckets = collect(unit, n)
+        return k if k in keys else "other"
+
+    day_list, buckets = _daily_series(_by_day(ss, key_of), keys, today)
+    n = len(day_list)
     active = [(k, name, color) for k, name, color in platforms if any(buckets[k])]
     if any(buckets["other"]):
         active.append(("other", "其他", "var(--p4)"))
-    mx = max((v for k in buckets for v in buckets[k]), default=0) or 1
+    peak = max((v for k in buckets for v in buckets[k]), default=0) or 0
+    mx = peak or 1
     # 视图纵向 80（横向仍 100），按容器真实宽高拉伸；每条线 inline 指定颜色，
     # 覆盖 .spark polyline 的 var(--accent) 默认色。
     H, TOP = 80, 4
     polys = _series_polys(active, buckets, n, mx, H, TOP)
-    unit_cn = "天" if unit == "day" else "周"
     svg = ('<svg class="spark" viewBox="0 0 100 %d" preserveAspectRatio="none" '
-           'role="img" aria-label="按%s、按平台的输入 token 走势">' %
-           (H, unit_cn) + polys + '</svg>')
+           'role="img" aria-label="按天、按平台的输入 token 走势">' %
+           H + _zero_rule(H) + polys + '</svg>')
     # 悬停：图上叠一层 HTML 热区列（零 JS，复用 [data-tip] 气泡），一次列出
-    # 该桶三个平台各自的输入量；焦点竖线按当天最高点同比例换算。
+    # 当天三个平台各自的输入量；焦点竖线按当天最高点同比例换算。
     step = 100.0 / n
     cols = []
     for i in range(n):
         top = max((buckets[k][i] for k in buckets), default=0)
-        y = H - top / mx * (H - TOP - 2)
-        tip = day_list[i].strftime("%m-%d") + (" 起 7 天" if unit == "week" else "") + "".join(
+        y = _plot_y(top, mx, H, TOP)
+        tip = day_list[i].strftime("%m-%d") + "".join(
             "&#10;%s %s token" % (name, kh(buckets[k][i]))
             for k, name, _ in active)
         cols.append('<div class="hz" style="left:%.2f%%;width:%.2f%%" '
@@ -2368,11 +2417,10 @@ def _platform_charts(ss, total, raw_total):
         (color, esc(name))
         for _k, name, color in active) + '</div>')
     line = '<div class="ovline">%s%s</div>%s' % (svg, "".join(cols), line_legend)
-    axis = ('<div class="ovaxis"><span>%s</span><span>单平台峰值 %s token/%s</span>'
-            '<span>%s</span></div>' %
-            (day_list[0].strftime("%m-%d"), kh(mx), unit_cn,
-             "今天" if unit == "day" else "最近 7 天"))
-    ovt2 = "按时间 × 平台 · 近 %d %s" % (n, unit_cn)
+    axis = ('<div class="ovaxis"><span>%s</span><span>单平台峰值 %s token/天</span>'
+            '<span>今天</span></div>' %
+            (day_list[0].strftime("%m-%d"), kh(peak)))
+    ovt2 = "按时间 × 平台 · 逐日 · 近 %d 天" % n
     return donut, legend, line, axis, ovt2
 
 
@@ -2458,58 +2506,34 @@ def _model_charts(ss, total, raw_total):
              '<circle class="trk" cx="21" cy="21" r="15.9155"/>' +
              "".join(arcs) + '</svg>')
 
-    # 近 14 天按天，单条折线 + 面积（原口径）。右界不写死「今天」：这个平台
-    # 如果最后一次会话在两周前，固定窗口会让整张图全 0，改成以最后活跃日为锚点。
+    # 逐日单条折线 + 面积，空档同样剪到 0 用虚线连。窗口与「全部」视图同一
+    # 口径：右端今天、左端本视图最早的一天，**不写死 14 天**——固定 14 天会把
+    # 更早的会话整段切掉，长历史平台看起来像只有最近两周跑过。
     today = datetime.date.today()
-    lastds = []
-    for s_ in ss:
-        bins = s_.get("days") or {}
-        ds = [d for d in bins.keys() if d] or [fmt_ts(s_["mtime"], "%Y-%m-%d", "")]
-        lastds += [d for d in ds if d]
-    right = today
-    if lastds:
-        try:
-            right = min(today, max(datetime.date.fromisoformat(d) for d in lastds))
-        except (ValueError, TypeError):
-            right = today
-    days = 14
-    day_list = [right - datetime.timedelta(days=days - 1 - i) for i in range(days)]
-    day_idx = dict((d.strftime("%Y-%m-%d"), i) for i, d in enumerate(day_list))
-    buckets = [0.0] * days
-    for s in ss:
-        bins = s.get("days")
-        if bins:
-            for day, pair in bins.items():
-                k = day_idx.get(day)
-                if k is not None:
-                    buckets[k] += pair[0]
-        else:
-            k = day_idx.get(fmt_ts(s["mtime"], "%Y-%m-%d", ""))
-            if k is not None:
-                buckets[k] += s["pin"]
-    mx = max(buckets) or 1
+    day_list, buckets = _daily_series(_by_day(ss, lambda _s: "all"), ["all"], today)
+    n = len(day_list)
+    vals = buckets["all"]
+    peak = max(vals) or 0
+    mx = peak or 1
     H, TOP = 80, 4
-    pts = " ".join("%.2f,%.2f" % (i * 100.0 / (days - 1), H - v / mx * (H - TOP - 2))
-                   for i, v in enumerate(buckets))
+    polys = _series_polys([("all", "", "var(--accent)")], buckets, n, mx, H, TOP,
+                          area=True)
     svg = ('<svg class="spark" viewBox="0 0 100 %d" preserveAspectRatio="none" '
-           'role="img" aria-label="按天输入 token 走势">'
-           '<polygon points="0,%d %s 100,%d"/>'
-           '<polyline pathLength="100" points="%s"/></svg>' %
-           (H, H, pts, H, pts))
-    step = 100.0 / days
+           'role="img" aria-label="按天输入 token 走势">' %
+           H + _zero_rule(H) + polys + '</svg>')
+    step = 100.0 / n
     cols = []
-    for i, v in enumerate(buckets):
+    for i, v in enumerate(vals):
         d = day_list[i].strftime("%m-%d")
-        y = H - v / mx * (H - TOP - 2)
+        y = _plot_y(v, mx, H, TOP)
         cols.append('<div class="hz" style="left:%.2f%%;width:%.2f%%" '
                     'data-tip="%s&#10;输入 %s token"><i style="top:%.2f%%"></i></div>' %
                     (i * step, step, d, kh(v), y / H * 100.0))
     line = '<div class="ovline">%s%s</div>' % (svg, "".join(cols))
     axis = ('<div class="ovaxis"><span>%s</span><span>峰值 %s token/天</span>'
-            '<span>%s</span></div>' %
-            (day_list[0].strftime("%m-%d"), kh(mx),
-             "今天" if right == today else right.strftime("%m-%d")))
-    return donut, (legend if usable else []), line, axis, "按时间 · 输入 token"
+            '<span>今天</span></div>' %
+            (day_list[0].strftime("%m-%d"), kh(peak)))
+    return donut, (legend if usable else []), line, axis, "按时间 · 输入 token · 逐日"
 
 
 def _donut_cell(donut, legend, total, empty_msg):
