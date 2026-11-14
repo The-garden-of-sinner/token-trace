@@ -468,9 +468,10 @@ def turn_brief(d, t):
     return {"i": t["i"], "q": t["q"],
             "disp": t.get("disp") or t["q"], "kind": t.get("kind") or "other",
             "calls": len(cs), "pin": pin, "hit": hit,
-            "rate": (hit / pin) if pin else 0,
-            "pout": sum(c["pout"] for c in cs),
-            "credit": sum(c["credit"] for c in cs),
+             "rate": (hit / pin) if pin else 0,
+             "pout": sum(c["pout"] for c in cs),
+             "credit": sum(c["credit"] for c in cs),
+             "cost": sum(call_cost(c) for c in cs),
             "inj": t.get("inj") or 0,
             "cold": bool(first and (first["hit"] / first["pin"]) < 0.5)}
 
@@ -508,7 +509,8 @@ def global_stats(ss=None):
             c = d["calls"][i]
             out["cold"].append({"sid": s["id"], "ws": s["ws"], "seq": c["seq"],
                                 "ts": c["ts"], "pin": c["pin"], "hit": c["hit"],
-                                "rate": c["hit"] / c["pin"], "credit": c["credit"]})
+                                "rate": c["hit"] / c["pin"], "credit": c["credit"],
+                                "cost": call_cost(c)})
         # 排序键改成「按刊例价估算的成本」：WorkBuddy 的 credit 只在自家数据上有值，
         # 接多平台后 Codex/ZCode 没有积分字段，继续按 credit 排会让它们永远沉底。
         ranked = []
@@ -868,10 +870,12 @@ def tool_stats(sid=None, src=None):
         for c in d["calls"]:
             name = c["tool"] or "最终回答"
             t = tools.setdefault(name, {"tool": name, "calls": 0, "credit": 0.0,
+                                        "cost": 0.0,
                                         "pin": 0, "hit": 0, "pout": 0,
                                         "sessions": set(), "last_ts": 0})
             t["calls"] += 1
             t["credit"] += c.get("credit") or 0
+            t["cost"] += call_cost(c)
             t["pin"] += c["pin"]
             t["hit"] += c["hit"]
             t["pout"] += c["pout"]
@@ -925,8 +929,13 @@ def tool_stats_cached(sid=None, refresh=False, src=None):
     return val
 
 
-def tool_calls(sid, tool, offset=0, limit=40, src=None):
-    """某个工具的全部调用行（可跨会话），按积分降序，供点击下钻。"""
+def tool_calls(sid, tool, offset=0, limit=40, src=None, by_cost=False):
+    """某个工具的全部调用行（可跨会话）。WorkBuddy 按积分降序；
+    纯外部平台没有积分，改按刊例价估算的成本降序，否则排序键全是 0。
+
+    每行同时带 credit 与 cost，渲染层按行决定显示「X.XX 分」还是「≈¥X.XX」——
+    混合视图里两种会话可能出现在同一个工具下，不能按视图一刀切。
+    """
     rows = []
     for s in ([STORE.by_id(sid)] if sid else _pick_src(src)):
         d = STORE.get(s["id"])
@@ -936,8 +945,10 @@ def tool_calls(sid, tool, offset=0, limit=40, src=None):
             rows.append({"sid": s["id"], "ws": s["ws"], "seq": c["seq"],
                          "turn": c["turn"], "credit": c.get("credit") or 0,
                          "pin": c["pin"], "hit": c["hit"], "ts": c.get("ts") or 0,
+                         "cost": pricing.cost_cny(c.get("model"), c["pin"],
+                                                  c["hit"], c.get("pout")) or 0.0,
                          "href": "/s/%s/c/%d" % (s["id"], i + 1)})
-    rows.sort(key=lambda x: -x["credit"])
+    rows.sort(key=lambda x: -(x["cost"] if by_cost else x["credit"]))
     return rows[offset:offset + limit], len(rows)
 
 
@@ -2709,6 +2720,26 @@ def call_hit_fold(d, i, sid):
             (lo, hi, hi - lo + 1, esc(sid), i + 1))
 
 
+def money_label(credit, cost=None):
+    """列表里那一格「钱」：WorkBuddy 显示真实积分，其他平台显示金额估算。
+
+    credit 只有 WorkBuddy 的会话记录里有；外部平台写死 "0.00 分" 会被读成
+    「用了但没扣钱」。拿不到估算金额时宁可留破折号，也不摆一个假的 0。
+    """
+    cr = credit or 0
+    if cr > 0:
+        return "%.2f 分" % cr
+    if cost and cost > 0:
+        return "≈¥%.2f" % cost
+    return "—"
+
+
+def call_cost(c):
+    """一次调用的刊例价估算，供各个列表行复用。"""
+    return pricing.cost_cny(c.get("model"), c.get("pin"), c.get("hit"),
+                            c.get("pout")) or 0.0
+
+
 def call_row(d, c, sid, show_turn=True):
     r = (c["hit"] / c["pin"]) if c["pin"] else None
     cls = "bad" if (r is not None and r < 0.5) else ("warn2" if (r is not None and r < 0.8) else "")
@@ -2718,12 +2749,12 @@ def call_row(d, c, sid, show_turn=True):
             '<span class="grow"><b style="font-weight:500">%s</b>%s</span>'
             '<span class="num">输入 %s</span><span class="num">未命中 %s</span>'
             '<span class="num">输出 %s</span><span class="num">%s</span>'
-            '<span class="num credit">%.2f 分</span><span class="num">%s</span></a>' %
+            '<span class="num credit">%s</span><span class="num">%s</span></a>' %
             (cls, esc(sid), c["seq"], c["seq"], rate_bar(c),
              esc(c["tool"] or "—"),
              ('<span class="chip t" style="margin-left:6px">轮 %d</span>' % c["turn"]) if show_turn and c["turn"] else "",
              nfmt(c["pin"]), nfmt(c["pin"] - c["hit"]), nfmt(c["pout"]), pct,
-             c.get("credit") or 0,
+             money_label(c.get("credit"), call_cost(c)),
              '<span style="color:var(--link-h)">详情 →</span>'))
 
 
@@ -2734,13 +2765,13 @@ def turn_row(d, t, sid):
             '<span class="grow">%s<b style="font-weight:500">%s</b>%s</span>'
             '<span class="num">%d 次</span><span class="num">输入 %s</span>'
             '<span class="num">命中 %s</span><span class="num">输出 %s</span>'
-            '<span class="num credit">%.2f 分</span>'
-            '<span class="num" style="color:var(--link-h)">展开 →</span></a>' %
-            (esc(sid), b["i"], b["i"], turn_chip(b["kind"]),
-             esc(b["disp"] or "（只有系统注入）"),
-             '<span class="chip cold" style="margin-left:6px">冷启动</span>' if b["cold"] else "",
-             b["calls"], nfmt(b["pin"]), "%.1f%%" % (b["rate"] * 100),
-             nfmt(b["pout"]), b["credit"]))
+             '<span class="num credit">%s</span>'
+             '<span class="num" style="color:var(--link-h)">展开 →</span></a>' %
+             (esc(sid), b["i"], b["i"], turn_chip(b["kind"]),
+              esc(b["disp"] or "（只有系统注入）"),
+              '<span class="chip cold" style="margin-left:6px">冷启动</span>' if b["cold"] else "",
+              b["calls"], nfmt(b["pin"]), "%.1f%%" % (b["rate"] * 100),
+              nfmt(b["pout"]), money_label(b["credit"], b.get("cost"))))
 
 
 # ---------------------------------------------------------------- HTML 视图
@@ -2864,11 +2895,14 @@ def v_index(q):
     # 分组标题按「该工作区的全部会话」统计，不能拿本页切片算：分页条写「共 60」，
     # 标题写「本页 40 个会话 · 40.0 分」，同一屏两套口径。工作区被分页切开时
     # 才追加「本页 N」，说明为什么这一组只显示了一部分。
+    # 同时累一份金额估算：积分只有 WorkBuddy 有，非 WB 平台的工作区改显示
+    # 「≈¥x.xx」，摆一行「0.0 分」纯属噪声。
     ws_stat = {}
     for s in shown:
-        a = ws_stat.setdefault(s["ws"], [0, 0.0])
+        a = ws_stat.setdefault(s["ws"], [0, 0.0, 0.0])
         a[0] += 1
         a[1] += s["credit"]
+        a[2] += s.get("cost") or 0.0
 
     def session_row(s, tag, rowcls, note="", branch=False, title=None):
         """会话列表一行；note 追加在第二行说明里，branch 画树状连接符。"""
@@ -2934,13 +2968,21 @@ def v_index(q):
                 cards.append(session_row(s, tag, "row"))
                 if kids:
                     cards.append(sub_tree(kids, s, n))
-        n_all, cr_all = ws_stat.get(name) or (len(items), sum(s["credit"] for s in items))
+        n_all, cr_all, cost_all = ws_stat.get(name) or (
+            len(items), sum(s["credit"] for s in items),
+            sum(s.get("cost") or 0.0 for s in items))
         part = "" if len(items) >= n_all else " · 本页 %d" % len(items)
         n_kids = sum(len(children_of.get(s["id"]) or []) for s in items)
         kid_note = " · 含 %d 个子代理" % n_kids if n_kids else ""
-        body += ('<details class="grp" open><summary>%s<small>%d 个会话 · %.1f 分%s%s</small></summary>'
+        if cr_all > 0:
+            money_note = " · %.1f 分" % cr_all
+        elif cost_all > 0:
+            money_note = " · ≈¥%.2f" % cost_all
+        else:
+            money_note = ""
+        body += ('<details class="grp" open><summary>%s<small>%d 个会话%s%s%s</small></summary>'
                  '<div class="in">%s</div></details>' %
-                 (esc(name), n_all, cr_all, part, kid_note, "".join(cards)))
+                 (esc(name), n_all, money_note, part, kid_note, "".join(cards)))
     if total_shown > PAGE_SESSIONS:
         body += pager("/", q, pg, PAGE_SESSIONS, total_shown, "个会话")
     # 元数据降级提示放在列表之后：它不影响会话列表本身，不该抢占首屏
@@ -2987,15 +3029,19 @@ def v_session(q, sid):
     hint = ("含 %.1f 万字的长块" % (biggest / 1e4)) if biggest >= 1e4 else "含长块"
     body += search_box("/s/%s/search" % sid, "", "text", "all",
                        "只在这个会话里搜（%s）" % hint)
+    tool_sub = ("按工具看积分与调用频次"
+                if (s.get("src") or "workbuddy") == "workbuddy"
+                else "按工具看估算金额与调用频次")
     body += ('<div class="navgrid">'
              '<a class="navcard" style="--nc:var(--p0)" href="/s/%s/map"><i>↗</i><b>上下文块地图</b>'
              '<span>面积 ∝ 字数 · 点块看全文</span></a>'
              '<a class="navcard" style="--nc:var(--p2)" href="/s/%s/trend"><i>↗</i><b>上下文趋势</b>'
              '<span>逐调用构成 / 净变化 / 命中率</span></a>'
              '<a class="navcard" style="--nc:var(--p1)" href="/s/%s/tools"><i>↗</i><b>工具与命令</b>'
-             '<span>按工具看积分与调用频次</span></a>'
+             '<span>%s</span></a>'
              '<a class="navcard" style="--nc:var(--accent)" href="/s/%s/compact"><i>↗</i><b>压缩事件校验</b>'
-             '<span>真实账单与修正前后口径</span></a></div>' % ((esc(sid),) * 4))
+             '<span>真实账单与修正前后口径</span></a></div>'
+             % (esc(sid), esc(sid), esc(sid), tool_sub, esc(sid)))
     body += ('<div class="segrow"><span class="fine">浏览方式</span>'
              '<span class="seg"><a class="%s" href="/s/%s?view=turns">按轮浏览</a>'
              '<a class="%s" href="/s/%s?view=calls">按调用浏览</a></span>'
@@ -3049,10 +3095,11 @@ def v_session(q, sid):
                 c = d["calls"][i]
                 body += ('<a class="row bad" href="/s/%s/c/%d" style="grid-template-columns:56px 1fr 100px 92px 82px">'
                          '<span class="idx">#%d</span><span class="grow">轮 %d · 命中率从 &gt;80%% 掉到 %.1f%%</span>'
-                         '<span class="num">输入 %s</span><span class="num">未命中 %s</span>'
-                         '<span class="num credit">%.2f 分</span></a>' %
-                         (esc(sid), c["seq"], c["seq"], c["turn"], c["hit"] / c["pin"] * 100,
-                          nfmt(c["pin"]), nfmt(c["pin"] - c["hit"]), c["credit"]))
+                          '<span class="num">输入 %s</span><span class="num">未命中 %s</span>'
+                          '<span class="num credit">%s</span></a>' %
+                          (esc(sid), c["seq"], c["seq"], c["turn"], c["hit"] / c["pin"] * 100,
+                           nfmt(c["pin"]), nfmt(c["pin"] - c["hit"]),
+                           money_label(c.get("credit"), call_cost(c))))
     return page(d["title"][:50], crumbs, body,
                 sub="%s · %s · 模型 %s · 解析 %d ms" %
                     (s["ws"], os.path.basename(s["path"]), st["model"], d["parse_ms"]))
@@ -3260,9 +3307,9 @@ def v_block(q, sid, idx):
         c = d["calls"][k]
         body += ('<a class="row" href="/s/%s/c/%d" style="grid-template-columns:64px 1fr 100px 80px">'
                  '<span class="idx">#%d</span><span class="grow">轮 %d · %s</span>'
-                 '<span class="num">输入 %s</span><span class="num credit">%.2f 分</span></a>' %
-                 (esc(sid), c["seq"], c["seq"], c["turn"], esc(c["tool"] or "最终回答"),
-                  nfmt(c["pin"]), c.get("credit") or 0))
+                  '<span class="num">输入 %s</span><span class="num credit">%s</span></a>' %
+                  (esc(sid), c["seq"], c["seq"], c["turn"], esc(c["tool"] or "最终回答"),
+                   nfmt(c["pin"]), money_label(c.get("credit"), call_cost(c))))
     nav = ('<div class="tabs"><a class="btn %s" href="/s/%s/b/%d">← 上一块</a>' %
            ("off" if idx == 0 else "", esc(sid), idx - 1) +
            '<a class="btn %s" href="/s/%s/b/%d">下一块 →</a>' %
@@ -3430,24 +3477,29 @@ def v_tools(q, sid=None):
                  ("程序种类", nfmt(len(st["progs"])))] +
                 ([("累计积分", "%.2f" % st["total_credit"])] if st["total_credit"] > 0 else []) +
                 [("范围", "%d 个会话" % st["sessions"])])
-    body += ('<div class="note">工具统计来自每次调用的 usage 与积分；程序名只从 '
+    has_cr = st["total_credit"] > 0
+    body += ('<div class="note">工具统计来自每次调用的 usage%s；程序名只从 '
              '<b>Bash / Shell 类工具</b>的命令摘要里 best-effort 提取：跳过 '
              '<code>cd / export / 控制流</code> 前缀段与装饰性 <code>echo</code>，'
              '取第一个实际程序。URL、搜索词、生图描述等不参与；'
-             '纯控制流命令归入「(shell 控制流)」。点工具名可下钻到它的全部调用。</div>')
+             '纯控制流命令归入「(shell 控制流)」。点工具名可下钻到它的全部调用。</div>'
+             % (" 与积分" if has_cr else "，金额按公开刊例价估算（非账单）"))
     if tool:
-        all_rows, total = tool_calls(sid, tool, 0, 10 ** 9)
+        all_rows, total = tool_calls(sid, tool, 0, 10 ** 9, src=src,
+                                     by_cost=not has_cr)
         p = clamp_p(q, total, PAGE_CALLS)
         rows = all_rows[p * PAGE_CALLS:(p + 1) * PAGE_CALLS]
-        body += '<h2>工具 %s 的调用 <small>共 %s 次 · 按积分降序</small></h2>' % (
-            esc(tool), nfmt(total))
+        body += '<h2>工具 %s 的调用 <small>共 %s 次 · 按%s降序</small></h2>' % (
+            esc(tool), nfmt(total), "积分" if has_cr else "估算成本")
         for r in rows:
+            money = ("%.2f 分" % r["credit"]) if r["credit"] > 0 else (
+                "≈¥%.2f" % (r.get("cost") or 0.0))
             body += ('<a class="row" href="%s" style="grid-template-columns:74px 1fr 70px 92px 88px 82px">'
                      '<span class="idx">#%d</span><span class="grow">%s</span>'
                      '<span class="num">轮 %d</span><span class="num">输入 %s</span>'
-                     '<span class="num credit">%.2f 分</span><span class="num">%s</span></a>' %
+                     '<span class="num credit">%s</span><span class="num">%s</span></a>' %
                      (esc(r["href"]), r["seq"], esc(r["ws"]), r["turn"], nfmt(r["pin"]),
-                      r["credit"],
+                      money,
                       fmt_ts(r["ts"], "%m-%d %H:%M", "")))
         body += pager(base, q, p, PAGE_CALLS, total, "次调用")
     else:
@@ -3466,11 +3518,12 @@ def v_tools(q, sid=None):
                          '<span class="grow"><a href="%s">%s</a></span>'
                          '<span class="bar"><i class="h" style="width:%.1f%%"></i></span>'
                          '<span class="num">%s 次</span><span class="num">命中 %.1f%%</span>'
-                         '<span class="num credit">%.2f 分</span>'
-                         '<span class="num">%d 会话</span><span class="num">%s</span></div>' %
-                         (esc(base + "?" + urlencode({"tool": x["tool"]})), esc(x["tool"]),
-                          x["calls"] / mx * 100, nfmt(x["calls"]), x["rate"] * 100,
-                          x["credit"], x["session_count"], esc(x["last"])))
+                          '<span class="num credit">%s</span>'
+                          '<span class="num">%d 会话</span><span class="num">%s</span></div>' %
+                          (esc(base + "?" + urlencode({"tool": x["tool"]})), esc(x["tool"]),
+                           x["calls"] / mx * 100, nfmt(x["calls"]), x["rate"] * 100,
+                           money_label(x["credit"], x.get("cost")),
+                           x["session_count"], esc(x["last"])))
         else:
             rows = [x for x in st["progs"] if term in x["prog"].lower()]
             p = clamp_p(q, len(rows), PAGE_CALLS)
@@ -3770,9 +3823,10 @@ def v_stats(q):
         body += ('<a class="row bad" href="/s/%s/c/%d" style="grid-template-columns:64px 1fr 104px 84px 84px 66px">'
                  '<span class="idx">#%d</span><span class="grow">%s · %s</span>'
                  '<span class="num">输入 %s</span><span class="num">命中 %.1f%%</span>'
-                 '<span class="num credit">%.2f 分</span><span class="num">%s</span></a>' %
-                 (esc(x["sid"]), x["seq"], x["seq"], esc(x["ws"]), esc(x["sid"][:8]),
-                  nfmt(x["pin"]), x["rate"] * 100, x["credit"], ts))
+                  '<span class="num credit">%s</span><span class="num">%s</span></a>' %
+                  (esc(x["sid"]), x["seq"], x["seq"], esc(x["ws"]), esc(x["sid"][:8]),
+                   nfmt(x["pin"]), x["rate"] * 100,
+                   money_label(x["credit"], x.get("cost")), ts))
     body += ('<div class="tabs"><a class="btn" href="/api/stats">同一份数据的 JSON</a>'
              '<a class="btn" href="/">← 回索引</a></div>')
     return page("全局统计", [("索引", "/"), ("全局统计", "")], body,

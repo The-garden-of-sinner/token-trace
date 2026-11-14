@@ -866,9 +866,11 @@ p95 回落到 16.8 ms；run1 的 P/S 低帧是脚本在冷加载末尾强制 `ca
   逐调用必须认 `model_usage`，`turn_usage` 只做交叉校验（实测两者 `sum(input)` 差 0.006%）。
 - **零输入调用**（`status=error/cancelled`）保留在调用列表里，但不计入命中率与积分 / 成本
   分母，与 WorkBuddy 侧口径一致。
-- **积分只有 WorkBuddy 有**；Codex / ZCode / DSH 按刊例价估算成本（`pricing.py`），
-  首页两套账并列且各自标明口径，不做换算。页面上的积分项只在当前视图含 WorkBuddy
-  会话时出现 —— 没有该口径的平台不摆一个 0.00，免得被读成「用了但没扣钱」。
+- **积分只有 WorkBuddy 有**；Codex / ZCode / DSH / Antigravity 按刊例价估算成本
+  （`pricing.py`），金额口径照常显示，但**这些平台的页面里不出现任何积分字样**：
+  分组标题给 `≈¥x.xx` 小计，工具 / 调用 / 冷启动等列表行里原本写死 `0.00 分` 的
+  那一格改成 `≈¥x.xx`（拿不到估算值时留破折号），排序也改按估算成本。
+  WorkBuddy 侧仍以真实积分为主口径，混合视图按行各显示各的。
 
 WorkBuddy 侧：
 
@@ -945,9 +947,18 @@ WorkBuddy 侧：
 
 `/stats` 的「按刊例估算」是跨平台口径：按公开价目把每次调用折算成人民币（fresh 输入 /
 缓存命中 / 输出三档），只用于排序与横向对比，**不是账单** —— 订阅套餐、限时折扣、
-长上下文加价都不在内。WorkBuddy 的真实积分仍看「累计积分」；未收录的模型走中端估算档，
-`pricing.price_src()` 会明确返回 `fallback`。最贵调用列表已改为按这个估算值排序，
+峰谷分时、长上下文加价都不在内。WorkBuddy 的真实积分仍看「累计积分」；未收录的模型走中端估算档，
+`pricing.price_src()` 会明确返回 `fallback`，沿用上一代档位的近似值返回 `approx`，
+官方刊例价才返回 `list`。最贵调用列表已改为按这个估算值排序，
 否则没有积分字段的平台会永远沉底。
+
+价目表 **2026-11-14 逐条核对过**：混元 Hy4、智谱 GLM-5.3 / Flash、DeepSeek V4.1 Flash、
+蚂蚁百灵 Ling-3.2-flash、OpenAI GPT-6 系列、Anthropic Claude 都取自厂商官方定价页
+（来源写在 `pricing.RATES` 第四列）；美元按当日中间价 `6.6726` 折算，代码里取 `6.67`。
+DeepSeek 直接采用官方中文页的人民币价（空闲时段 1 / 0.02 / 4 元每百万），不再走
+「美元 × 汇率」多绕一层。几个已知时点差异不进计算：Hy4 在 TokenHub 至 2026-12-31
+五折、GPT-5.6 Sol 促销至 11-30、Ling-3.2-flash 上线前两周免费；DeepSeek 工作日下午
+高峰时段三档价格翻倍，本表固定取空闲时段价，因此那段时间的调用会低估。
 
 ZCode 的 sqlite 没有 system 角色，`sources/zcode.py` 的 `system_prompts()` 可以从
 `~/.zcode/cli/rollout/model-io-*.jsonl` 补出系统提示与工具 schema（本机去重后 4 种、

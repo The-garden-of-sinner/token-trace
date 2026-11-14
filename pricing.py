@@ -2,37 +2,53 @@
 """按公开刊例价估算一次调用花了多少钱（人民币元）。
 
 用途：跨平台排序与横向对比。**这是估算，不是账单**——订阅套餐、限时折扣、
-长上下文加价都不会体现在这里。WorkBuddy 的真实积分仍由 credit 字段表示，
-本模块只回答「同样的 token 按 API 价该收多少」。
+峰谷分时、长上下文加价都不会体现在这里。WorkBuddy 的真实积分仍由 credit
+字段表示，本模块只回答「同样的 token 按 API 价该收多少」。
 
 计费三档与 token-trace 契约一致：fresh 输入 = pin - hit，缓存命中 = hit，
 输出 = pout（reasoning 已含在输出里，不重复计）。
 
 价格为「元 / 百万 token」：(输入, 缓存命中, 输出)。美元价按 FX_USD_CNY 折算。
 未收录的模型走 FALLBACK，并在 price_src 里明确标记 "fallback"，不冒充官方价。
+
+价目表核对日期 **2026-11-14**，逐条来源见 RATES 的第四列：
+  - 腾讯混元 hy4 ............ tencent.com 发布稿 / 腾讯云 TokenHub（6 / 0.3 / 18）
+  - 智谱 GLM-5.3 / Flash ... bigmodel.cn/pricing、docs.bigmodel.cn 定价页
+  - DeepSeek V4.1 Flash .... api-docs.deepseek.com 中文定价页（人民币价）
+  - 蚂蚁百灵 Ling-3.2 ...... 官方发布 / IT之家（$0.30 / $0.90，缓存价未公布）
+  - OpenAI GPT-6 系列 ...... platform.openai.com/docs/pricing、openai.com 商务定价页
+  - Anthropic Claude ....... Anthropic 价目页（第三方价目表交叉核对）
+  - 汇率 .................. 2026-11-14 美元中间价约 6.6726（上海银行 6.6732 /
+                              浦发 6.6718 / 国际即时 6.6726），取 6.67
+
+已知时点差异（不进计算，仅提示读表的人）：
+  - Hy4 在腾讯云 TokenHub 至 2026-12-31 按刊例价五折；这里按全价
+  - GPT-5.6 Sol 促销价至 2026-11-30；到期后可能上调
+  - Ling-3.2-flash 上线前两周免费（约至 2026-11-19）
+  - DeepSeek 分峰谷：北京时间工作日 9:00-12:00、14:00-18:00 为高峰，
+    三档价格全部翻倍。本表固定取**空闲时段**价，因此工作日下午的调用会低估
 """
 
-FX_USD_CNY = 7.1
+FX_USD_CNY = 6.67     # 2026-11-14 美元兑人民币中间价 6.6726，见模块 docstring
 
 RATES = {
     # 腾讯混元（腾讯云 TokenHub 刊例价，2026-11）
     "hy4": (6.0, 0.3, 18.0, "腾讯云 TokenHub"),
     "hy4-preview": (6.0, 0.3, 18.0, "腾讯云 TokenHub"),
-    # 智谱 GLM（开放平台刊例价，2026-11）
+    # 智谱 GLM（bigmodel.cn/pricing 与官方定价文档，2026-11-14 核对）
     "glm-5.3": (8.0, 2.0, 28.0, "智谱开放平台"),
     "glm-5.3-flash": (0.8, 0.23, 2.8, "智谱开放平台"),
-    "glm-5.2": (8.0, 2.0, 28.0, "智谱开放平台"),
-    "glm-5.1": (6.0, 1.3, 24.0, "智谱开放平台（32K 内）"),
-    # DeepSeek（官方 off-peak：$0.15 / $0.003 / $0.60；峰值时段翻倍）
-    "deepseek-v4.1-flash": (0.15 * FX_USD_CNY, 0.003 * FX_USD_CNY, 0.60 * FX_USD_CNY,
-                            "DeepSeek 官方（off-peak）"),
-    "deepseek-v4-flash": (0.15 * FX_USD_CNY, 0.003 * FX_USD_CNY, 0.60 * FX_USD_CNY,
-                          "DeepSeek 官方（off-peak）"),
-    "deepseek-flash": (0.15 * FX_USD_CNY, 0.003 * FX_USD_CNY, 0.60 * FX_USD_CNY,
-                       "DeepSeek 官方（off-peak）"),
-    # 蚂蚁百灵（$0.30 / $0.90；官方未公布缓存价，按输入价计）
+    # 这两条是沿用上一代档位的近似值，没有单独的官方价可核，标记为 approx
+    "glm-5.2": (8.0, 2.0, 28.0, "沿用 GLM-5.3 档（近似）"),
+    "glm-5.1": (6.0, 1.3, 24.0, "沿用上一代 32K 档（近似）"),
+    # DeepSeek 官方中文定价页直接给人民币价，别用美元折算再乘汇率（会高估 6%）；
+    # 这里取空闲时段：命中 0.02 / 未命中 1 / 输出 4 元每百万；高峰时段全部 ×2。
+    "deepseek-v4.1-flash": (1.0, 0.02, 4.0, "DeepSeek 官方中文页（空闲时段）"),
+    "deepseek-v4-flash": (1.0, 0.02, 4.0, "DeepSeek 官方中文页（空闲时段）"),
+    "deepseek-flash": (1.0, 0.02, 4.0, "DeepSeek 官方中文页（空闲时段）"),
+    # 蚂蚁百灵（$0.30 / $0.90，官方未公布缓存价，保守按输入价计）
     "ling-3.2-flash": (0.30 * FX_USD_CNY, 0.30 * FX_USD_CNY, 0.90 * FX_USD_CNY,
-                       "蚂蚁百灵（无缓存折扣）"),
+                       "蚂蚁百灵（缓存价未公布，按输入价计）"),
     # OpenAI（$ / 1M × FX）
     "gpt-6-luna": (0.10 * FX_USD_CNY, 0.01 * FX_USD_CNY, 0.50 * FX_USD_CNY, "OpenAI 价目"),
     "gpt-6.1-sol": (2.0 * FX_USD_CNY, 0.10 * FX_USD_CNY, 10.0 * FX_USD_CNY, "OpenAI 价目"),
@@ -83,11 +99,13 @@ def cost_cny(model, pin, hit, pout):
 
 
 def price_src(model):
-    """价格来源标签：list 表示命中刊例价，fallback 表示估算档。"""
+    """价格来源：list=官方刊例价 / approx=沿用上一代的近似档 / fallback=未收录。"""
     r = rates_for(model)
     if not r:
         return "none"
-    return "fallback" if r is FALLBACK else "list"
+    if r is FALLBACK:
+        return "fallback"
+    return "approx" if "近似" in r[3] else "list"
 
 
 if __name__ == "__main__":
@@ -97,10 +115,10 @@ if __name__ == "__main__":
         ("Hy4 preview", 0, 0, 1_000_000, 18.0),
         ("GLM-5.3", 1_000_000, 0, 0, 8.0),
         ("GLM-5.3-Flash", 1_000_000, 500_000, 1_000_000, 0.8 * 0.5 + 0.23 * 0.5 + 2.8),
-        ("gpt-6-luna", 1_000_000, 0, 0, 0.71),
-        ("gpt-6.1-sol", 1_000_000, 1_000_000, 0, 0.71),
-        ("DeepSeek-V4.1-Flash", 1_000_000, 0, 0, 1.065),
-        ("Ling-3.2-flash", 0, 0, 1_000_000, 6.39),
+        ("gpt-6-luna", 1_000_000, 0, 0, 0.667),
+        ("gpt-6.1-sol", 1_000_000, 1_000_000, 0, 0.667),
+        ("DeepSeek-V4.1-Flash", 1_000_000, 0, 0, 1.0),
+        ("Ling-3.2-flash", 0, 0, 1_000_000, 6.003),
         ("Step-5-Preview", 1_000_000, 0, 0, 4.0),
     ]
     for model, pin, hit, pout, want in cases:
@@ -109,4 +127,7 @@ if __name__ == "__main__":
         print(f"{'PASS' if ok else 'FAIL'}  {model:20s} ¥{got:.4f} 期望 ¥{want:.4f} "
               f"src={price_src(model)}")
         assert ok, model
+    assert price_src("glm-5.3") == "list"
+    assert price_src("glm-5.2") == "approx"
+    assert price_src("Step-5-Preview") == "fallback"
     print("pricing 自测全过")

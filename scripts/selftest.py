@@ -423,6 +423,35 @@ def main():
               and "近 3 个月" in ovm2 and "按平台拆分" not in ovm2,
               "单平台视图同一套月历，格子改用该平台色")
         check("<polyline" not in ovm2, "单平台视图也不再画折线")
+
+        print("== 非 WorkBuddy 平台：不摆积分，只给金额估算 ==")
+        orig_store = T.STORE
+        try:
+            ext = []
+            for i in range(3):
+                s = _sess(i)
+                s["src"] = "codex"
+                s["credit"] = 0.0
+                s["cost"] = 0.29
+                s["ws"] = "D:/ws/codex"
+                ext.append(s)
+            T.STORE = _FakeStore(ext)
+            p = T.v_index({"src": ["codex"]})
+            check("0.0 分" not in p and "积分" not in p,
+                  "非 WB 首页的分组标题与列表不再出现 0.0 分 / 积分")
+            check("≈¥" in p, "非 WB 首页改用金额估算口径")
+            check(T.money_label(1.5, None) == "1.50 分"
+                  and T.money_label(0, 0.29) == "≈¥0.29"
+                  and T.money_label(0, 0) == "—",
+                  "money_label：有积分显示分，无积分显示 ¥，都没有留破折号")
+            import pricing
+            check(pricing.FX_USD_CNY == 6.67
+                  and pricing.rates_for("deepseek-v4.1-flash")[:3] == (1.0, 0.02, 4.0)
+                  and pricing.price_src("glm-5.2") == "approx"
+                  and pricing.price_src("unknown-model") == "fallback",
+                  "价目表：汇率 6.67、DeepSeek 用官方人民币价、近似档与未收录分开标记")
+        finally:
+            T.STORE = orig_store
         # 平台切换：没有会话的平台置灰并写明原因，有数据的可点
         sw = T.plat_switch(tri, "", "/stats")
         check('class="off"' in sw and "无 DeepSeek Harness 会话记录" in sw,
