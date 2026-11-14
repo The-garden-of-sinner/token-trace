@@ -1520,6 +1520,11 @@ CSS_INDEX = """
 .ovcell{min-width:0;padding:0 18px;border-right:1px solid var(--line2);display:flex;flex-direction:column}
 .ovcell:first-child{padding-left:0}
 .ovcell:last-child{border-right:0;padding-right:0}
+/* 三列的内容块高度天然不等（环 ~88 / 月历 ~118 / 递归树 ~64）。grid 的
+   stretch 只让列等高，内容还是各贴各的顶，矮的那列下面空一大截。
+   .ovbody 吃掉列内剩余高度并把内容垂直居中：最高的那列决定基准，另两列
+   跟着居中，数据多少、平台几个都不用写死高度；.ovaxis 留在 body 外贴底。 */
+.ovbody{flex:1;display:flex;flex-direction:column;justify-content:center;min-width:0;min-height:0}
 .ovt{display:flex;align-items:center;gap:6px;font-size:10.5px;font-weight:600;
  letter-spacing:.06em;color:var(--faint);margin-bottom:12px}
 .ovt:before{content:"";width:5px;height:5px;border-radius:50%;background:var(--accent);opacity:.75;flex:none}
@@ -1527,7 +1532,7 @@ CSS_INDEX = """
 .ovgrid .donut-wrap,.ovgrid .donut{width:84px;height:84px}
 .ovgrid .donut-wrap .ctr b{font-size:13px}
 .ovgrid .slice{min-width:0;flex:1}
-.ovgrid .sl{font-size:10.5px;padding:2px 0}
+.ovgrid .sl{font-size:10.5px;padding:4px 0}
 .ovgrid .sl em{min-width:36px}
 /* 三列底部说明共用一条基线：列高不一致时由留白吸收，而不是在某一列下方留洞 */
 .ovaxis{display:flex;justify-content:space-between;font-size:10px;color:var(--faint);margin-top:2px}
@@ -1554,6 +1559,16 @@ CSS_INDEX = """
 .wsfold-h{margin-left:auto;margin-top:3px;color:var(--faint);font-size:10px}
 .wsfold[open] .wsfold-h{font-size:0}
 .wsfold[open] .wsfold-h:after{content:"收起";font-size:10px}
+/* summary 里三行统计 + 一段紧凑树预览共占一列；展开后预览让位给完整树 */
+.wsmain{flex:1;min-width:0;display:block}
+.wspeek{display:flex;flex-direction:column;gap:2px;margin-top:8px;padding-top:7px;
+ border-top:1px solid var(--line2)}
+.wsfold[open] .wspeek{display:none}
+.wspk{display:flex;align-items:center;gap:6px;font-size:10px;line-height:1.35;
+ color:var(--muted);min-width:0}
+.wspk .pkname{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wspk b{font-weight:500;color:var(--faint);font-variant-numeric:tabular-nums}
+.wspk.c{padding-left:12px;color:var(--faint)}
 /* 连接符用等宽字体固定宽度，三行的数字才各自对齐成一条竖线 */
 .wstree{display:flex;flex-direction:column;gap:3px;line-height:1.3;min-width:0}
 .wsl{display:block;white-space:nowrap;font-variant-numeric:tabular-nums}
@@ -2447,14 +2462,25 @@ def _workspace_cell(ss, total):
         tree.append('<div class="wsrow more">另有 %d 个父目录…</div>' % (len(parents) - 8))
     # 收起状态不再把三层数量挤成一行：按 parent 目录 → 工作区 → 会话分三行、
     # 逐层右移成一棵小树；展开后仍是完整递归树。
+    # 折叠态除了三行统计，再给一段紧凑的树预览：一个 parent 目录带最多两个
+    # 工作区。行数跟着当前视图的数据走（只有一个工作区就只多一行），
+    # 把右列撑到跟月历差不多的高度，不用写死 min-height，也不用 JS。
+    peek = []
+    for parent, kids in list(parents.items())[:1]:
+        peek.append('<span class="wspk p"><span class="pkname">%s</span><b>%d</b></span>'
+                    % (esc(cut(parent, 16)), len(kids)))
+        for nm, _pin, n in kids[:2]:
+            peek.append('<span class="wspk c"><span class="pkname">└ %s</span>'
+                        '<b>%d</b></span>' % (esc(cut(nm, 18)), n))
     ws_cell = ('<details class="wsfold"><summary>'
-               '<span class="wstree">'
+               '<span class="wsmain"><span class="wstree">'
                '<span class="wsl l0"><i></i><b>%d</b> 个 parent 目录</span>'
                '<span class="wsl l1"><i>├─</i><b>%d</b> 个工作区</span>'
                '<span class="wsl l2"><i>│ └─</i><b>%d</b> 个会话</span>'
-               '</span><span class="wsfold-h">展开</span></summary>'
+               '</span><span class="wspeek">%s</span></span>'
+               '<span class="wsfold-h">展开</span></summary>'
                '<div class="in">%s</div></details>' %
-               (len(parents), len(leaf), len(ss), "".join(tree)))
+               (len(parents), len(leaf), len(ss), "".join(peek), "".join(tree)))
     return ws_cell
 
 
@@ -2537,9 +2563,10 @@ def _overview_shell(cell, ovt1, ovt2, line, axis, ws_cell, note):
     return ('<div class="viz"><div class="viz-hd"><b>全库画像</b>'
             '<small>%s</small></div>'
             '<div class="ovgrid">'
-            '<div class="ovcell"><div class="ovt">%s</div>%s</div>'
-            '<div class="ovcell"><div class="ovt">%s</div>%s%s</div>'
-            '<div class="ovcell"><div class="ovt">工作区 · 递归关系</div>%s</div>'
+            '<div class="ovcell"><div class="ovt">%s</div><div class="ovbody">%s</div></div>'
+            '<div class="ovcell"><div class="ovt">%s</div><div class="ovbody">%s</div>%s</div>'
+            '<div class="ovcell"><div class="ovt">工作区 · 递归关系</div>'
+            '<div class="ovbody">%s</div></div>'
             '</div></div>' % (note, ovt1, cell, ovt2, line, axis, ws_cell))
 
 

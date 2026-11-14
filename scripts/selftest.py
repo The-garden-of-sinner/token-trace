@@ -412,6 +412,10 @@ def main():
               and '个 parent 目录' in fold and '个工作区' in fold
               and '个会话' in fold and '<span class="wsfold-t">' not in fold,
               "工作区折叠摘要分三行树状展示（parent → 工作区 → 会话），不再挤成一行")
+        check(ov.count('<div class="ovbody">') == 3
+              and 'class="wspeek"' in ov
+              and '.ovbody{flex:1' in T.CSS_INDEX,
+              "三列用 .ovbody 吃掉剩余高度并垂直居中，右列补紧凑树预览")
         # 连续色：同一平台三天给 100 / 400 / 1600，opacity 必须是三个不同值
         d1 = time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400))
         d2 = time.strftime("%Y-%m-%d", time.localtime(time.time() - 2 * 86400))
