@@ -1501,24 +1501,58 @@ CSS_FOLD = """
 
 # 首页全库画像：只有索引页带这些规则。
 CSS_INDEX = """
-/* 首屏进场（纯 CSS、零 JS）。实测否决过两种更「像加载页」的做法：
-   - 全屏遮罩层（fixed 全屏 + 淡出）：遮罩自己的动画也在跟首次布局抢主线程，
-     全程 fps ~38→~33、内容可见晚约 0.45s（860ms 动画被长帧拖到 1026~1153ms）。
-   - 把 12 组入场动画整体延后 .42s：最晚一批结束在 1.24s，溢出稳态窗口，
-     稳态 fps 58.4→47.0。
-   只留一条 2px 顶部进度线：transform+opacity 全在合成层，2px 高不产生全屏
-   光栅化，实测稳态 56.8/55.1 对基线 56.7/56.8（噪声内）。它覆盖首次布局长帧
-   窗口（实测 longAt 467~550ms），线走完时页面已稳定；线本身不挡内容，是
-   「加载指示」而非「遮住内容」。基础态 scaleX(0)+opacity:0，reduced-motion /
-   打印把动画一关就自然消失。只在首页注入，其他页面靠跨文档 view transition。 */
-.bootline{position:fixed;left:0;top:0;width:100%;height:2px;z-index:60;
- background:linear-gradient(90deg,var(--p0),var(--p1),var(--p2),var(--p3),var(--p4));
- transform-origin:left center;transform:scaleX(0);opacity:0;pointer-events:none;
- animation:bootline .72s var(--ease-in) both}
-@keyframes bootline{
- 0%{transform:scaleX(0);opacity:1}
- 70%{transform:scaleX(1);opacity:1}
- 100%{transform:scaleX(1);opacity:0}}
+/* 首屏启动层（纯 CSS、零 JS）。目标不是提高帧率，而是把首次布局 / 光栅化的
+   长帧藏在一个稳定画面后面：长帧期间浏览器本来就不提交新帧，CSS 动画按文档
+   时间线走到点后，第一次可见的绘制恰好是长帧结束后的那一帧 —— 「加载完成后
+   自动切到主页」由绘制节奏自然完成，不需要 load 事件，也不需要一行 JS。
+   所有动效只用 transform / opacity（合成线程驱动）：主线程被布局占住时 logo
+   仍在转，不会「顿一下」把卡顿暴露出来。刻意不用 width / 渐变位置 /
+   逐帧改虚线偏移的动画，那些会逐帧 repaint，反而加重长帧。
+   基础态是隐藏，动画只临时显示；reduced-motion / 打印再整层 display:none，
+   双保险，绝不会永久盖住内容。只在首页注入。 */
+.boot{position:fixed;inset:0;z-index:60;display:flex;flex-direction:column;
+ align-items:center;justify-content:center;background:var(--bg);
+ opacity:0;visibility:hidden;pointer-events:none;
+ animation:boot-hold .85s var(--ease-in) both}
+@keyframes boot-hold{
+ 0%,76%{opacity:1;visibility:visible}
+ 100%{opacity:0;visibility:hidden}}
+.boot-in{display:flex;flex-direction:column;align-items:center;
+ animation:boot-out .85s var(--ease-in) both}
+@keyframes boot-out{
+ 0%,76%{transform:none}
+ 100%{transform:translateY(-7px) scale(.985)}}
+/* 灰边 + 彩循环：灰环静态，彩环是 conic-gradient 经 mask 挖空的圆环，整体只
+   做 rotate。只提升这一个 44px 小层，不给全屏层 will-change（那会多一层
+   全屏纹理）。中心一枚小方块呼应月历格子。 */
+.boot-logo{position:relative;width:44px;height:44px;margin-bottom:26px}
+.boot-logo:before{content:"";position:absolute;inset:0;border-radius:50%;
+ border:2px solid var(--line)}
+.boot-logo i{position:absolute;inset:0;border-radius:50%;
+/* 只让约半圈是彩色、其余透明：灰色轨道在留白段露出来，旋转时就是「一道
+   彩光沿灰边循环扫过」。整圈都铺满渐变会把灰环完全盖掉，读不出灰边。 */
+ background:conic-gradient(from 0deg,
+  var(--p0) 0deg,var(--p1) 48deg,var(--p2) 96deg,var(--p3) 144deg,
+  var(--p4) 192deg,transparent 250deg,transparent 360deg);
+ -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 calc(100% - 2px));
+ mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 calc(100% - 2px));
+ will-change:transform;animation:boot-spin .85s linear 1 both}
+@keyframes boot-spin{to{transform:rotate(360deg)}}
+.boot-logo:after{content:"";position:absolute;left:50%;top:50%;width:5px;height:5px;
+ margin:-2.5px 0 0 -2.5px;border-radius:1px;background:var(--accent);opacity:.8}
+.boot-t{font-size:13px;letter-spacing:.26em;color:var(--fg);margin-bottom:9px}
+.boot-s{font-size:10.5px;letter-spacing:.05em;color:var(--faint)}
+.boot-dots{display:flex;gap:6px;margin-top:20px}
+/* 四个动效一律有限次数，且都在 .85s 内结束：遮罩撤掉后 DOM 里不留任何
+   活动动画（无限循环在 visibility:hidden 后仍会推进，实测把稳态 fps 从
+   ~56 拖到 ~39）。最晚的第三个点 .2s + .55s = .75s，早于遮罩收尾。 */
+.boot-dots i{width:3px;height:3px;border-radius:50%;background:var(--accent);
+ opacity:.25;animation:boot-dot .55s ease-in-out 1}
+.boot-dots i:nth-child(2){animation-delay:.1s}
+.boot-dots i:nth-child(3){animation-delay:.2s}
+@keyframes boot-dot{0%,100%{opacity:.22}50%{opacity:.9}}
+@media(prefers-reduced-motion:reduce){.boot{display:none}}
+@media print{.boot{display:none}}
 /* 首页概览：数字条与三张图合成一块连续面板，消除「六个小方块 + 一张大白卡」的割裂。
    只覆盖 .hero 内部，其他页面的 .kpi / .viz 保持原样。 */
 .hero{position:relative;background:linear-gradient(160deg,var(--panel2),var(--panel));
@@ -1805,7 +1839,8 @@ def _squeeze_css(css):
     return res
 
 
-def page(title, crumbs, body, sub="", extra_head="", need=(), topbar=""):
+def page(title, crumbs, body, sub="", extra_head="", need=(), topbar="",
+         boot_note=""):
     """need 显式声明本页需要的图表样式片段（"viz"/"hm"/"map"/"chart"/
     "fold"/"nav"/"index"），与 body 探测取并集。
 
@@ -1846,13 +1881,20 @@ def page(title, crumbs, body, sub="", extra_head="", need=(), topbar=""):
         # 其余页面保持原来的「标题 + 右侧说明」单行布局，零影响。
         hd = ('<div class="hdrow">' + h1 +
               ('<div class="sub">%s</div>' % esc(sub) if sub else '') + '</div>')
-    # 首屏进场：只有一条 2px 顶部进度线，不新增任何全屏层。实测否决过两种：
-    # 全屏遮罩（fixed 全屏 + 淡出）让首屏全程 fps ~38→~33、内容可见晚 0.45s；
-    # 把入场动画整体延后 .42s 则把稳态 fps 58.4→47.0。现在首帧就是完整布局，
-    # 进度线覆盖首次布局长帧窗口，线走完页面已稳定，线本身不挡内容。
-    # 零 JS；基础态 scaleX(0)+opacity:0，reduced-motion / 打印关掉动画时
-    # 自然不出现，不会挡住任何内容。
-    boot = '<div class="bootline" aria-hidden="true"></div>' if is_index else ''
+    # 首屏启动层，只盖首页。副标题带当前视图的真实会话数 / 调用数，是「正在
+    # 解析这一屏」而不是一句空泛的 loading。零 JS：撤除时机交给 CSS 文档时间线
+    # 与浏览器绘制节奏（详见 CSS_INDEX 的 .boot 注释）——长帧期间不提交新帧，
+    # 动画到点后的第一次绘制恰是长帧结束后的那一帧，于是「加载完成再切主页」
+    # 自然成立。基础态隐藏 + reduced-motion / 打印整层 display:none 双保险。
+    boot = ''
+    if is_index:
+        boot = ('<div class="boot" aria-hidden="true"><div class="boot-in">'
+                '<div class="boot-logo"><i></i></div>'
+                '<div class="boot-t">会话解析中</div>'
+                '<div class="boot-s">%s</div>'
+                '<div class="boot-dots"><i></i><i></i><i></i></div>'
+                '</div></div>' %
+                esc(boot_note or "正在归集本地会话轨迹 · 数据只读"))
     doc = (head + boot + '<header><div class="wrap">' + crumb(crumbs) + hd +
            '</div></header><div class="wrap">' + extra_head + body +
            '<footer><span>本页 HTML @@KB@@ KB</span>' +
@@ -3072,7 +3114,9 @@ def v_index(q):
     body += meta_warn
     return page("会话索引", [("索引", "")], body,
                 sub="%d 个会话 · 点任一会话进入全量轨迹（不裁调用、不裁文本）" % total_shown,
-                need=("index",), topbar=plat)
+                need=("index",), topbar=plat,
+                boot_note="正在整理 %d 个会话 · %s 次模型调用" %
+                          (len(ss), nfmt(total_calls)))
 
 
 def v_session(q, sid):

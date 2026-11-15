@@ -422,15 +422,28 @@ def main():
         check(segs and all(int(n) > 0 for n in segs),
               "分布带每段都给绝对会话数（%d 段）" % len(segs))
         boot = T.page("会话索引", [("索引", "")],
-                      '<div class="ovgrid"></div>', need=("index",))
+                      '<div class="ovgrid"></div>', need=("index",),
+                      boot_note="正在整理 119 个会话 · 12,532 次模型调用")
         plain = T.page("全局统计", [("索引", "/"), ("统计", "")], '<p>x</p>')
-        check('class="bootline"' in boot and 'class="bootline"' not in plain,
-              "首屏进场只在首页注入一条 2px 进度线，不做全屏遮罩层")
-        check('.bootline{position:fixed' in T.CSS_INDEX
-              and 'transform:scaleX(0);opacity:0;pointer-events:none' in T.CSS_INDEX
-              and 'animation:bootline .72s' in T.CSS_INDEX
-              and 'class="boot"' not in boot,
-              "进度线基础态不可见：reduced-motion 关掉动画也不会挡住内容")
+        check('class="boot"' in boot and 'class="boot"' not in plain
+              and '会话解析中' in boot and '正在整理 119 个会话' in boot,
+              "启动层只在首页注入，文案带当前视图真实会话数 / 调用数")
+        check('<script' not in boot and '无需 JavaScript' in boot,
+              "启动层零 JS：撤除交给 CSS 文档时间线与绘制节奏，页脚口径不变")
+        check('.boot{position:fixed' in T.CSS_INDEX
+              and 'opacity:0;visibility:hidden;pointer-events:none' in T.CSS_INDEX
+              and 'animation:boot-hold .85s' in T.CSS_INDEX
+              and '@media(prefers-reduced-motion:reduce){.boot{display:none}}' in T.CSS_INDEX
+              and '@media print{.boot{display:none}}' in T.CSS_INDEX,
+              "启动层基础态隐藏 + reduced-motion / 打印整层撤掉，绝不会盖住内容")
+        check('conic-gradient' in T.CSS_INDEX
+              and '@keyframes boot-spin{to{transform:rotate(360deg)}}' in T.CSS_INDEX
+              and 'will-change:transform' in T.CSS_INDEX
+              and 'stroke-dashoffset' not in T.CSS_INDEX
+              and 'infinite' not in T.CSS_INDEX
+              and T.CSS_INDEX.count('@keyframes boot-') == 4,
+              "灰边彩循环只用 transform / opacity 合成层动画，且有限次数、"
+              "遮罩撤除后不留活动动画")
         check('--in-delay' not in T.CSS_INDEX
               and 'calc(var(--in-delay' not in T.CSS
               and 'animation:tt-in .52s var(--ease-in) backwards' in T.CSS
