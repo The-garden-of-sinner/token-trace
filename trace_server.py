@@ -1249,6 +1249,10 @@ code{font:11.5px ui-monospace,monospace;background:var(--track);padding:1px 4px;
    把动画前一半整段吃掉；削到约 12 个后帧率与可见动画时长都明显恢复。
    用 backwards 而非 both：动画一结束就释放合成层，不长期占着显存。 */
 @keyframes tt-in{from{opacity:.78;transform:translateY(8px)}to{opacity:1;transform:none}}
+/* 试过把整组动画用 --in-delay 平移 .42s 来「等布局稳定再进场」：实测稳态
+   fps 从 58.4 掉到 47.0 —— 最晚那批 details.grp（+.3s 错峰）结束在 1.24s，
+   溢出到稳态窗口并产生规律长帧。因此保持原有 0~.82s 错峰节奏不动，
+   首屏进场只靠 CSS_INDEX 那条 2px 进度线表达。 */
 .kpi>div,.navcard,details.grp{animation:tt-in .52s var(--ease-in) backwards}
 .navcard:nth-child(2){animation-delay:.05s}.navcard:nth-child(3){animation-delay:.1s}
 .navcard:nth-child(4){animation-delay:.15s}
@@ -1497,6 +1501,24 @@ CSS_FOLD = """
 
 # 首页全库画像：只有索引页带这些规则。
 CSS_INDEX = """
+/* 首屏进场（纯 CSS、零 JS）。实测否决过两种更「像加载页」的做法：
+   - 全屏遮罩层（fixed 全屏 + 淡出）：遮罩自己的动画也在跟首次布局抢主线程，
+     全程 fps ~38→~33、内容可见晚约 0.45s（860ms 动画被长帧拖到 1026~1153ms）。
+   - 把 12 组入场动画整体延后 .42s：最晚一批结束在 1.24s，溢出稳态窗口，
+     稳态 fps 58.4→47.0。
+   只留一条 2px 顶部进度线：transform+opacity 全在合成层，2px 高不产生全屏
+   光栅化，实测稳态 56.8/55.1 对基线 56.7/56.8（噪声内）。它覆盖首次布局长帧
+   窗口（实测 longAt 467~550ms），线走完时页面已稳定；线本身不挡内容，是
+   「加载指示」而非「遮住内容」。基础态 scaleX(0)+opacity:0，reduced-motion /
+   打印把动画一关就自然消失。只在首页注入，其他页面靠跨文档 view transition。 */
+.bootline{position:fixed;left:0;top:0;width:100%;height:2px;z-index:60;
+ background:linear-gradient(90deg,var(--p0),var(--p1),var(--p2),var(--p3),var(--p4));
+ transform-origin:left center;transform:scaleX(0);opacity:0;pointer-events:none;
+ animation:bootline .72s var(--ease-in) both}
+@keyframes bootline{
+ 0%{transform:scaleX(0);opacity:1}
+ 70%{transform:scaleX(1);opacity:1}
+ 100%{transform:scaleX(1);opacity:0}}
 /* 首页概览：数字条与三张图合成一块连续面板，消除「六个小方块 + 一张大白卡」的割裂。
    只覆盖 .hero 内部，其他页面的 .kpi / .viz 保持原样。 */
 .hero{position:relative;background:linear-gradient(160deg,var(--panel2),var(--panel));
@@ -1559,16 +1581,19 @@ CSS_INDEX = """
 .wsfold-h{margin-left:auto;margin-top:3px;color:var(--faint);font-size:10px}
 .wsfold[open] .wsfold-h{font-size:0}
 .wsfold[open] .wsfold-h:after{content:"收起";font-size:10px}
-/* summary 里三行统计 + 一段紧凑树预览共占一列；展开后预览让位给完整树 */
+/* summary 里三行统计 + 按 parent 目录的会话分布带；展开后色带让位给完整树。
+   段宽直接由 flex 比例给出（= 会话数），不写死高度；色深按排名递减，跟月历
+   的单色连续明度是同一套语言。hover 只加描边，不用 transform —— 元素自带
+   [data-tip] 气泡，缩放会把气泡一起拉糊（旧 .hcell 踩过这个坑）。 */
 .wsmain{flex:1;min-width:0;display:block}
-.wspeek{display:flex;flex-direction:column;gap:2px;margin-top:8px;padding-top:7px;
- border-top:1px solid var(--line2)}
-.wsfold[open] .wspeek{display:none}
-.wspk{display:flex;align-items:center;gap:6px;font-size:10px;line-height:1.35;
- color:var(--muted);min-width:0}
-.wspk .pkname{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.wspk b{font-weight:500;color:var(--faint);font-variant-numeric:tabular-nums}
-.wspk.c{padding-left:12px;color:var(--faint)}
+.wsdist{display:block;margin-top:9px;padding-top:8px;border-top:1px solid var(--line2)}
+.wsdist-h{display:block;font-size:9px;letter-spacing:.04em;color:var(--faint);margin-bottom:6px}
+.wsband{display:flex;gap:2px;height:9px;width:100%}
+.wsband i{display:block;min-width:2px;border-radius:2px;
+ transition:outline-color .12s var(--ease)}
+.wsband i:hover{outline:1px solid var(--fg);outline-offset:1px}
+.wsband i.rest{background:var(--track);box-shadow:inset 0 0 0 1px var(--line)}
+.wsfold[open] .wsdist{display:none}
 /* 连接符用等宽字体固定宽度，三行的数字才各自对齐成一条竖线 */
 .wstree{display:flex;flex-direction:column;gap:3px;line-height:1.3;min-width:0}
 .wsl{display:block;white-space:nowrap;font-variant-numeric:tabular-nums}
@@ -1789,6 +1814,9 @@ def page(title, crumbs, body, sub="", extra_head="", need=(), topbar=""):
     整页就会裸样式。这类边界由调用方显式声明，探测继续兜住其余页面。
     """
     need = set(need or ())
+    # 首页（含空库）才带全库画像，也才需要首屏进场遮罩；其余页面已有跨文档
+    # view transition 负责过渡，不重复叠一层。
+    is_index = "index" in need or 'class="ovgrid"' in body
     css = CSS
     if "viz" in need or 'class="viz' in body or 'class="cal"' in body:
         css += CSS_VIZ
@@ -1802,7 +1830,7 @@ def page(title, crumbs, body, sub="", extra_head="", need=(), topbar=""):
         css += CSS_FOLD
     if "nav" in need or 'class="navgrid"' in body:
         css += CSS_NAV
-    if "index" in need or 'class="ovgrid"' in body:
+    if is_index:
         css += CSS_INDEX
     head = ('<!DOCTYPE html><html lang="zh-CN"><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -1818,7 +1846,14 @@ def page(title, crumbs, body, sub="", extra_head="", need=(), topbar=""):
         # 其余页面保持原来的「标题 + 右侧说明」单行布局，零影响。
         hd = ('<div class="hdrow">' + h1 +
               ('<div class="sub">%s</div>' % esc(sub) if sub else '') + '</div>')
-    doc = (head + '<header><div class="wrap">' + crumb(crumbs) + hd +
+    # 首屏进场：只有一条 2px 顶部进度线，不新增任何全屏层。实测否决过两种：
+    # 全屏遮罩（fixed 全屏 + 淡出）让首屏全程 fps ~38→~33、内容可见晚 0.45s；
+    # 把入场动画整体延后 .42s 则把稳态 fps 58.4→47.0。现在首帧就是完整布局，
+    # 进度线覆盖首次布局长帧窗口，线走完页面已稳定，线本身不挡内容。
+    # 零 JS；基础态 scaleX(0)+opacity:0，reduced-motion / 打印关掉动画时
+    # 自然不出现，不会挡住任何内容。
+    boot = '<div class="bootline" aria-hidden="true"></div>' if is_index else ''
+    doc = (head + boot + '<header><div class="wrap">' + crumb(crumbs) + hd +
            '</div></header><div class="wrap">' + extra_head + body +
            '<footer><span>本页 HTML @@KB@@ KB</span>' +
            '<span>数据只读 · 全文由后端按需提供 · 无需 JavaScript</span>' +
@@ -2462,25 +2497,33 @@ def _workspace_cell(ss, total):
         tree.append('<div class="wsrow more">另有 %d 个父目录…</div>' % (len(parents) - 8))
     # 收起状态不再把三层数量挤成一行：按 parent 目录 → 工作区 → 会话分三行、
     # 逐层右移成一棵小树；展开后仍是完整递归树。
-    # 折叠态除了三行统计，再给一段紧凑的树预览：一个 parent 目录带最多两个
-    # 工作区。行数跟着当前视图的数据走（只有一个工作区就只多一行），
-    # 把右列撑到跟月历差不多的高度，不用写死 min-height，也不用 JS。
-    peek = []
-    for parent, kids in list(parents.items())[:1]:
-        peek.append('<span class="wspk p"><span class="pkname">%s</span><b>%d</b></span>'
-                    % (esc(cut(parent, 16)), len(kids)))
-        for nm, _pin, n in kids[:2]:
-            peek.append('<span class="wspk c"><span class="pkname">└ %s</span>'
-                        '<b>%d</b></span>' % (esc(cut(nm, 18)), n))
+    # 下半段换成「会话按 parent 目录的分布」色带：段宽就是该目录下的会话数，
+    # 色深按排名连续递减，与月历共用同一套单色连续明度语言。这样三块分别是
+    # 「按平台 / 按时间 / 按目录」三种切分，右列不再靠截断目录名的残缺文字
+    # 凑高度；悬停给目录名与绝对会话数，展开时让位给完整递归树。
+    ranked = [(p, sum(k[2] for k in kids)) for p, kids in parents.items()]
+    head = ranked[:5]
+    rest_n = sum(n for _, n in ranked[5:])
+    segs = []
+    for i, (p, n) in enumerate(head):
+        segs.append('<i style="flex:%d;background:var(--accent);opacity:%.2f" '
+                    'data-tip="%s&#10;%d 个会话"></i>'
+                    % (max(n, 1), .92 - .13 * i, esc(cut(p, 24)), n))
+    if rest_n:
+        segs.append('<i class="rest" style="flex:%d" '
+                    'data-tip="其余 %d 个 parent 目录&#10;%d 个会话"></i>'
+                    % (max(rest_n, 1), len(ranked) - 5, rest_n))
+    dist = ('<span class="wsdist"><span class="wsdist-h">按 parent 目录 · 会话分布</span>'
+            '<span class="wsband">%s</span></span>' % "".join(segs))
     ws_cell = ('<details class="wsfold"><summary>'
                '<span class="wsmain"><span class="wstree">'
                '<span class="wsl l0"><i></i><b>%d</b> 个 parent 目录</span>'
                '<span class="wsl l1"><i>├─</i><b>%d</b> 个工作区</span>'
                '<span class="wsl l2"><i>│ └─</i><b>%d</b> 个会话</span>'
-               '</span><span class="wspeek">%s</span></span>'
+               '</span>%s</span>'
                '<span class="wsfold-h">展开</span></summary>'
                '<div class="in">%s</div></details>' %
-               (len(parents), len(leaf), len(ss), "".join(peek), "".join(tree)))
+               (len(parents), len(leaf), len(ss), dist, "".join(tree)))
     return ws_cell
 
 

@@ -413,9 +413,29 @@ def main():
               and '个会话' in fold and '<span class="wsfold-t">' not in fold,
               "工作区折叠摘要分三行树状展示（parent → 工作区 → 会话），不再挤成一行")
         check(ov.count('<div class="ovbody">') == 3
-              and 'class="wspeek"' in ov
+              and 'class="wsdist"' in ov and 'class="wsband"' in ov
               and '.ovbody{flex:1' in T.CSS_INDEX,
-              "三列用 .ovbody 吃掉剩余高度并垂直居中，右列补紧凑树预览")
+              "三列用 .ovbody 吃掉剩余高度并垂直居中，右列换成按 parent 目录的会话分布带")
+        check('wspeek' not in ov and 'wspk' not in fold,
+              "折叠态不再塞截断目录名的紧凑树预览")
+        segs = re.findall(r'data-tip="[^"]*&#10;(\d+) 个会话"', fold)
+        check(segs and all(int(n) > 0 for n in segs),
+              "分布带每段都给绝对会话数（%d 段）" % len(segs))
+        boot = T.page("会话索引", [("索引", "")],
+                      '<div class="ovgrid"></div>', need=("index",))
+        plain = T.page("全局统计", [("索引", "/"), ("统计", "")], '<p>x</p>')
+        check('class="bootline"' in boot and 'class="bootline"' not in plain,
+              "首屏进场只在首页注入一条 2px 进度线，不做全屏遮罩层")
+        check('.bootline{position:fixed' in T.CSS_INDEX
+              and 'transform:scaleX(0);opacity:0;pointer-events:none' in T.CSS_INDEX
+              and 'animation:bootline .72s' in T.CSS_INDEX
+              and 'class="boot"' not in boot,
+              "进度线基础态不可见：reduced-motion 关掉动画也不会挡住内容")
+        check('--in-delay' not in T.CSS_INDEX
+              and 'calc(var(--in-delay' not in T.CSS
+              and 'animation:tt-in .52s var(--ease-in) backwards' in T.CSS
+              and T.CSS.count('animation-delay:.') == 12,
+              "入场动画保持原 12 组错峰节奏，不整体延后（实测会拉低稳态 fps）")
         # 连续色：同一平台三天给 100 / 400 / 1600，opacity 必须是三个不同值
         d1 = time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400))
         d2 = time.strftime("%Y-%m-%d", time.localtime(time.time() - 2 * 86400))
@@ -423,7 +443,10 @@ def main():
                 _plat("h2", "workbuddy", 400, d1),
                 _plat("h3", "workbuddy", 1600, d2)]
         ovc = T.index_overview(cont)
-        ops = re.findall(r'background:var\(--accent\);opacity:([\d.]+)', ovc)
+        # 只认月历格子的 <i>：分布色带同样用 var(--accent)+opacity，
+        # 但它的 style 后面还跟着 data-tip，用 "></i> 收尾才不会误抓进来。
+        ops = re.findall(r'<i style="background:var\(--accent\);opacity:([\d.]+)"></i>',
+                         ovc)
         vals = sorted(set(float(o) for o in ops))
         check(len(vals) == 3 and vals[0] > 0.1 and abs(vals[-1] - 1.0) < .01,
               "同色色深按值连续变化，不是分档（%s）" % vals)
