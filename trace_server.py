@@ -255,8 +255,8 @@ def update_tools():
     ver = ('<a class="upd-ver" href="%s" '
            'title="打开仓库发布页，手动查看最新版本与安装包">版本检查 ↗</a>'
            % esc(RELEASES_URL))
-    cur = ('<span class="upd-cur" title="当前运行的版本">当前版本 v%s</span>'
-           % esc(APP_VERSION))
+    cur = ('<span class="upd-cur" title="当前运行的版本">当前版本 '
+           '<code>v%s</code></span>' % esc(APP_VERSION))
     return ('<div class="updbox">%s%s%s%s%s</div>'
             % (sw, sep, ver, cur, modal))
 
@@ -1479,6 +1479,10 @@ details.grp>summary::-webkit-details-marker{display:none}
 details.grp>summary small{color:var(--dim);font-weight:400;margin-left:8px}
 details.grp .in{padding:8px 11px 3px}
 code{font:11.5px ui-monospace,monospace;background:var(--track);padding:1px 4px;border-radius:3px}
+/* 胶囊里的版本号也走 markdown 行内代码那套：等宽字 + 淡底小块 + 小圆角。
+   底色反用纯白（胶囊是莫兰迪灰绿、药丸也白，白底小块正好同属一族），
+   字色用主色，比周围说明文字略重一点，像一段被引用起来的代码。 */
+.upd-cur code{background:var(--bg);color:var(--accent-d);padding:1px 6px;border-radius:4px}
 .apirow{display:grid;grid-template-columns:minmax(260px,1fr) 2fr;gap:10px;padding:7px 10px;border-bottom:1px solid var(--line2);font-size:12px}
 .apirow code{background:none;padding:0;color:var(--link)}
 /* 跨文档视图过渡：同源跳转整页淡入淡出，纯 CSS 声明，不支持的浏览器直接忽略。

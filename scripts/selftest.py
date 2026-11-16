@@ -507,10 +507,12 @@ def main():
                   "确认层按钮分层：取消在前，实心主按钮「确定开启」在右")
             check(quiet.count('class="upd-sep"') == 1
                   and quiet.index('class="upd-sep"') < quiet.index('class="upd-ver"')
-                  and 'class="upd-cur" title="当前运行的版本">当前版本 v%s</span>'
-                      % T.APP_VERSION in quiet
+                  and 'class="upd-cur" title="当前运行的版本">当前版本 '
+                      '<code>v%s</code></span>' % T.APP_VERSION in quiet
+                  and ".upd-cur code{background:var(--bg);color:var(--accent-d);"
+                      "padding:1px 6px;border-radius:4px}" in css
                   and ">版本检查 ↗</a>" in quiet,
-                  "胶囊只分两区一线：自动 | 手动检查 + 当前版本，版本前有「当前版本」")
+                  "胶囊只分两区一线：自动 | 手动检查 + 当前版本，版本号是 markdown 行内代码小块")
             check(".upd-ver{display:inline-flex;align-items:center;padding:2px 10px; "
                   "border:1px solid transparent;border-radius:7px;background:var(--bg); " in css
                   and ".upd-ver:hover{background:var(--accent);color:var(--bg)}" in css
