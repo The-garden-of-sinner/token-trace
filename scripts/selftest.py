@@ -510,17 +510,19 @@ def main():
                   and 'class="upd-cur" title="当前运行的版本">当前版本 '
                       '<code>v%s</code></span>' % T.APP_VERSION in quiet
                   and ".upd-cur code{background:var(--track);color:var(--accent-d);"
-                      "padding:0 4px;border-radius:2px}" in css
+                      "padding:0 4px; border:1px solid var(--upd-bd);"
+                      "border-radius:2px}" in css
                   and ">版本检查 ↗</a>" in quiet,
-                  "胶囊只分两区一线：自动 | 手动检查 + 当前版本，版本号是灰色紧凑的 markdown 行内代码小块")
+                  "胶囊只分两区一线：自动 | 手动检查 + 当前版本，版本号是灰底细边框的 markdown 行内代码小块")
             check(".upd-ver{display:inline-flex;align-items:center;padding:2px 10px; "
-                  "border:1px solid transparent;border-radius:7px;background:var(--bg); " in css
-                  and ".upd-ver:hover{background:var(--accent);color:var(--bg)}" in css
+                  "border:1px solid var(--upd-bd);border-radius:7px;background:var(--track); " in css
+                  and ".upd-ver:hover{background:var(--accent);color:var(--bg);"
+                      "border-color:var(--accent)}" in css
                   and ".updbox{display:inline-flex;align-items:center;gap:10px;font-size:12px; "
                        "padding:5px 12px;border:1px solid var(--upd-bd);border-radius:10px; " in css
                   and "--upd-bg:#E8EEE8;--upd-bd:#C9D6CB;" in css
                   and "--upd-bg:#2A3731;--upd-bd:#41524A;" in css,
-                  "胶囊圆角收小到 10px + 莫兰迪灰绿底（明暗双主题），药丸反白底拉开层次")
+                  "版本检查按钮与版本号统一灰底 + 细边框一族，胶囊 10px 圆角 + 莫兰迪双主题底")
             check('class="foot-brand"' in quiet
                   and '<b>token-trace</b><i>v%s</i>' % T.APP_VERSION in quiet
                   and ".foot-brand{display:inline-flex;align-items:center;gap:9px;"

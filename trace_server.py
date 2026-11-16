@@ -1214,13 +1214,14 @@ h1{font-size:19px;font-weight:500;margin:0 0 3px}
 .sw-dis{cursor:not-allowed;opacity:.55}
 /* 只在「自动」与「手动」之间留这一道淡线，版本区内部靠间距，不再切第二刀 */
 .upd-sep{width:1px;height:13px;background:var(--upd-bd);display:inline-block;flex:none}
-/* 手动检查 = 版本区里唯一的实心药丸：胶囊已上莫兰迪底，这里反用纯白实底
-   才拉得开层次（两个淡色叠一起会糊）；边框透明占位，免得又成框中框。 */
+/* 手动检查是版本区里唯一的可点药丸：跟版本号 code 块统一成「灰底 + 细边框」
+   一族（不用白底，免得在灰绿胶囊上跳出来），靠主色字 + hover 填实色表达可点。 */
 .upd-ver{display:inline-flex;align-items:center;padding:2px 10px;
- border:1px solid transparent;border-radius:7px;background:var(--bg);
+ border:1px solid var(--upd-bd);border-radius:7px;background:var(--track);
  color:var(--accent-d);text-decoration:none;white-space:nowrap;
- transition:background-color .2s var(--ease),color .2s var(--ease)}
-.upd-ver:hover{background:var(--accent);color:var(--bg)}
+ transition:background-color .2s var(--ease),color .2s var(--ease),
+ border-color .2s var(--ease)}
+.upd-ver:hover{background:var(--accent);color:var(--bg);border-color:var(--accent)}
 /* 当前版本只是版本区的状态说明，用最轻的一档，不跟药丸抢视线 */
 .upd-cur{color:var(--faint);font-variant-numeric:tabular-nums;white-space:nowrap}
 /* 确认层：:target 显隐，遮罩与「取消」都是 href="#" 清掉 fragment 即收起，零脚本。
@@ -1479,10 +1480,11 @@ details.grp>summary::-webkit-details-marker{display:none}
 details.grp>summary small{color:var(--dim);font-weight:400;margin-left:8px}
 details.grp .in{padding:8px 11px 3px}
 code{font:11.5px ui-monospace,monospace;background:var(--track);padding:1px 4px;border-radius:3px}
-/* 胶囊里的版本号走 markdown 行内代码那套：等宽字 + 灰色底小块 + 极小圆角。
-   沿用全局 code 的 --track 灰底，只收紧圆角与 padding，让小块更紧凑；
-   字色用主色，比周围说明文字略重，像一段被引用起来的代码。 */
-.upd-cur code{background:var(--track);color:var(--accent-d);padding:0 4px;border-radius:2px}
+/* 胶囊里的版本号走 markdown 行内代码那套：等宽字 + 灰底小块 + 1px 细边框。
+   沿用全局 code 的 --track 灰底，收紧圆角与 padding 让它紧凑；描边用胶囊
+   边框色，把小块从灰绿底上轻轻托起；字色用主色，像一段被引用的代码。 */
+.upd-cur code{background:var(--track);color:var(--accent-d);padding:0 4px;
+ border:1px solid var(--upd-bd);border-radius:2px}
 .apirow{display:grid;grid-template-columns:minmax(260px,1fr) 2fr;gap:10px;padding:7px 10px;border-bottom:1px solid var(--line2);font-size:12px}
 .apirow code{background:none;padding:0;color:var(--link)}
 /* 跨文档视图过渡：同源跳转整页淡入淡出，纯 CSS 声明，不支持的浏览器直接忽略。
