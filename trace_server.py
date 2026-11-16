@@ -248,16 +248,17 @@ def update_tools():
         '<a class="btn" href="#">取消</a>'
         '<a class="btn on" href="/update-toggle?on=1">确定开启</a>'
         '</div></div></div>')
-    # 三段用细竖线分开：自动检查（开关）/ 手动检查（外链按钮）/ 当前版本，
-    # 这样「自动」与「手动」不会糊成一处，也不用靠颜色猜哪里能点。
+    # 内部只分两区：控制区（自动开关）| 版本区（手动检查 + 当前版本）。
+    # 一道淡分隔划开「自动 / 手动」即可；当前版本是状态说明，不再加第二道线，
+    # 否则三段两线把一枚小胶囊切得太碎。
     sep = '<i class="upd-sep" aria-hidden="true"></i>'
     ver = ('<a class="upd-ver" href="%s" '
            'title="打开仓库发布页，手动查看最新版本与安装包">版本检查 ↗</a>'
            % esc(RELEASES_URL))
     cur = ('<span class="upd-cur" title="当前运行的版本">当前版本 v%s</span>'
            % esc(APP_VERSION))
-    return ('<div class="updbox">%s%s%s%s%s%s</div>'
-            % (sw, sep, ver, sep, cur, modal))
+    return ('<div class="updbox">%s%s%s%s%s</div>'
+            % (sw, sep, ver, cur, modal))
 
 
 def esc(s):
@@ -1193,11 +1194,12 @@ h1{font-size:19px;font-weight:500;margin:0 0 3px}
 .hd-top{display:flex;align-items:center;justify-content:space-between;
  gap:14px;flex-wrap:wrap}
 /* 更新控件做成一枚独立的胶囊：字号比面包屑大、淡底 + 细边框 + 轻阴影，
-   和周围的纯文字板块拉开层次，但仍是低饱和主色，不喧宾夺主。 */
-.updbox{display:inline-flex;align-items:center;gap:9px;font-size:12px;
- padding:5px 13px;border:1px solid var(--border);border-radius:999px;
- background:var(--panel2);box-shadow:var(--shadow)}
-.sw{display:inline-flex;align-items:center;gap:7px;color:var(--fg);
+   和周围的纯文字板块拉开层次。内部统一成一种中灰，靠字重/底色区分层级，
+   不再出现「框里套框 + 两道竖线 + 三种灰」的拼装感。 */
+.updbox{display:inline-flex;align-items:center;gap:10px;font-size:12px;
+ padding:5px 12px;border:1px solid var(--border);border-radius:999px;
+ background:var(--panel2);box-shadow:var(--shadow);color:var(--muted)}
+.sw{display:inline-flex;align-items:center;gap:7px;color:var(--muted);
  text-decoration:none;white-space:nowrap}
 .sw:hover{color:var(--accent)}
 .sw-tg{position:relative;width:30px;height:17px;border-radius:999px;
@@ -1208,14 +1210,17 @@ h1{font-size:19px;font-weight:500;margin:0 0 3px}
 .sw.on .sw-tg{background:var(--accent);border-color:var(--accent)}
 .sw.on .sw-tg i{transform:translateX(13px);background:var(--bg)}
 .sw-dis{cursor:not-allowed;opacity:.55}
-.upd-sep{width:1px;height:14px;background:var(--border);display:inline-block;flex:none}
-/* 手动检查是次级按钮：细边框 + 箭头 + hover 主色，一眼看得出可点 */
-.upd-ver{display:inline-flex;align-items:center;padding:2px 9px;
- border:1px solid var(--border);border-radius:999px;background:var(--bg);
- color:var(--link);text-decoration:none;white-space:nowrap;
- transition:border-color .2s var(--ease),color .2s var(--ease),background-color .2s var(--ease)}
-.upd-ver:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-bg)}
-.upd-cur{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+/* 只在「自动」与「手动」之间留这一道淡线，版本区内部靠间距，不再切第二刀 */
+.upd-sep{width:1px;height:13px;background:var(--line);display:inline-block;flex:none}
+/* 手动检查 = 版本区里唯一的实心药丸，不另带边框（避免框中框）；
+   淡底 + 主色字 + hover 实心，一眼看得出可点。 */
+.upd-ver{display:inline-flex;align-items:center;padding:2px 10px;
+ border:1px solid transparent;border-radius:999px;background:var(--accent-bg);
+ color:var(--accent-fg);text-decoration:none;white-space:nowrap;
+ transition:background-color .2s var(--ease),color .2s var(--ease)}
+.upd-ver:hover{background:var(--accent);color:var(--bg)}
+/* 当前版本只是版本区的状态说明，用最轻的一档，不跟药丸抢视线 */
+.upd-cur{color:var(--faint);font-variant-numeric:tabular-nums;white-space:nowrap}
 /* 确认层：:target 显隐，遮罩与「取消」都是 href="#" 清掉 fragment 即收起，零脚本。
    遮罩单独成层（可点空白关闭），背景轻模糊；卡片只做一次轻微上浮，收尾克制。 */
 .upd-modal{display:none;position:fixed;inset:0;z-index:30;

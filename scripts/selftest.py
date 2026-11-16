@@ -505,12 +505,18 @@ def main():
                   < quiet.index('href="/update-toggle?on=1">确定开启</a>')
                   and ".upd-acts .btn{font-size:12px;padding:6px 16px;" in css,
                   "确认层按钮分层：取消在前，实心主按钮「确定开启」在右")
-            check('class="upd-sep"' in quiet
+            check(quiet.count('class="upd-sep"') == 1
+                  and quiet.index('class="upd-sep"') < quiet.index('class="upd-ver"')
                   and 'class="upd-cur" title="当前运行的版本">当前版本 v%s</span>'
                       % T.APP_VERSION in quiet
-                  and ">版本检查 ↗</a>" in quiet
-                  and ".upd-ver:hover{border-color:var(--accent)" in css,
-                  "页眉胶囊用分隔符区分自动/手动/当前版本，版本前有「当前版本」")
+                  and ">版本检查 ↗</a>" in quiet,
+                  "胶囊只分两区一线：自动 | 手动检查 + 当前版本，版本前有「当前版本」")
+            check(".upd-ver{display:inline-flex;align-items:center;padding:2px 10px; "
+                  "border:1px solid transparent;border-radius:999px;"
+                  "background:var(--accent-bg); " in css
+                  and ".upd-ver:hover{background:var(--accent);color:var(--bg)}" in css
+                  and ".updbox{display:inline-flex;align-items:center;gap:10px;" in css,
+                  "手动检查是版本区唯一实心药丸（透明边框免框中框），hover 填实色")
             check('class="foot-brand"' in quiet
                   and '<b>token-trace</b><i>v%s</i>' % T.APP_VERSION in quiet
                   and ".foot-brand{display:inline-flex;align-items:center;gap:9px;"
