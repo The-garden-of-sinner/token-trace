@@ -1139,6 +1139,8 @@ color-scheme:light;
 --part-bg:#ECEEF2;--part-fg:#59627A;--mark:#F2DFA0;
 --p0:#1FA39A;--p1:#EF9F27;--p2:#3B82D6;
 --p3:#8A63D2;--p4:#D26A9B;
+/* 更新胶囊专用莫兰迪灰绿：跟纯白主背景拉开，又比数据色低一档 */
+--upd-bg:#E8EEE8;--upd-bd:#C9D6CB;
 --shadow:0 1px 2px #0000000a,0 2px 8px #00000008;
 /* 交互缓动：起步利落、收尾缓，hover / 点击反馈共用这条曲线 */
 --ease:cubic-bezier(.22,.68,.24,1);
@@ -1197,8 +1199,8 @@ h1{font-size:19px;font-weight:500;margin:0 0 3px}
    和周围的纯文字板块拉开层次。内部统一成一种中灰，靠字重/底色区分层级，
    不再出现「框里套框 + 两道竖线 + 三种灰」的拼装感。 */
 .updbox{display:inline-flex;align-items:center;gap:10px;font-size:12px;
- padding:5px 12px;border:1px solid var(--border);border-radius:999px;
- background:var(--panel2);box-shadow:var(--shadow);color:var(--muted)}
+ padding:5px 12px;border:1px solid var(--upd-bd);border-radius:10px;
+ background:var(--upd-bg);box-shadow:var(--shadow);color:var(--muted)}
 .sw{display:inline-flex;align-items:center;gap:7px;color:var(--muted);
  text-decoration:none;white-space:nowrap}
 .sw:hover{color:var(--accent)}
@@ -1211,12 +1213,12 @@ h1{font-size:19px;font-weight:500;margin:0 0 3px}
 .sw.on .sw-tg i{transform:translateX(13px);background:var(--bg)}
 .sw-dis{cursor:not-allowed;opacity:.55}
 /* 只在「自动」与「手动」之间留这一道淡线，版本区内部靠间距，不再切第二刀 */
-.upd-sep{width:1px;height:13px;background:var(--line);display:inline-block;flex:none}
-/* 手动检查 = 版本区里唯一的实心药丸，不另带边框（避免框中框）；
-   淡底 + 主色字 + hover 实心，一眼看得出可点。 */
+.upd-sep{width:1px;height:13px;background:var(--upd-bd);display:inline-block;flex:none}
+/* 手动检查 = 版本区里唯一的实心药丸：胶囊已上莫兰迪底，这里反用纯白实底
+   才拉得开层次（两个淡色叠一起会糊）；边框透明占位，免得又成框中框。 */
 .upd-ver{display:inline-flex;align-items:center;padding:2px 10px;
- border:1px solid transparent;border-radius:999px;background:var(--accent-bg);
- color:var(--accent-fg);text-decoration:none;white-space:nowrap;
+ border:1px solid transparent;border-radius:7px;background:var(--bg);
+ color:var(--accent-d);text-decoration:none;white-space:nowrap;
  transition:background-color .2s var(--ease),color .2s var(--ease)}
 .upd-ver:hover{background:var(--accent);color:var(--bg)}
 /* 当前版本只是版本区的状态说明，用最轻的一档，不跟药丸抢视线 */
@@ -1545,6 +1547,7 @@ color-scheme:dark;
 --part-bg:#262B35;--part-fg:#AAB6CC;--mark:#6B5417;
 --p0:#4FCFC2;--p1:#E0AE4B;--p2:#6BA9EE;
 --p3:#B292F0;--p4:#E88FB8;
+--upd-bg:#2A3731;--upd-bd:#41524A;
 --shadow:0 1px 2px #00000040,0 2px 8px #00000030
 }mark{color:#F5E6B8}}
 """

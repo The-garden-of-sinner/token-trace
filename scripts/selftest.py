@@ -512,11 +512,13 @@ def main():
                   and ">版本检查 ↗</a>" in quiet,
                   "胶囊只分两区一线：自动 | 手动检查 + 当前版本，版本前有「当前版本」")
             check(".upd-ver{display:inline-flex;align-items:center;padding:2px 10px; "
-                  "border:1px solid transparent;border-radius:999px;"
-                  "background:var(--accent-bg); " in css
+                  "border:1px solid transparent;border-radius:7px;background:var(--bg); " in css
                   and ".upd-ver:hover{background:var(--accent);color:var(--bg)}" in css
-                  and ".updbox{display:inline-flex;align-items:center;gap:10px;" in css,
-                  "手动检查是版本区唯一实心药丸（透明边框免框中框），hover 填实色")
+                  and ".updbox{display:inline-flex;align-items:center;gap:10px;font-size:12px; "
+                       "padding:5px 12px;border:1px solid var(--upd-bd);border-radius:10px; " in css
+                  and "--upd-bg:#E8EEE8;--upd-bd:#C9D6CB;" in css
+                  and "--upd-bg:#2A3731;--upd-bd:#41524A;" in css,
+                  "胶囊圆角收小到 10px + 莫兰迪灰绿底（明暗双主题），药丸反白底拉开层次")
             check('class="foot-brand"' in quiet
                   and '<b>token-trace</b><i>v%s</i>' % T.APP_VERSION in quiet
                   and ".foot-brand{display:inline-flex;align-items:center;gap:9px;"
