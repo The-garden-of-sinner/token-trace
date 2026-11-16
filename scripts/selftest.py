@@ -486,24 +486,47 @@ def main():
             check('href="%s"' % T.RELEASES_URL in quiet
                   and ">版本检查 ↗</a>" in quiet,
                   "「版本检查 ↗」直连仓库 releases，不经后端")
+            css = T._squeeze_css(T.CSS)
             check('id="upd-confirm"' in quiet
                   and "可能消耗少量流量（每次约几KB）" in quiet
                   and "不会上传任何本地数据" in quiet
                   and "是否确定开启？" in quiet
-                  and ".upd-modal:target{display:flex}" in T._squeeze_css(T.CSS),
+                  and '.upd-modal:target{display:flex}' in css,
                   "开启前弹确认层：说明流量与隐私，纯 CSS :target 显隐")
+            check('class="upd-scrim" href="#"' in quiet
+                  and 'class="upd-eyebrow"' in quiet
+                  and 'class="upd-title"' in quiet
+                  and ".upd-scrim{position:absolute;inset:0;background:#0009;" in css
+                  and "backdrop-filter:blur(4px)" in css
+                  and "@keyframes updRise" in css
+                  and ".upd-scrim,.upd-card{animation:none}" in css,
+                  "确认层重做：可点遮罩关闭、轻模糊与克制上浮，减弱动态偏好下停动画")
+            check(quiet.index('href="#">取消</a>')
+                  < quiet.index('href="/update-toggle?on=1">确定开启</a>')
+                  and ".upd-acts .btn{font-size:12px;padding:6px 16px;" in css,
+                  "确认层按钮分层：取消在前，实心主按钮「确定开启」在右")
             check('class="upd-sep"' in quiet
-                  and 'class="upd-cur" title="当前运行的版本">v%s</span>' % T.APP_VERSION in quiet
+                  and 'class="upd-cur" title="当前运行的版本">当前版本 v%s</span>'
+                      % T.APP_VERSION in quiet
                   and ">版本检查 ↗</a>" in quiet
-                  and ".upd-ver:hover{border-color:var(--accent)" in T._squeeze_css(T.CSS),
-                  "页眉胶囊用分隔符区分自动/手动/当前版本，手动检查是明显可点按钮")
-            check('token-trace v%s</span>' % T.APP_VERSION in quiet
+                  and ".upd-ver:hover{border-color:var(--accent)" in css,
+                  "页眉胶囊用分隔符区分自动/手动/当前版本，版本前有「当前版本」")
+            check('class="foot-brand"' in quiet
+                  and '<b>token-trace</b><i>v%s</i>' % T.APP_VERSION in quiet
+                  and ".foot-brand{display:inline-flex;align-items:center;gap:9px;"
+                      "margin-left:auto;" in css
+                  and "border-left:1px solid var(--border)" in css,
+                  "页脚品牌签名：项目名加粗 + 版本徽章，细竖线与左侧说明隔离")
+            check('<a href="/">索引</a>' not in quiet
+                  and '<a href="/stats">全局统计</a>' not in quiet
+                  and '<a href="/rank">筛选与排序</a>' not in quiet
+                  and 'href="/api">API</a>' not in quiet
                   and 'href="/check"' not in quiet
                   and "· 检查更新" not in quiet
                   and "© 大晋帝国之谶" in quiet
                   and T.ZHIHU_URL in quiet and T.GITHUB_URL in quiet
                   and ">知乎 ↗</a>" in quiet and ">GitHub ↗</a>" in quiet,
-                  "页脚版本带项目名；版权保留 © 与知乎/GitHub 双链接")
+                  "页脚不再重复目录导航；版权保留 © 与知乎/GitHub 双链接")
             T.UPDATE.update(state="ok", latest="9.9.9",
                             url="https://github.com/x/y/releases/tag/v9.9.9")
             upd = T.page("索引", [("索引", "")], "<p>x</p>")

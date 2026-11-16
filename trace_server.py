@@ -206,8 +206,9 @@ def update_banner():
 
 
 def version_link():
-    """页脚版本号：带项目名，检查入口仍只在页眉胶囊里。"""
-    return '<span>token-trace v%s</span>' % esc(APP_VERSION)
+    """页脚品牌签名：项目名做主字、版本做徽章，左分割线与说明文字隔离。"""
+    return ('<span class="foot-brand"><b>token-trace</b>'
+            '<i>v%s</i></span>' % esc(APP_VERSION))
 
 
 def update_tools():
@@ -234,21 +235,26 @@ def update_tools():
               '<span class="sw-t">自动检查更新</span>'
               '<span class="sw-tg"><i></i></span></a>')
     modal = (
-        '<div class="upd-modal" id="upd-confirm"><div class="upd-card" '
-        'role="alertdialog" aria-label="确认开启自动检查更新">'
-        '<b>开启自动检查更新？</b>'
+        '<div class="upd-modal" id="upd-confirm">'
+        '<a class="upd-scrim" href="#" aria-label="关闭确认框"></a>'
+        '<div class="upd-card" role="alertdialog" '
+        'aria-label="确认开启自动检查更新">'
+        '<div class="upd-eyebrow"><span class="upd-dot" aria-hidden="true"></span>'
+        '更新偏好</div>'
+        '<h3 class="upd-title">开启自动检查更新？</h3>'
         '<p>开启时自动检查是否有新版本，可能消耗少量流量（每次约几KB），'
         '不会上传任何本地数据，是否确定开启？</p>'
         '<div class="upd-acts">'
+        '<a class="btn" href="#">取消</a>'
         '<a class="btn on" href="/update-toggle?on=1">确定开启</a>'
-        '<a class="btn" href="#">取消</a></div></div></div>')
+        '</div></div></div>')
     # 三段用细竖线分开：自动检查（开关）/ 手动检查（外链按钮）/ 当前版本，
     # 这样「自动」与「手动」不会糊成一处，也不用靠颜色猜哪里能点。
     sep = '<i class="upd-sep" aria-hidden="true"></i>'
     ver = ('<a class="upd-ver" href="%s" '
            'title="打开仓库发布页，手动查看最新版本与安装包">版本检查 ↗</a>'
            % esc(RELEASES_URL))
-    cur = ('<span class="upd-cur" title="当前运行的版本">v%s</span>'
+    cur = ('<span class="upd-cur" title="当前运行的版本">当前版本 v%s</span>'
            % esc(APP_VERSION))
     return ('<div class="updbox">%s%s%s%s%s%s</div>'
             % (sw, sep, ver, sep, cur, modal))
@@ -1209,18 +1215,37 @@ h1{font-size:19px;font-weight:500;margin:0 0 3px}
  color:var(--link);text-decoration:none;white-space:nowrap;
  transition:border-color .2s var(--ease),color .2s var(--ease),background-color .2s var(--ease)}
 .upd-ver:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-bg)}
-.upd-cur{color:var(--faint);font-variant-numeric:tabular-nums;white-space:nowrap}
-/* 确认层：:target 显隐，取消链接的 href="#" 清掉 fragment 即收起，全程零脚本。 */
-.upd-modal{display:none;position:fixed;inset:0;z-index:30;background:#0007;
+.upd-cur{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+/* 确认层：:target 显隐，遮罩与「取消」都是 href="#" 清掉 fragment 即收起，零脚本。
+   遮罩单独成层（可点空白关闭），背景轻模糊；卡片只做一次轻微上浮，收尾克制。 */
+.upd-modal{display:none;position:fixed;inset:0;z-index:30;
  align-items:center;justify-content:center;padding:20px}
 .upd-modal:target{display:flex}
-.upd-card{background:var(--panel);border:1px solid var(--border);border-radius:10px;
- box-shadow:0 10px 34px #0004;padding:18px 20px;max-width:340px;color:var(--fg)}
-.upd-card b{font-size:13px;font-weight:600}
-.upd-card p{font-size:12px;line-height:1.75;color:var(--muted);margin:9px 0 15px}
-.upd-acts{display:flex;gap:8px;justify-content:flex-end}
-.upd-acts .btn{font-size:11px;padding:5px 12px}
-@media(prefers-reduced-motion:reduce){.sw-tg,.sw-tg i{transition:none}}
+.upd-scrim{position:absolute;inset:0;background:#0009;
+ backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);
+ animation:updFade .26s ease both}
+.upd-card{position:relative;z-index:1;width:min(100%,392px);
+ background:var(--panel2);border:1px solid var(--border);border-radius:16px;
+ padding:24px 26px 20px;color:var(--fg);
+ box-shadow:0 22px 60px #0004,0 2px 10px #0002,inset 0 1px 0 #ffffff66;
+ animation:updRise .3s var(--ease-in) both}
+@keyframes updFade{from{opacity:0}to{opacity:1}}
+@keyframes updRise{from{opacity:0;transform:translateY(10px) scale(.98)}
+ to{opacity:1;transform:none}}
+.upd-eyebrow{display:flex;align-items:center;gap:7px;font-size:10.5px;
+ letter-spacing:.14em;color:var(--accent-fg)}
+.upd-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);
+ box-shadow:0 0 0 3px var(--accent-bg);flex:none}
+.upd-title{font-size:17px;font-weight:600;line-height:1.4;
+ margin:11px 0 8px;color:var(--fg)}
+.upd-card p{font-size:12.5px;line-height:1.85;color:var(--muted);margin:0}
+.upd-acts{display:flex;gap:9px;justify-content:flex-end;
+ margin-top:20px;padding-top:16px;border-top:1px solid var(--line2)}
+.upd-acts .btn{font-size:12px;padding:6px 16px;border-radius:8px;
+ min-width:78px;text-align:center}
+@media(prefers-reduced-motion:reduce){
+ .sw-tg,.sw-tg i{transition:none}
+ .upd-scrim,.upd-card{animation:none}}
 .badge{display:inline-block;font-size:10.5px;color:var(--ok-fg);background:var(--ok-bg);border-radius:9px;padding:0 8px;line-height:17px;margin-left:8px;vertical-align:2px}
 h2{font-size:13px;font-weight:500;margin:24px 0 9px;padding-bottom:6px;border-bottom:1px solid var(--line);color:var(--fg)}
 h2 small{font-weight:400;color:var(--dim);font-size:11.5px;margin-left:8px}
@@ -1420,6 +1445,15 @@ th{color:var(--muted);font-weight:500;font-size:11.5px;background:var(--panel)}
 td.r,th.r{text-align:right}
 footer{margin-top:26px;padding-top:10px;border-top:1px solid var(--line2);font-size:11px;color:var(--dim);display:flex;gap:14px;flex-wrap:wrap}
 .foot-copy{font-size:10.5px;color:var(--faint)}
+/* 品牌签名与左侧说明文字隔离：细竖线 + 自动外边距推到右侧，
+   项目名等宽加粗、版本号做细边框胶囊，不靠大字或高饱和抢主内容。 */
+.foot-brand{display:inline-flex;align-items:center;gap:9px;margin-left:auto;
+ padding-left:16px;border-left:1px solid var(--border);white-space:nowrap}
+.foot-brand b{font:600 12px/1.3 ui-monospace,"Noto Sans Mono CJK SC",monospace;
+ letter-spacing:.04em;color:var(--fg)}
+.foot-brand i{font:500 10.5px/1.4 ui-monospace,"Noto Sans Mono CJK SC",monospace;
+ font-style:normal;color:var(--accent-fg);background:var(--accent-bg);
+ border:1px solid var(--rule);border-radius:999px;padding:1px 9px}
 footer a{color:var(--faint);text-decoration:none}
 footer a:hover{color:var(--link-h)}
 /* 更新提示：只在真的查到新版本时出现，一条可点的窄条，不占固定高度。
@@ -2108,8 +2142,6 @@ def page(title, crumbs, body, sub="", extra_head="", need=(), topbar="",
            '<footer><span>本页 HTML @@KB@@ KB</span>' +
            '<span>数据只读 · 全文由后端按需提供 · 无需 JavaScript</span>' +
            back_link(crumbs, footer=True) +
-           '<a href="/">索引</a><a href="/stats">全局统计</a>'
-           '<a href="/rank">筛选与排序</a><a href="/api">API</a>' +
            monitor_link("ext") + version_link() +
            '<span class="foot-copy">© 大晋帝国之谶 · '
            '<a href="%s" target="_blank" rel="noopener">知乎 ↗</a> · '
