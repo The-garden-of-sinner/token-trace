@@ -325,7 +325,7 @@ v1.4.0 及更早的变更（Antigravity 接入、月历热力图、环图闭合�
 右侧的平台切换分在两行，不再挤在一起。**新安装默认关闭**，手动开启后本次进程才查；开关开启时
 点一下即关，关闭时点一下弹确认层，写明「约几 KB 流量、不上传任何本地数据」，确认后才开启
 （纯 CSS `:target` 显隐，取消链接 `href="#"` 即收起，全程零脚本）。`版本检查` 直接跳仓库
-releases 页，本机不跑检查；页脚只保留纯版本号与版权声明。
+releases 页，本机不跑检查；页脚只保留纯版本号，以及署名「大晋帝国之谶」与知乎 / GitHub 两个主页链接。
 开启后查到新版（5 秒超时）就在页面顶部出一条窄提示，直达对应 Release 页。零写盘，不记住上次
 选择，每次启动都回到默认关闭。
 
@@ -648,7 +648,7 @@ token（按 `providerData.model` 分组，展示名取全库得票最多的写�
 | 子代理标注 | `scan_all()` 在同一次逐行遍历里记 `isSubAgent` / `agent` / `rootRequestId` / 首条时间戳 / `Agent` 调用的时间与 `conversationRequestId`（`agent_reqs`）；`subagent_relations()` 先用 `rootRequestId` 精确匹配，匹配不到再退回 5 秒时间窗，会话列表按结果打「子代理」/「N 个子代理」标签 | 零额外全库遍历；精确匹配 O(子代理数)，只有未命中的才走时间窗；无子代理时无标签，页面不多一块高度 |
 | 首页全库画像 | `index_overview(ss, focus)` 按视图分发：`focus` 为空（全部）走 `_platform_charts()` 输出平台拼接环 + 月历热力图，非空走 `_model_charts()` 输出模型环 + 同款月历（平台色）；`_workspace_cell()` / `_donut_cell()` / `_overview_shell()` 复用外壳。只聚合 `STORE.sessions()` 的 `src / models / model / days / mtime / ws / pin`。平台环对 <1.2% 的段做弧宽保底后等比归一，图例仍给真实占比；模型环按占比 ≥1% 筛选主模型、其余并入「其他 N 个模型」。热力图走 `_by_day()` → `_cal_window()`（近 `CAL_MONTHS=3` 个自然月）→ `_cal_block()`：每月 7 列 × 6 行方格、`opacity=0.10+0.90*√(v/窗口峰值)` 做**连续**色阶，补位与未来日期只占位不显示、无记录才留 `--track` 实底；全部视图格子涂全天合计，`[data-tip]` 气泡给日期与各平台输入 token | 零额外全库遍历、零新增索引、不依赖 `workbuddy.db`；旧索引无 `days` 时回退 `mtime` 兜底；悬停零 JS |
 | 同机互链 | `monitor_url()` 用 `http.client` 直连 loopback 的 `/api/ping`（不走 `http_proxy`、150 ms 超时），成功与失败都按 `MONITOR_TTL` 缓存；`monitor_link()` 只在探测通过时输出 `<a target="_blank" rel="noopener">` | 每 15 s 最多一次本地连接；不通时输出 0 字节，页面不留死链 |
-| 版本与更新提示 | `_read_version()` 依次取 `TRACE_VERSION`（单文件 bat 注入）→ 程序目录 `VERSION`（deb 装到 `/usr/share/token-trace/VERSION`）→ `scripts/VERSION`（源码运行）→ `dev`；`UPDATE["auto"]` 默认 `False`，`check_update()` 只在开关打开后由 daemon 线程查一次 GitHub `releases/latest`（5 s 超时），结果只写模块级 `UPDATE` 字典；`update_newer()` 按数字元组比较，`update_banner()` 只读缓存渲染；页眉顶行 `update_tools()` 画开关 + 版本检查外链，开关关闭态经 `#upd-confirm` 的 `:target` 弹确认层；`/update-toggle?on=0\|1` 切 `UPDATE["auto"]`（关闭时清结果、开启时后台查一次）后 303 跳回同源 Referer，`/check` 保留为旧手动重查入口；页脚 `version_link()` 只留纯版本号 + 版权小字 | 零 JS、零新增依赖；页面永不等待网络；新安装默认不联网，`--no-update-check` / `TRACE_NO_UPDATE_CHECK=1` 强制禁用且开关置灰；任何失败静默 |
+| 版本与更新提示 | `_read_version()` 依次取 `TRACE_VERSION`（单文件 bat 注入）→ 程序目录 `VERSION`（deb 装到 `/usr/share/token-trace/VERSION`）→ `scripts/VERSION`（源码运行）→ `dev`；`UPDATE["auto"]` 默认 `False`，`check_update()` 只在开关打开后由 daemon 线程查一次 GitHub `releases/latest`（5 s 超时），结果只写模块级 `UPDATE` 字典；`update_newer()` 按数字元组比较，`update_banner()` 只读缓存渲染；页眉顶行 `update_tools()` 画开关 + 版本检查外链，开关关闭态经 `#upd-confirm` 的 `:target` 弹确认层；`/update-toggle?on=0\|1` 切 `UPDATE["auto"]`（关闭时清结果、开启时后台查一次）后 303 跳回同源 Referer，`/check` 保留为旧手动重查入口；页脚 `version_link()` 只留纯版本号 + 署名双链接（`ZHIHU_URL` / `GITHUB_URL`） | 零 JS、零新增依赖；页面永不等待网络；新安装默认不联网，`--no-update-check` / `TRACE_NO_UPDATE_CHECK=1` 强制禁用且开关置灰；任何失败静默 |
 | 统一检索 | `search_box()` 用 `radio + label` 分段开关（无 `id`、无脚本、同页可复用），固定 form action，`v_search()` 按 `mode` 分流到 `v_find()` | 零 JS、零新增路由；分页仍直连 `/find` |
 | 按需 CSS（续） | `CSS_FOLD` / `CSS_NAV` / `CSS_INDEX` 分别按 `hitfold` / `navgrid` / `ovgrid` 注入 | 只有用到的页面才带对应图表样式 |
 | 降级 | 渐变色标不被老浏览器识别时回落纯色轨道（柱高与链接不变）；`prefers-reduced-motion` 关动效；数据不足显示统一空态 | 信息不丢，静态预览仍可读 |

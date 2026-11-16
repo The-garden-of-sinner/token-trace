@@ -118,6 +118,9 @@ def _read_version():
 APP_VERSION = _read_version()
 REPO_SLUG = "The-garden-of-sinner/token-trace"
 RELEASES_URL = "https://github.com/%s/releases" % REPO_SLUG
+# 页脚署名：知乎「晋之谶」+ GitHub 账号主页，都是纯导航链接，不加载任何资源
+ZHIHU_URL = "https://www.zhihu.com/people/ke-duo-li-nuo-ta-se-ni-ou-li-si"
+GITHUB_URL = "https://github.com/The-garden-of-sinner"
 
 # 更新检查的全部状态就这一份内存缓存：不落盘、不碰任何会话数据、不参与
 # 渲染路径（页面只读它，永不等待它）。state: off / checking / ok / error。
@@ -1151,7 +1154,8 @@ h1{font-size:19px;font-weight:500;margin:0 0 3px}
 /* 首页：平台切换与大标题同栏。这里自带一份分段控件样式，不依赖 CSS_INDEX
    片段是否加载；其余页面不渲染 .platbar，不受影响。 */
 .sub.sub-wide{margin-left:0;text-align:left;max-width:none;margin-top:5px}
-.platbar{display:inline-flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap}
+/* 平台切换整体下移一截：标题与它之间留出呼吸空间，不再挤在同一条基线上 */
+.platbar{display:inline-flex;align-items:center;gap:8px;margin:12px 0 0 auto;flex-wrap:wrap}
 .platbar .tb-lab{font-size:10.5px;letter-spacing:.06em;color:var(--faint)}
 .platbar .tb-seg{display:inline-flex;background:var(--track);border-radius:999px;padding:2px;
  flex-wrap:wrap;justify-content:flex-end}
@@ -1176,17 +1180,21 @@ h1{font-size:19px;font-weight:500;margin:0 0 3px}
    两行分开才有区分度。窄屏折行后控件自然落到面包屑下方。 */
 .hd-top{display:flex;align-items:center;justify-content:space-between;
  gap:14px;flex-wrap:wrap}
-.updbox{display:inline-flex;align-items:center;gap:9px;font-size:10.5px}
-.sw{display:inline-flex;align-items:center;gap:6px;color:var(--muted);
+/* 更新控件做成一枚独立的胶囊：字号比面包屑大、淡底 + 细边框 + 轻阴影，
+   和周围的纯文字板块拉开层次，但仍是低饱和主色，不喧宾夺主。 */
+.updbox{display:inline-flex;align-items:center;gap:11px;font-size:12px;
+ padding:5px 13px;border:1px solid var(--border);border-radius:999px;
+ background:var(--panel2);box-shadow:var(--shadow)}
+.sw{display:inline-flex;align-items:center;gap:7px;color:var(--fg);
  text-decoration:none;white-space:nowrap}
-.sw:hover{color:var(--fg)}
-.sw-tg{position:relative;width:26px;height:15px;border-radius:999px;
+.sw:hover{color:var(--accent)}
+.sw-tg{position:relative;width:30px;height:17px;border-radius:999px;
  background:var(--track);border:1px solid var(--border);
  transition:background-color .2s var(--ease),border-color .2s var(--ease)}
-.sw-tg i{position:absolute;left:2px;top:2px;width:9px;height:9px;border-radius:50%;
+.sw-tg i{position:absolute;left:2px;top:2px;width:11px;height:11px;border-radius:50%;
  background:var(--faint);transition:transform .2s var(--ease),background-color .2s var(--ease)}
 .sw.on .sw-tg{background:var(--accent);border-color:var(--accent)}
-.sw.on .sw-tg i{transform:translateX(11px);background:var(--bg)}
+.sw.on .sw-tg i{transform:translateX(13px);background:var(--bg)}
 .sw-dis{cursor:not-allowed;opacity:.55}
 .upd-ver{color:var(--link);text-decoration:none;white-space:nowrap}
 .upd-ver:hover{color:var(--link-h);text-decoration:underline;text-decoration-color:var(--rule)}
@@ -2091,8 +2099,10 @@ def page(title, crumbs, body, sub="", extra_head="", need=(), topbar="",
            '<a href="/">索引</a><a href="/stats">全局统计</a>'
            '<a href="/rank">筛选与排序</a><a href="/api">API</a>' +
            monitor_link("ext") + version_link() +
-           '<span class="foot-copy">© 大晋帝国之谶（github：The-garden-of-sinner）</span>' +
-           '</footer>' +
+           '<span class="foot-copy">大晋帝国之谶 · '
+           '<a href="%s" target="_blank" rel="noopener">知乎 ↗</a> · '
+           '<a href="%s" target="_blank" rel="noopener">GitHub ↗</a></span>' %
+           (esc(ZHIHU_URL), esc(GITHUB_URL)) + '</footer>' +
            back + '</div></html>')
     # 页脚口径与 80 KB 硬闸对齐：算整页响应字节（含内联 CSS 与 header），
     # 不是只算 body。替换会改变长度（"99.9" 与 "100.0" 差 2 字节），迭代到

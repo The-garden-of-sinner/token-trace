@@ -176,7 +176,9 @@ def main():
             # 导航链接，不属于「依赖外部资源」；抹掉再扫，避免误判成 CDN。
             scan = body.replace(b"http://127.0.0.1", b"loopback") \
                        .replace(b"http://localhost", b"loopback") \
-                       .replace(T.RELEASES_URL.encode(), b"releases")
+                       .replace(T.RELEASES_URL.encode(), b"releases") \
+                       .replace(T.ZHIHU_URL.encode(), b"zhihu") \
+                       .replace(T.GITHUB_URL.encode(), b"github")
             ev = len(RE_EVENT.findall(scan))
             ext = len(RE_EXT.findall(scan)) + len(RE_LINK.findall(scan))
             jsu = scan.lower().count(b"javascript:")
@@ -493,8 +495,10 @@ def main():
             check('v%s</span>' % T.APP_VERSION in quiet
                   and 'href="/check"' not in quiet
                   and "· 检查更新" not in quiet
-                  and "© 大晋帝国之谶（github：The-garden-of-sinner）" in quiet,
-                  "页脚只留纯版本号与版权声明，旧检查入口已前移到页眉")
+                  and "大晋帝国之谶" in quiet
+                  and T.ZHIHU_URL in quiet and T.GITHUB_URL in quiet
+                  and ">知乎 ↗</a>" in quiet and ">GitHub ↗</a>" in quiet,
+                  "页脚署名为作者名 + 知乎/GitHub 双链接，旧检查入口已前移到页眉")
             T.UPDATE.update(state="ok", latest="9.9.9",
                             url="https://github.com/x/y/releases/tag/v9.9.9")
             upd = T.page("索引", [("索引", "")], "<p>x</p>")
