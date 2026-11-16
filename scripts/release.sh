@@ -88,8 +88,11 @@ Get-FileHash .\\TokenTrace.bat -Algorithm SHA256
 """.format(v=v)
 if notes:
     text = text.replace("## 说明", "## 本次更新\n\n" + notes + "\n\n## 说明")
+# 版本号带 -exp / -beta / -rc 后缀视为预发布：GitHub 标 Pre-release，
+# 不进「Latest release」位，/releases/latest 也不会把它当正式版推给用户。
+pre = "-" in v
 print(json.dumps({"tag_name": "v" + v, "name": "v" + v, "body": text,
-                  "draft": False, "prerelease": False}, ensure_ascii=False))
+                  "draft": False, "prerelease": pre}, ensure_ascii=False))
 PY
 )"
 
