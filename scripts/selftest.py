@@ -484,21 +484,26 @@ def main():
                   and 'class="hdrow"' in quiet,
                   "更新控件独占页眉右上角（面包屑行），与平台切换分行")
             check('href="%s"' % T.RELEASES_URL in quiet
-                  and ">版本检查</a>" in quiet,
-                  "「版本检查」直连仓库 releases，不经后端")
+                  and ">版本检查 ↗</a>" in quiet,
+                  "「版本检查 ↗」直连仓库 releases，不经后端")
             check('id="upd-confirm"' in quiet
                   and "可能消耗少量流量（每次约几KB）" in quiet
                   and "不会上传任何本地数据" in quiet
                   and "是否确定开启？" in quiet
                   and ".upd-modal:target{display:flex}" in T._squeeze_css(T.CSS),
                   "开启前弹确认层：说明流量与隐私，纯 CSS :target 显隐")
-            check('v%s</span>' % T.APP_VERSION in quiet
+            check('class="upd-sep"' in quiet
+                  and 'class="upd-cur" title="当前运行的版本">v%s</span>' % T.APP_VERSION in quiet
+                  and ">版本检查 ↗</a>" in quiet
+                  and ".upd-ver:hover{border-color:var(--accent)" in T._squeeze_css(T.CSS),
+                  "页眉胶囊用分隔符区分自动/手动/当前版本，手动检查是明显可点按钮")
+            check('token-trace v%s</span>' % T.APP_VERSION in quiet
                   and 'href="/check"' not in quiet
                   and "· 检查更新" not in quiet
-                  and "大晋帝国之谶" in quiet
+                  and "© 大晋帝国之谶" in quiet
                   and T.ZHIHU_URL in quiet and T.GITHUB_URL in quiet
                   and ">知乎 ↗</a>" in quiet and ">GitHub ↗</a>" in quiet,
-                  "页脚署名为作者名 + 知乎/GitHub 双链接，旧检查入口已前移到页眉")
+                  "页脚版本带项目名；版权保留 © 与知乎/GitHub 双链接")
             T.UPDATE.update(state="ok", latest="9.9.9",
                             url="https://github.com/x/y/releases/tag/v9.9.9")
             upd = T.page("索引", [("索引", "")], "<p>x</p>")

@@ -206,8 +206,8 @@ def update_banner():
 
 
 def version_link():
-    """页脚只留版本号：检查入口已挪到标题栏右侧，这里不再重复放功能。"""
-    return '<span>v%s</span>' % esc(APP_VERSION)
+    """页脚版本号：带项目名，检查入口仍只在页眉胶囊里。"""
+    return '<span>token-trace v%s</span>' % esc(APP_VERSION)
 
 
 def update_tools():
@@ -242,10 +242,16 @@ def update_tools():
         '<div class="upd-acts">'
         '<a class="btn on" href="/update-toggle?on=1">确定开启</a>'
         '<a class="btn" href="#">取消</a></div></div></div>')
+    # 三段用细竖线分开：自动检查（开关）/ 手动检查（外链按钮）/ 当前版本，
+    # 这样「自动」与「手动」不会糊成一处，也不用靠颜色猜哪里能点。
+    sep = '<i class="upd-sep" aria-hidden="true"></i>'
     ver = ('<a class="upd-ver" href="%s" '
-           'title="打开仓库发布页，手动查看最新版本与安装包">版本检查</a>'
+           'title="打开仓库发布页，手动查看最新版本与安装包">版本检查 ↗</a>'
            % esc(RELEASES_URL))
-    return '<div class="updbox">%s%s%s</div>' % (sw, ver, modal)
+    cur = ('<span class="upd-cur" title="当前运行的版本">v%s</span>'
+           % esc(APP_VERSION))
+    return ('<div class="updbox">%s%s%s%s%s%s</div>'
+            % (sw, sep, ver, sep, cur, modal))
 
 
 def esc(s):
@@ -1182,7 +1188,7 @@ h1{font-size:19px;font-weight:500;margin:0 0 3px}
  gap:14px;flex-wrap:wrap}
 /* 更新控件做成一枚独立的胶囊：字号比面包屑大、淡底 + 细边框 + 轻阴影，
    和周围的纯文字板块拉开层次，但仍是低饱和主色，不喧宾夺主。 */
-.updbox{display:inline-flex;align-items:center;gap:11px;font-size:12px;
+.updbox{display:inline-flex;align-items:center;gap:9px;font-size:12px;
  padding:5px 13px;border:1px solid var(--border);border-radius:999px;
  background:var(--panel2);box-shadow:var(--shadow)}
 .sw{display:inline-flex;align-items:center;gap:7px;color:var(--fg);
@@ -1196,8 +1202,14 @@ h1{font-size:19px;font-weight:500;margin:0 0 3px}
 .sw.on .sw-tg{background:var(--accent);border-color:var(--accent)}
 .sw.on .sw-tg i{transform:translateX(13px);background:var(--bg)}
 .sw-dis{cursor:not-allowed;opacity:.55}
-.upd-ver{color:var(--link);text-decoration:none;white-space:nowrap}
-.upd-ver:hover{color:var(--link-h);text-decoration:underline;text-decoration-color:var(--rule)}
+.upd-sep{width:1px;height:14px;background:var(--border);display:inline-block;flex:none}
+/* 手动检查是次级按钮：细边框 + 箭头 + hover 主色，一眼看得出可点 */
+.upd-ver{display:inline-flex;align-items:center;padding:2px 9px;
+ border:1px solid var(--border);border-radius:999px;background:var(--bg);
+ color:var(--link);text-decoration:none;white-space:nowrap;
+ transition:border-color .2s var(--ease),color .2s var(--ease),background-color .2s var(--ease)}
+.upd-ver:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-bg)}
+.upd-cur{color:var(--faint);font-variant-numeric:tabular-nums;white-space:nowrap}
 /* 确认层：:target 显隐，取消链接的 href="#" 清掉 fragment 即收起，全程零脚本。 */
 .upd-modal{display:none;position:fixed;inset:0;z-index:30;background:#0007;
  align-items:center;justify-content:center;padding:20px}
@@ -2099,7 +2111,7 @@ def page(title, crumbs, body, sub="", extra_head="", need=(), topbar="",
            '<a href="/">索引</a><a href="/stats">全局统计</a>'
            '<a href="/rank">筛选与排序</a><a href="/api">API</a>' +
            monitor_link("ext") + version_link() +
-           '<span class="foot-copy">大晋帝国之谶 · '
+           '<span class="foot-copy">© 大晋帝国之谶 · '
            '<a href="%s" target="_blank" rel="noopener">知乎 ↗</a> · '
            '<a href="%s" target="_blank" rel="noopener">GitHub ↗</a></span>' %
            (esc(ZHIHU_URL), esc(GITHUB_URL)) + '</footer>' +
