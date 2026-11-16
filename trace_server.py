@@ -121,9 +121,11 @@ RELEASES_URL = "https://github.com/%s/releases" % REPO_SLUG
 
 # 更新检查的全部状态就这一份内存缓存：不落盘、不碰任何会话数据、不参与
 # 渲染路径（页面只读它，永不等待它）。state: off / checking / ok / error。
-UPDATE = {"state": "off", "latest": "", "url": "", "at": 0.0, "error": ""}
-UPDATE_LOCK = threading.Lock()
+# auto 是标题栏开关的运行时状态：默认随启动参数，运行中由 /update-toggle 切。
 UPDATE_OFF = bool(os.environ.get("TRACE_NO_UPDATE_CHECK"))
+UPDATE = {"state": "off", "latest": "", "url": "", "at": 0.0, "error": "",
+          "auto": not UPDATE_OFF}
+UPDATE_LOCK = threading.Lock()
 
 
 def _ver_key(text):
@@ -153,7 +155,7 @@ def check_update(timeout=5.0):
     更新」才重试；`TRACE_NO_UPDATE_CHECK=1` 或 `--no-update-check` 可整个关掉。
     任何失败都静默（state=error），绝不让网络问题影响页面加载或启动速度。
     """
-    if UPDATE_OFF:
+    if UPDATE_OFF or not UPDATE.get("auto", True):
         return False
     with UPDATE_LOCK:
         UPDATE["state"] = "checking"
@@ -182,6 +184,8 @@ def check_update(timeout=5.0):
 
 def _update_boot():
     """启动后台线程：查到新版本在控制台留一行，页面提示由 update_banner() 出。"""
+    if not UPDATE.get("auto", True):
+        return
     if check_update() and update_newer():
         print("发现新版本 v%s（当前 v%s）：%s"
               % (UPDATE["latest"], APP_VERSION, UPDATE["url"]))
@@ -198,13 +202,46 @@ def update_banner():
 
 
 def version_link():
-    """页脚版本号：可点，用来手动重查（纯链接跳 /check，零 JS）。"""
-    if update_newer():
-        return ('<a href="%s" title="有新版本 v%s">v%s · 可更新</a>'
-                % (esc(UPDATE.get("url") or RELEASES_URL),
-                   esc(UPDATE["latest"]), esc(APP_VERSION)))
-    return ('<a href="/check" title="检查 GitHub 上的最新版本">v%s · 检查更新</a>'
-            % esc(APP_VERSION))
+    """页脚只留版本号：检查入口已挪到标题栏右侧，这里不再重复放功能。"""
+    return '<span>v%s</span>' % esc(APP_VERSION)
+
+
+def update_tools():
+    """标题栏右侧的更新控件：自动检查开关 + 版本检查外链，纯 CSS 零脚本。
+
+    - 开启态点一下即关；关闭态点一下弹确认层，确认后才打开。
+    - 确认层靠 `#upd-confirm` 的 :target 显隐（不用 dialog.showModal()），
+      取消链接指向 `#` 即收起；整个交互不引入任何脚本。
+    - 版本检查是直达仓库 releases 的外链，本机不跑检查、不下载、不安装。
+    """
+    if UPDATE_OFF:
+        sw = ('<span class="sw sw-dis" role="switch" aria-checked="false" '
+              'title="启动时已用 --no-update-check 禁用自动检查">'
+              '<span class="sw-t">自动检查更新</span>'
+              '<span class="sw-tg"><i></i></span></span>')
+    elif UPDATE.get("auto", True):
+        sw = ('<a class="sw on" role="switch" aria-checked="true" '
+              'href="/update-toggle?on=0" title="点击关闭自动检查更新">'
+              '<span class="sw-t">自动检查更新</span>'
+              '<span class="sw-tg"><i></i></span></a>')
+    else:
+        sw = ('<a class="sw" role="switch" aria-checked="false" '
+              'href="#upd-confirm" title="点击开启自动检查更新">'
+              '<span class="sw-t">自动检查更新</span>'
+              '<span class="sw-tg"><i></i></span></a>')
+    modal = (
+        '<div class="upd-modal" id="upd-confirm"><div class="upd-card" '
+        'role="alertdialog" aria-label="确认开启自动检查更新">'
+        '<b>开启自动检查更新？</b>'
+        '<p>开启时自动检查是否有新版本，可能消耗少量流量（每次约几KB），'
+        '不会上传任何本地数据，是否确定开启？</p>'
+        '<div class="upd-acts">'
+        '<a class="btn on" href="/update-toggle?on=1">确定开启</a>'
+        '<a class="btn" href="#">取消</a></div></div></div>')
+    ver = ('<a class="upd-ver" href="%s" '
+           'title="打开仓库发布页，手动查看最新版本与安装包">版本检查</a>'
+           % esc(RELEASES_URL))
+    return '<div class="updbox">%s%s%s</div>' % (sw, ver, modal)
 
 
 def esc(s):
@@ -1134,6 +1171,36 @@ h1{font-size:19px;font-weight:500;margin:0 0 3px}
 /* 本机没有该平台的会话：不可点，靠 title 说明原因（无 X 会话记录） */
 .platbar .tb-seg .off{color:var(--faint);opacity:.55;cursor:not-allowed;user-select:none}
 @media(max-width:720px){.platbar{margin-left:0}}
+/* 标题栏右侧：更新控件在前、平台切换在后；说明文字另起一行。 */
+.hdr-tools{display:flex;align-items:center;gap:12px;margin-left:auto;
+ flex-wrap:wrap;justify-content:flex-end}
+.hdr-tools .platbar{margin-left:0}
+@media(max-width:720px){.hdr-tools{margin-left:0;justify-content:flex-start}}
+.updbox{display:inline-flex;align-items:center;gap:9px;font-size:10.5px}
+.sw{display:inline-flex;align-items:center;gap:6px;color:var(--muted);
+ text-decoration:none;white-space:nowrap}
+.sw:hover{color:var(--fg)}
+.sw-tg{position:relative;width:26px;height:15px;border-radius:999px;
+ background:var(--track);border:1px solid var(--border);
+ transition:background-color .2s var(--ease),border-color .2s var(--ease)}
+.sw-tg i{position:absolute;left:2px;top:2px;width:9px;height:9px;border-radius:50%;
+ background:var(--faint);transition:transform .2s var(--ease),background-color .2s var(--ease)}
+.sw.on .sw-tg{background:var(--accent);border-color:var(--accent)}
+.sw.on .sw-tg i{transform:translateX(11px);background:var(--bg)}
+.sw-dis{cursor:not-allowed;opacity:.55}
+.upd-ver{color:var(--link);text-decoration:none;white-space:nowrap}
+.upd-ver:hover{color:var(--link-h);text-decoration:underline;text-decoration-color:var(--rule)}
+/* 确认层：:target 显隐，取消链接的 href="#" 清掉 fragment 即收起，全程零脚本。 */
+.upd-modal{display:none;position:fixed;inset:0;z-index:30;background:#0007;
+ align-items:center;justify-content:center;padding:20px}
+.upd-modal:target{display:flex}
+.upd-card{background:var(--panel);border:1px solid var(--border);border-radius:10px;
+ box-shadow:0 10px 34px #0004;padding:18px 20px;max-width:340px;color:var(--fg)}
+.upd-card b{font-size:13px;font-weight:600}
+.upd-card p{font-size:12px;line-height:1.75;color:var(--muted);margin:9px 0 15px}
+.upd-acts{display:flex;gap:8px;justify-content:flex-end}
+.upd-acts .btn{font-size:11px;padding:5px 12px}
+@media(prefers-reduced-motion:reduce){.sw-tg,.sw-tg i{transition:none}}
 .badge{display:inline-block;font-size:10.5px;color:var(--ok-fg);background:var(--ok-bg);border-radius:9px;padding:0 8px;line-height:17px;margin-left:8px;vertical-align:2px}
 h2{font-size:13px;font-weight:500;margin:24px 0 9px;padding-bottom:6px;border-bottom:1px solid var(--line);color:var(--fg)}
 h2 small{font-weight:400;color:var(--dim);font-size:11.5px;margin-left:8px}
@@ -1996,15 +2063,11 @@ def page(title, crumbs, body, sub="", extra_head="", need=(), topbar="",
             '<title>%s · Token 轨迹</title><style>%s</style>' % (esc(title), _squeeze_css(css)))
     back = back_link(crumbs)
     h1 = '<h1>%s<span class="badge">完整模式 · 零截断</span></h1>' % esc(title)
-    if topbar:
-        # 平台切换与大标题同栏：标题在左、切换在右；说明文字另起一行左对齐，
-        # 免得和两个 margin-left:auto 抢同一行的剩余空间。
-        hd = ('<div class="hdrow">%s%s</div>' % (h1, topbar) +
-              ('<div class="sub sub-wide">%s</div>' % esc(sub) if sub else ''))
-    else:
-        # 其余页面保持原来的「标题 + 右侧说明」单行布局，零影响。
-        hd = ('<div class="hdrow">' + h1 +
-              ('<div class="sub">%s</div>' % esc(sub) if sub else '') + '</div>')
+    # 标题栏右侧：更新控件在前、平台切换在后；说明文字统一另起一行左对齐，
+    # 免得几处 margin-left:auto 抢同一行剩余空间，也保证「开关在平台左边」。
+    tools = '<div class="hdr-tools">%s%s</div>' % (update_tools(), topbar)
+    hd = ('<div class="hdrow">%s%s</div>' % (h1, tools) +
+          ('<div class="sub sub-wide">%s</div>' % esc(sub) if sub else ''))
     # 首屏启动层，只盖首页。副标题带当前视图的真实会话数 / 调用数，是「正在
     # 解析这一屏」而不是一句空泛的 loading。零 JS：撤除时机交给 CSS 文档时间线
     # 与浏览器绘制节奏（详见 CSS_INDEX 的 .boot 注释）——长帧期间不提交新帧，
@@ -2500,10 +2563,13 @@ def _cal_block(per_day, months, today, color, short=None):
                 continue
             tip = [k, "%s token" % kh(v)]
             if short:
-                # 只有一天一份数据时明细跟合计重复，省掉这一行，气泡更短
                 hits = [(pk, pv) for pk, pv in
                         sorted(rec.items(), key=lambda x: -x[1]) if pv > 0]
-                if len(hits) > 1:
+                if len(hits) == 1:
+                    # 当天只有一家平台：合计就是它，把平台名并到数字行。
+                    # 原先「只有一份明细就不列」让气泡只剩裸 token，看不出归属。
+                    tip[1] = "%s %s" % (short.get(hits[0][0], hits[0][0]), tip[1])
+                elif len(hits) > 1:
                     for pk, pv in hits[:4]:
                         tip.append("　%s %s" % (short.get(pk, pk), kh(pv)))
                     if len(hits) > 4:
@@ -4750,6 +4816,7 @@ def api_route(path, q):
             "python": sys.version.split()[0],
             "version": APP_VERSION,
             "update": {"state": UPDATE["state"], "latest": UPDATE["latest"],
+                       "auto": UPDATE.get("auto", True) and not UPDATE_OFF,
                        "newer": update_newer(), "checked_at": int(UPDATE["at"])},
             "monitor": ("up" if monitor_url() else "down") if MONITOR_URL else "disabled",
             "monitor_url": MONITOR_URL,
@@ -5027,7 +5094,7 @@ ROUTE_SPEC = [
     H(r"^/s/([0-9A-Za-z_-]+)$", lambda q, m: v_session(q, m.group(1)),
       "GET /s/<sid>?view=turns|calls&p=", "会话概览（按轮 / 按调用分页）", "/s/{sid}"),
 
-    A("/api/health", "状态、pid、rss_mb、版本与更新检查结果、会话数、缓存数、write_files、monitor", "/api/health"),
+    A("/api/health", "状态、pid、rss_mb、版本与自动检查开关、更新结果、会话数、缓存数、write_files、monitor", "/api/health"),
     A("/api/sessions", "全部会话摘要（新增 hit / miss / rate）", "/api/sessions"),
     A("/api/stats", "跨会话全量聚合", "/api/stats"),
     A("/api/analytics/calls?from=&to=&model=&ws=&tool=&sid=&fields=&refresh=&offset=&limit=",
@@ -5142,6 +5209,24 @@ class Handler(BaseHTTPRequestHandler):
                         b'{"ok":false,"error":"unauthorized"}')
             return
         try:
+            if path == "/update-toggle":
+                # 标题栏开关：只切进程内 auto 标志，开启时顺手查一次。
+                # 回跳只认本机同源 Referer；启动参数关掉时这里也不重新打开。
+                on = (q.get("on") or [""])[0] == "1"
+                if not UPDATE_OFF:
+                    with UPDATE_LOCK:
+                        UPDATE["auto"] = on
+                        if not on:
+                            UPDATE.update(state="off", latest="", url="",
+                                          at=0.0, error="")
+                    if on:
+                        threading.Thread(target=check_update, daemon=True).start()
+                    print("自动检查更新已%s" % ("开启" if on else "关闭"))
+                self.send_response(303)
+                self.send_header("Location", self._safe_referer() or "/")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             if path == "/check":
                 # 手动重查：跑一次（最多 5 秒）后跳回来源页，不需要中间页或脚本。
                 # 只回跳本机同源地址，Referer 不当开放重定向用。

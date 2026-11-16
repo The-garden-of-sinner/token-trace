@@ -172,10 +172,11 @@ def main():
             path = r["sample"].replace("{sid}", sid)
             st, body = get(path)
             sc = body.count(b"<script")
-            # 同机工具互链是 127.0.0.1 的外链，不属于「依赖外部资源」；
-            # 只把 scheme 后面的主机抹掉再扫，避免把 loopback 误判成 CDN。
+            # 同机工具互链与「版本检查」的 GitHub releases 都是用户主动点的
+            # 导航链接，不属于「依赖外部资源」；抹掉再扫，避免误判成 CDN。
             scan = body.replace(b"http://127.0.0.1", b"loopback") \
-                       .replace(b"http://localhost", b"loopback")
+                       .replace(b"http://localhost", b"loopback") \
+                       .replace(T.RELEASES_URL.encode(), b"releases")
             ev = len(RE_EVENT.findall(scan))
             ext = len(RE_EXT.findall(scan)) + len(RE_LINK.findall(scan))
             jsu = scan.lower().count(b"javascript:")
@@ -461,15 +462,32 @@ def main():
               and T._ver_key("dev") is None,
               "版本按数字段比较：1.4.10 > 1.4.9；dev 不参与比较")
         check(T.UPDATE["state"] == "off",
-              "导入模块不联网：更新状态只在 main() 启动线程或点 /check 时才变")
+              "导入模块不联网：更新只在启动线程、标题栏开关或 /check 时才查")
         saved = dict(T.UPDATE)
         try:
-            T.UPDATE.update(state="ok", latest="", url="", at=0.0, error="")
+            T.UPDATE.update(state="ok", latest="", url="", at=0.0, error="",
+                            auto=True)
             quiet = T.page("索引", [("索引", "")], "<p>x</p>")
             check('class="upd"' not in quiet and not T.update_newer(),
                   "没查到新版本时不出现提示条")
-            check("v%s · 检查更新" % T.APP_VERSION in quiet and 'href="/check"' in quiet,
-                  "页脚常驻版本号 + 检查入口（纯链接，零 JS）")
+            check('class="updbox"' in quiet
+                  and '<span class="sw-t">自动检查更新</span>' in quiet
+                  and 'href="/update-toggle?on=0"' in quiet
+                  and 'aria-checked="true"' in quiet,
+                  "开关在页眉且默认开：点一下即关，零脚本")
+            check('href="%s"' % T.RELEASES_URL in quiet
+                  and ">版本检查</a>" in quiet,
+                  "「版本检查」直连仓库 releases，不经后端")
+            check('id="upd-confirm"' in quiet
+                  and "可能消耗少量流量（每次约几KB）" in quiet
+                  and "不会上传任何本地数据" in quiet
+                  and "是否确定开启？" in quiet
+                  and ".upd-modal:target{display:flex}" in T._squeeze_css(T.CSS),
+                  "开启前弹确认层：说明流量与隐私，纯 CSS :target 显隐")
+            check('v%s</span>' % T.APP_VERSION in quiet
+                  and 'href="/check"' not in quiet
+                  and "· 检查更新" not in quiet,
+                  "页脚只留纯版本号，旧检查入口已前移到页眉")
             T.UPDATE.update(state="ok", latest="9.9.9",
                             url="https://github.com/x/y/releases/tag/v9.9.9")
             upd = T.page("索引", [("索引", "")], "<p>x</p>")
@@ -477,8 +495,6 @@ def main():
                   and "releases/tag/v9.9.9" in upd
                   and ("当前 v%s" % T.APP_VERSION) in upd,
                   "查到更新时出一条提示，带当前版本与 release 链接")
-            check("v%s · 可更新" % T.APP_VERSION in upd,
-                  "页脚版本号同步标成「可更新」，不只在页面顶部提示")
             check("<script" not in upd, "更新提示不引入任何脚本")
             T.UPDATE.update(latest=T.APP_VERSION)
             check(not T.update_newer()
@@ -486,6 +502,13 @@ def main():
                   "最新版等于当前版时不提示（不制造假更新）")
             T.UPDATE.update(latest="0.1.0", state="ok")
             check(not T.update_newer(), "更旧的 release 不提示（拒绝降级提示）")
+            T.UPDATE.update(auto=False, state="off", latest="", url="")
+            off = T.page("索引", [("索引", "")], "<p>x</p>")
+            check('href="#upd-confirm"' in off
+                  and 'aria-checked="false"' in off,
+                  "关闭态点开关才走确认层")
+            check(not T.check_update() and T.UPDATE["state"] == "off",
+                  "关掉后 check_update 直接返回，不产生任何网络请求")
         finally:
             T.UPDATE.clear()
             T.UPDATE.update(saved)
@@ -514,6 +537,11 @@ def main():
               and "近 3 个月" in ovm2 and "按平台拆分" not in ovm2,
               "单平台视图同一套月历，格子改用该平台色")
         check("<polyline" not in ovm2, "单平台视图也不再画折线")
+        # 「全部」视图：当天只有一家平台时，气泡不能只剩裸 token
+        solo_day = time.strftime("%Y-%m-%d", time.localtime(time.time() - 3 * 86400))
+        solo = T.index_overview([_plat("solo", "zcode", 700, solo_day)])
+        check("ZCode 700 token" in solo,
+              "全部热力图单平台日：token 旁标出平台名，不再只显示裸数字")
 
         print("== 非 WorkBuddy 平台：不摆积分，只给金额估算 ==")
         orig_store = T.STORE
@@ -1136,8 +1164,9 @@ def main():
               "/api/health 自报 write_files=false")
         hv = json.loads(body)["data"]
         check(hv.get("version") == T.APP_VERSION
-              and (hv.get("update") or {}).get("state") == "off",
-              "/api/health 暴露版本号与更新检查状态（v%s / %s，--no-update-check 生效）"
+              and (hv.get("update") or {}).get("state") == "off"
+              and (hv.get("update") or {}).get("auto") is False,
+              "/api/health 暴露版本号与自动检查开关（v%s / %s，--no-update-check 生效）"
               % (hv.get("version"), (hv.get("update") or {}).get("state")))
     finally:
         try:
