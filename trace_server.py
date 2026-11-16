@@ -121,10 +121,11 @@ RELEASES_URL = "https://github.com/%s/releases" % REPO_SLUG
 
 # 更新检查的全部状态就这一份内存缓存：不落盘、不碰任何会话数据、不参与
 # 渲染路径（页面只读它，永不等待它）。state: off / checking / ok / error。
-# auto 是标题栏开关的运行时状态：默认随启动参数，运行中由 /update-toggle 切。
+# auto 是页眉开关的运行时状态：新安装默认关闭（零写盘，不记住上次选择），
+# 用户在本次进程里手动开启才查；--no-update-check 则是永久强制禁用。
 UPDATE_OFF = bool(os.environ.get("TRACE_NO_UPDATE_CHECK"))
 UPDATE = {"state": "off", "latest": "", "url": "", "at": 0.0, "error": "",
-          "auto": not UPDATE_OFF}
+          "auto": False}
 UPDATE_LOCK = threading.Lock()
 
 
@@ -155,7 +156,7 @@ def check_update(timeout=5.0):
     更新」才重试；`TRACE_NO_UPDATE_CHECK=1` 或 `--no-update-check` 可整个关掉。
     任何失败都静默（state=error），绝不让网络问题影响页面加载或启动速度。
     """
-    if UPDATE_OFF or not UPDATE.get("auto", True):
+    if UPDATE_OFF or not UPDATE.get("auto", False):
         return False
     with UPDATE_LOCK:
         UPDATE["state"] = "checking"
@@ -184,7 +185,7 @@ def check_update(timeout=5.0):
 
 def _update_boot():
     """启动后台线程：查到新版本在控制台留一行，页面提示由 update_banner() 出。"""
-    if not UPDATE.get("auto", True):
+    if not UPDATE.get("auto", False):
         return
     if check_update() and update_newer():
         print("发现新版本 v%s（当前 v%s）：%s"
@@ -219,7 +220,7 @@ def update_tools():
               'title="启动时已用 --no-update-check 禁用自动检查">'
               '<span class="sw-t">自动检查更新</span>'
               '<span class="sw-tg"><i></i></span></span>')
-    elif UPDATE.get("auto", True):
+    elif UPDATE.get("auto", False):
         sw = ('<a class="sw on" role="switch" aria-checked="true" '
               'href="/update-toggle?on=0" title="点击关闭自动检查更新">'
               '<span class="sw-t">自动检查更新</span>'
@@ -1171,11 +1172,10 @@ h1{font-size:19px;font-weight:500;margin:0 0 3px}
 /* 本机没有该平台的会话：不可点，靠 title 说明原因（无 X 会话记录） */
 .platbar .tb-seg .off{color:var(--faint);opacity:.55;cursor:not-allowed;user-select:none}
 @media(max-width:720px){.platbar{margin-left:0}}
-/* 标题栏右侧：更新控件在前、平台切换在后；说明文字另起一行。 */
-.hdr-tools{display:flex;align-items:center;gap:12px;margin-left:auto;
- flex-wrap:wrap;justify-content:flex-end}
-.hdr-tools .platbar{margin-left:0}
-@media(max-width:720px){.hdr-tools{margin-left:0;justify-content:flex-start}}
+/* 页眉顶行：面包屑在左、更新控件在最右上角；平台切换单独留在标题行右侧，
+   两行分开才有区分度。窄屏折行后控件自然落到面包屑下方。 */
+.hd-top{display:flex;align-items:center;justify-content:space-between;
+ gap:14px;flex-wrap:wrap}
 .updbox{display:inline-flex;align-items:center;gap:9px;font-size:10.5px}
 .sw{display:inline-flex;align-items:center;gap:6px;color:var(--muted);
  text-decoration:none;white-space:nowrap}
@@ -1399,6 +1399,7 @@ th,td{text-align:left;padding:6px 9px;border-bottom:1px solid var(--line2);font-
 th{color:var(--muted);font-weight:500;font-size:11.5px;background:var(--panel)}
 td.r,th.r{text-align:right}
 footer{margin-top:26px;padding-top:10px;border-top:1px solid var(--line2);font-size:11px;color:var(--dim);display:flex;gap:14px;flex-wrap:wrap}
+.foot-copy{font-size:10.5px;color:var(--faint)}
 footer a{color:var(--faint);text-decoration:none}
 footer a:hover{color:var(--link-h)}
 /* 更新提示：只在真的查到新版本时出现，一条可点的窄条，不占固定高度。
@@ -2063,10 +2064,10 @@ def page(title, crumbs, body, sub="", extra_head="", need=(), topbar="",
             '<title>%s · Token 轨迹</title><style>%s</style>' % (esc(title), _squeeze_css(css)))
     back = back_link(crumbs)
     h1 = '<h1>%s<span class="badge">完整模式 · 零截断</span></h1>' % esc(title)
-    # 标题栏右侧：更新控件在前、平台切换在后；说明文字统一另起一行左对齐，
-    # 免得几处 margin-left:auto 抢同一行剩余空间，也保证「开关在平台左边」。
-    tools = '<div class="hdr-tools">%s%s</div>' % (update_tools(), topbar)
-    hd = ('<div class="hdrow">%s%s</div>' % (h1, tools) +
+    # 更新控件独占页眉顶行的右上角（面包屑在左），平台切换留在标题行右侧；
+    # 两行分开，不再和「平台」挤在同一段里。说明文字再另起一行左对齐。
+    top = '<div class="hd-top">%s%s</div>' % (crumb(crumbs), update_tools())
+    hd = ('<div class="hdrow">%s%s</div>' % (h1, topbar) +
           ('<div class="sub sub-wide">%s</div>' % esc(sub) if sub else ''))
     # 首屏启动层，只盖首页。副标题带当前视图的真实会话数 / 调用数，是「正在
     # 解析这一屏」而不是一句空泛的 loading。零 JS：撤除时机交给 CSS 文档时间线
@@ -2082,14 +2083,16 @@ def page(title, crumbs, body, sub="", extra_head="", need=(), topbar="",
                 '<div class="boot-dots"><i></i><i></i><i></i></div>'
                 '</div></div>' %
                 esc(boot_note or "正在归集本地会话轨迹 · 数据只读"))
-    doc = (head + boot + '<header><div class="wrap">' + crumb(crumbs) + hd +
+    doc = (head + boot + '<header><div class="wrap">' + top + hd +
            '</div></header><div class="wrap">' + update_banner() + extra_head + body +
            '<footer><span>本页 HTML @@KB@@ KB</span>' +
            '<span>数据只读 · 全文由后端按需提供 · 无需 JavaScript</span>' +
            back_link(crumbs, footer=True) +
            '<a href="/">索引</a><a href="/stats">全局统计</a>'
            '<a href="/rank">筛选与排序</a><a href="/api">API</a>' +
-           monitor_link("ext") + version_link() + '</footer>' +
+           monitor_link("ext") + version_link() +
+           '<span class="foot-copy">© 大晋帝国之谶（github：The-garden-of-sinner）</span>' +
+           '</footer>' +
            back + '</div></html>')
     # 页脚口径与 80 KB 硬闸对齐：算整页响应字节（含内联 CSS 与 header），
     # 不是只算 body。替换会改变长度（"99.9" 与 "100.0" 差 2 字节），迭代到
@@ -4816,7 +4819,7 @@ def api_route(path, q):
             "python": sys.version.split()[0],
             "version": APP_VERSION,
             "update": {"state": UPDATE["state"], "latest": UPDATE["latest"],
-                       "auto": UPDATE.get("auto", True) and not UPDATE_OFF,
+                       "auto": UPDATE.get("auto", False) and not UPDATE_OFF,
                        "newer": update_newer(), "checked_at": int(UPDATE["at"])},
             "monitor": ("up" if monitor_url() else "down") if MONITOR_URL else "disabled",
             "monitor_url": MONITOR_URL,

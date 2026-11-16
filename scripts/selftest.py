@@ -462,7 +462,9 @@ def main():
               and T._ver_key("dev") is None,
               "版本按数字段比较：1.4.10 > 1.4.9；dev 不参与比较")
         check(T.UPDATE["state"] == "off",
-              "导入模块不联网：更新只在启动线程、标题栏开关或 /check 时才查")
+              "导入模块不联网：更新只在页眉开关开启后或 /check 时才查")
+        check(T.UPDATE["auto"] is False,
+              "新安装默认关闭自动检查更新（零写盘，不记住上次选择）")
         saved = dict(T.UPDATE)
         try:
             T.UPDATE.update(state="ok", latest="", url="", at=0.0, error="",
@@ -474,7 +476,11 @@ def main():
                   and '<span class="sw-t">自动检查更新</span>' in quiet
                   and 'href="/update-toggle?on=0"' in quiet
                   and 'aria-checked="true"' in quiet,
-                  "开关在页眉且默认开：点一下即关，零脚本")
+                  "开启态点一下即关，零脚本")
+            check('class="hd-top"' in quiet
+                  and quiet.index('class="updbox"') < quiet.index('class="hdrow"')
+                  and 'class="hdrow"' in quiet,
+                  "更新控件独占页眉右上角（面包屑行），与平台切换分行")
             check('href="%s"' % T.RELEASES_URL in quiet
                   and ">版本检查</a>" in quiet,
                   "「版本检查」直连仓库 releases，不经后端")
@@ -486,8 +492,9 @@ def main():
                   "开启前弹确认层：说明流量与隐私，纯 CSS :target 显隐")
             check('v%s</span>' % T.APP_VERSION in quiet
                   and 'href="/check"' not in quiet
-                  and "· 检查更新" not in quiet,
-                  "页脚只留纯版本号，旧检查入口已前移到页眉")
+                  and "· 检查更新" not in quiet
+                  and "© 大晋帝国之谶（github：The-garden-of-sinner）" in quiet,
+                  "页脚只留纯版本号与版权声明，旧检查入口已前移到页眉")
             T.UPDATE.update(state="ok", latest="9.9.9",
                             url="https://github.com/x/y/releases/tag/v9.9.9")
             upd = T.page("索引", [("索引", "")], "<p>x</p>")
