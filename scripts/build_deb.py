@@ -86,6 +86,9 @@ def main():
     for name in ("trace_server.py", "gen_trace.py", "pricing.py",
                  "README.md", "LICENSE"):
         data_files.append(("usr/share/token-trace/" + name, read(name), 0o644))
+    # 版本号单独放一份文件：trace_server 优先读程序目录，源码运行读 scripts/VERSION。
+    # 只有这一处来源，避免代码里再抄一个常量、发版时改漏一个。
+    data_files.append(("usr/share/token-trace/VERSION", read("scripts/VERSION"), 0o644))
     # v1.3.0：sources/ 是包，必须整目录进 deb；pricing 是顶层硬依赖。
     srcdir = os.path.join(BASE, "sources")
     for name in sorted(os.listdir(srcdir)):

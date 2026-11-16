@@ -142,7 +142,8 @@ def main():
 
     print("== 启动临时服务 ==")
     proc = subprocess.Popen(
-        [sys.executable, "-B", "trace_server.py", "--port", str(PORT)],
+        [sys.executable, "-B", "trace_server.py", "--port", str(PORT),
+         "--no-update-check"],   # 自测不联网：同时验证这个开关确实生效
         cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         ready = False
@@ -449,6 +450,48 @@ def main():
               and 'animation:tt-in .52s var(--ease-in) backwards' in T.CSS
               and T.CSS.count('animation-delay:.') == 12,
               "入场动画保持原 12 组错峰节奏，不整体延后（实测会拉低稳态 fps）")
+
+        print("== 版本与更新提示（L1） ==")
+        ver_file = open("scripts/VERSION", encoding="utf-8").read().strip()
+        check(T.APP_VERSION == ver_file,
+              "版本号取自 scripts/VERSION（%s），代码里不另存常量" % T.APP_VERSION)
+        check(T._ver_key("1.4.10") > T._ver_key("1.4.9")
+              and T._ver_key("v1.5.0") > T._ver_key("1.4.99")
+              and T._ver_key("1.4") == T._ver_key("1.4.0")
+              and T._ver_key("dev") is None,
+              "版本按数字段比较：1.4.10 > 1.4.9；dev 不参与比较")
+        check(T.UPDATE["state"] == "off",
+              "导入模块不联网：更新状态只在 main() 启动线程或点 /check 时才变")
+        saved = dict(T.UPDATE)
+        try:
+            T.UPDATE.update(state="ok", latest="", url="", at=0.0, error="")
+            quiet = T.page("索引", [("索引", "")], "<p>x</p>")
+            check('class="upd"' not in quiet and not T.update_newer(),
+                  "没查到新版本时不出现提示条")
+            check("v%s · 检查更新" % T.APP_VERSION in quiet and 'href="/check"' in quiet,
+                  "页脚常驻版本号 + 检查入口（纯链接，零 JS）")
+            T.UPDATE.update(state="ok", latest="9.9.9",
+                            url="https://github.com/x/y/releases/tag/v9.9.9")
+            upd = T.page("索引", [("索引", "")], "<p>x</p>")
+            check('class="upd"' in upd and "新版本 9.9.9" in upd
+                  and "releases/tag/v9.9.9" in upd
+                  and ("当前 v%s" % T.APP_VERSION) in upd,
+                  "查到更新时出一条提示，带当前版本与 release 链接")
+            check("v%s · 可更新" % T.APP_VERSION in upd,
+                  "页脚版本号同步标成「可更新」，不只在页面顶部提示")
+            check("<script" not in upd, "更新提示不引入任何脚本")
+            T.UPDATE.update(latest=T.APP_VERSION)
+            check(not T.update_newer()
+                  and 'class="upd"' not in T.page("索引", [("索引", "")], "<p>x</p>"),
+                  "最新版等于当前版时不提示（不制造假更新）")
+            T.UPDATE.update(latest="0.1.0", state="ok")
+            check(not T.update_newer(), "更旧的 release 不提示（拒绝降级提示）")
+        finally:
+            T.UPDATE.clear()
+            T.UPDATE.update(saved)
+        check("只读" in T.page("索引", [("索引", "")], "<p>x</p>"),
+              "更新检查不改变「数据只读」口径：只查版本号，不下载、不安装")
+
         # 连续色：同一平台三天给 100 / 400 / 1600，opacity 必须是三个不同值
         d1 = time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400))
         d2 = time.strftime("%Y-%m-%d", time.localtime(time.time() - 2 * 86400))
@@ -1091,6 +1134,11 @@ def main():
         st, body = get("/api/health")
         check(json.loads(body)["data"].get("write_files") is False,
               "/api/health 自报 write_files=false")
+        hv = json.loads(body)["data"]
+        check(hv.get("version") == T.APP_VERSION
+              and (hv.get("update") or {}).get("state") == "off",
+              "/api/health 暴露版本号与更新检查状态（v%s / %s，--no-update-check 生效）"
+              % (hv.get("version"), (hv.get("update") or {}).get("state")))
     finally:
         try:
             get("/shutdown", timeout=3, method="POST")

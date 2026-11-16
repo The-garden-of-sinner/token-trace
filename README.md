@@ -130,6 +130,7 @@ python3 trace_server.py        # http://127.0.0.1:8765/，Ctrl+C 退出
 - **纯 CSS 动效**：跨文档淡入、KPI 局部 morph、分区入场错峰、环图逐段生长、折线从左往右描出、`<details>` 高度渐变；`prefers-reduced-motion` 与打印一律关闭
 - 统一检索入口（按字符 / 按块由服务端分流）、单行工具条、悬浮「返回上一层」与页脚同名链接
 - **同机互链**：探测到 WorkBuddy 用量监视在跑，才在工具条与页脚放「实时用量 ↗」；没跑就不渲染，页面上不留死链
+- **版本与更新提示**：页脚常驻 `v1.4.1 · 检查更新`；启动时后台查一次 GitHub 最新 release，查到新版就在页面顶部出一条窄提示，直达对应 Release。只提示、不下载、不安装（装包要 root，见「已知限制」13），`--no-update-check` 可整条关闭
 - 18 个 JSON 端点，统一 `{ok, data, meta}` 信封；跨会话分析宽表与字段字典见 [docs/API.md](docs/API.md)
 - Linux / Windows 各有一键启动与停止脚本，幂等、自动开浏览器
 
@@ -320,6 +321,19 @@ v1.4.0 及更早的变更（Antigravity 接入、月历热力图、环图闭合�
 
 **→ [github.com/The-garden-of-sinner/token-trace/releases](https://github.com/The-garden-of-sinner/token-trace/releases)**
 
+**页内检查更新**：页脚常驻 `v1.4.1 · 检查更新`，点一下会重查并跳回当前页（`/check` → 303）。
+服务启动时也会在后台线程查一次 GitHub 最新 release（5 秒超时），查到更新的版本就在页面顶部
+出一条窄提示，直达对应 Release 页。
+
+- **只提示，不下载、不安装**：Linux 装包要 root、Windows 要替换正在运行的 `.bat`，把这两步
+  做成按钮等于在本机开一条远程代码执行路径，所以明确留在范围外；点进去自己下 `.deb` / `.bat`。
+- **唯一的主动外联**：只请求 `api.github.com` 的 `releases/latest`，不带任何本地数据，结果只写内存（不落盘、
+  不缓存到磁盘、不参与页面渲染）。失败静默，页面上不出现任何错误提示。
+- **可整条关掉**：`--no-update-check` 或环境变量 `TRACE_NO_UPDATE_CHECK=1`。
+- **版本号只有一个来源**：`scripts/VERSION`。deb 把它装到 `/usr/share/token-trace/VERSION`，
+  单文件 bat 用 `set TRACE_VERSION=%VER%` 传入，源码运行直接读仓库里的那份；都没有时回落
+  `dev`，开发快照不参与新旧比较（既不提示更新，也不会被当成「比线上新」）。
+
 发版流程见上一节「从源码重建」。
 
 
@@ -370,7 +384,7 @@ v1.4.0 及更早的变更（Antigravity 接入、月历热力图、环图闭合�
 
 | 端点 | 说明 |
 | --- | --- |
-| `GET /api/health` | 状态、`pid`、`rss_mb`、`uptime_s`、会话数、缓存数、`write_files=false`、同机监视器 `monitor=up\|down\|disabled` |
+| `GET /api/health` | 状态、`pid`、`rss_mb`、`uptime_s`、`version`、`update.state`、会话数、缓存数、`write_files=false`、同机监视器 `monitor=up\|down\|disabled` |
 | `GET /api/sessions` | 全部会话摘要（含 `hit` / `miss` / `rate`） |
 | `GET /api/stats` | 跨会话全量聚合 |
 | `GET /api/analytics/calls?from=&to=&model=&ws=&tool=&sid=&fields=&refresh=&offset=&limit=` | 跨会话扁平调用宽表（16 列，含 `is_sub` / `root`；`sid` 精筛、`refresh=1` 强制重扫并给出数据新鲜度；字段与量纲见 `docs/API.md`） |
@@ -630,6 +644,7 @@ token（按 `providerData.model` 分组，展示名取全库得票最多的写�
 | 子代理标注 | `scan_all()` 在同一次逐行遍历里记 `isSubAgent` / `agent` / `rootRequestId` / 首条时间戳 / `Agent` 调用的时间与 `conversationRequestId`（`agent_reqs`）；`subagent_relations()` 先用 `rootRequestId` 精确匹配，匹配不到再退回 5 秒时间窗，会话列表按结果打「子代理」/「N 个子代理」标签 | 零额外全库遍历；精确匹配 O(子代理数)，只有未命中的才走时间窗；无子代理时无标签，页面不多一块高度 |
 | 首页全库画像 | `index_overview(ss, focus)` 按视图分发：`focus` 为空（全部）走 `_platform_charts()` 输出平台拼接环 + 月历热力图，非空走 `_model_charts()` 输出模型环 + 同款月历（平台色）；`_workspace_cell()` / `_donut_cell()` / `_overview_shell()` 复用外壳。只聚合 `STORE.sessions()` 的 `src / models / model / days / mtime / ws / pin`。平台环对 <1.2% 的段做弧宽保底后等比归一，图例仍给真实占比；模型环按占比 ≥1% 筛选主模型、其余并入「其他 N 个模型」。热力图走 `_by_day()` → `_cal_window()`（近 `CAL_MONTHS=3` 个自然月）→ `_cal_block()`：每月 7 列 × 6 行方格、`opacity=0.10+0.90*√(v/窗口峰值)` 做**连续**色阶，补位与未来日期只占位不显示、无记录才留 `--track` 实底；全部视图格子涂全天合计，`[data-tip]` 气泡给日期与各平台输入 token | 零额外全库遍历、零新增索引、不依赖 `workbuddy.db`；旧索引无 `days` 时回退 `mtime` 兜底；悬停零 JS |
 | 同机互链 | `monitor_url()` 用 `http.client` 直连 loopback 的 `/api/ping`（不走 `http_proxy`、150 ms 超时），成功与失败都按 `MONITOR_TTL` 缓存；`monitor_link()` 只在探测通过时输出 `<a target="_blank" rel="noopener">` | 每 15 s 最多一次本地连接；不通时输出 0 字节，页面不留死链 |
+| 版本与更新提示 | `_read_version()` 依次取 `TRACE_VERSION`（单文件 bat 注入）→ 程序目录 `VERSION`（deb 装到 `/usr/share/token-trace/VERSION`）→ `scripts/VERSION`（源码运行）→ `dev`；`check_update()` 在 `main()` 的 daemon 线程里查一次 GitHub `releases/latest`（5 s 超时），结果只写模块级 `UPDATE` 字典；`update_newer()` 按数字元组比较，`update_banner()` / `version_link()` 只读缓存渲染；`/check` 手动重查后 303 跳回同源 Referer | 零 JS、零新增依赖；页面永不等待网络；`--no-update-check` / `TRACE_NO_UPDATE_CHECK=1` 完全关闭；任何失败静默 |
 | 统一检索 | `search_box()` 用 `radio + label` 分段开关（无 `id`、无脚本、同页可复用），固定 form action，`v_search()` 按 `mode` 分流到 `v_find()` | 零 JS、零新增路由；分页仍直连 `/find` |
 | 按需 CSS（续） | `CSS_FOLD` / `CSS_NAV` / `CSS_INDEX` 分别按 `hitfold` / `navgrid` / `ovgrid` 注入 | 只有用到的页面才带对应图表样式 |
 | 降级 | 渐变色标不被老浏览器识别时回落纯色轨道（柱高与链接不变）；`prefers-reduced-motion` 关动效；数据不足显示统一空态 | 信息不丢，静态预览仍可读 |
@@ -881,7 +896,7 @@ fps 50~58（上限 60）、全程 34~39（被首屏长帧拉低，不是持续�
 
 ### 数据来源与口径
 
-全部来自本地文件，只读、不联网；四个源的路径与粒度见 [支持的数据源](#支持的数据源)。
+全部来自本地文件，只读、不写盘；除「检查更新」这一条可关闭的外联外不联网；四个源的路径与粒度见 [支持的数据源](#支持的数据源)。
 
 **各平台的口径与坑**（都是实测得出，不是推测）：
 
@@ -1052,6 +1067,11 @@ ZCode 的 sqlite 没有 system 角色，`sources/zcode.py` 的 `system_prompts()
     此时 `/s/<sid>/compact` 会显示「未发生压缩」，可据此发现。
 12. **压缩事件页只比方向不比幅度**：可见字数是字符数、真实输入是 token，
     系统提示与工具 schema 也不在可见块里，两者不能换算。
+13. **检查更新只提示、不自动安装**：Linux 装包要 root，Windows 要替换正在运行的 `.bat`，
+    把下载 + 安装做成一个按钮等于在本机开一条远程代码执行路径，因此明确不做。页面上给出的
+    是 Release 链接，`.deb` / `.bat` / `SHA256SUMS` 自己下、自己校验。
+14. **更新检查依赖 `api.github.com`**：受限网络下查不到就静默失败（页脚只剩「检查更新」），
+    既不影响任何页面加载，也不会反复重试；要彻底止住就用 `--no-update-check`。
     另外压缩后的第一次调用常有 `pin=0`（并列调用，无独立 usage），
     校验表会自动取之后第一个带 usage 的调用，所以「压缩后调用号」可能不紧邻压缩点。
 13. **按模型拆分只做到首页画像这一层**：首页环按归一的 `providerData.model`

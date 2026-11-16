@@ -56,6 +56,8 @@ setlocal EnableExtensions
 if not defined LOCALAPPDATA set "LOCALAPPDATA=%USERPROFILE%\AppData\Local"
 set "APPDIR=%LOCALAPPDATA%\TokenTrace"
 set "VER=@VERSION@"
+rem Pass the version down: the single-file build has no VERSION file to read.
+set "TRACE_VERSION=%VER%"
 set "PORT=%TRACE_PORT%"
 if not defined PORT set "PORT=8765"
 if not exist "%APPDIR%" mkdir "%APPDIR%" 2>nul

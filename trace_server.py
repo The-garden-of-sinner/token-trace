@@ -27,6 +27,7 @@ import time
 import traceback
 from collections import Counter, OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import urllib.request
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 # 主脚本 import gen_trace 时 Python 默认会写 __pycache__/*.pyc。
@@ -91,6 +92,119 @@ BK_CLS = {"tool_result": "bk0", "injected": "bk1", "user": "bk2",
 SID_RE = re.compile(r"^[0-9A-Za-z_-]+$")
 TOKEN = ""          # --token / TRACE_TOKEN；非空时所有请求都要鉴权
 LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
+
+# ---- 版本与更新检查 ----------------------------------------------------------
+# 版本号只有一个来源：scripts/VERSION（构建时随产物走）。单文件 bat 把版本
+# 写在批处理头部，运行时用 TRACE_VERSION 传进来；deb 带一份 VERSION 文件。
+# 都没有就回落到 "dev"：开发快照不参与新旧比较，免得本地改一版就永远
+# 「比线上新」、或者反过来每次开页都提示更新。
+def _read_version():
+    env = (os.environ.get("TRACE_VERSION") or "").strip()
+    if env:
+        return env.lstrip("vV")
+    here = os.path.dirname(os.path.abspath(__file__))
+    for p in (os.path.join(here, "VERSION"),
+              os.path.join(here, "scripts", "VERSION")):
+        try:
+            with open(p, encoding="utf-8") as f:
+                v = f.read().strip().lstrip("vV")
+        except OSError:
+            continue
+        if v:
+            return v
+    return "dev"
+
+
+APP_VERSION = _read_version()
+REPO_SLUG = "The-garden-of-sinner/token-trace"
+RELEASES_URL = "https://github.com/%s/releases" % REPO_SLUG
+
+# 更新检查的全部状态就这一份内存缓存：不落盘、不碰任何会话数据、不参与
+# 渲染路径（页面只读它，永不等待它）。state: off / checking / ok / error。
+UPDATE = {"state": "off", "latest": "", "url": "", "at": 0.0, "error": ""}
+UPDATE_LOCK = threading.Lock()
+UPDATE_OFF = bool(os.environ.get("TRACE_NO_UPDATE_CHECK"))
+
+
+def _ver_key(text):
+    """把 1.4.10 / v1.5.0 折成可比的数字元组——字符串比会把 1.4.10 判成小于 1.4.9。"""
+    s = (text or "").strip().lstrip("vV")
+    if not s or s.lower() == "dev":
+        return None
+    out = []
+    for part in re.split(r"[.+-]", s)[:4]:
+        m = re.match(r"\d+", part)
+        out.append(int(m.group()) if m else 0)
+    while len(out) < 3:
+        out.append(0)
+    return tuple(out)
+
+
+def update_newer():
+    """当前版本是否落后于查到的最新 release。dev / 未查到 / 已关闭都返回 False。"""
+    cur, latest = _ver_key(APP_VERSION), _ver_key(UPDATE.get("latest"))
+    return bool(cur and latest and latest > cur)
+
+
+def check_update(timeout=5.0):
+    """查一次 GitHub 最新 release，结果只写内存。
+
+    这是本项目**唯一**的主动外联：只在启动时跑一次，之后仅当用户点「检查
+    更新」才重试；`TRACE_NO_UPDATE_CHECK=1` 或 `--no-update-check` 可整个关掉。
+    任何失败都静默（state=error），绝不让网络问题影响页面加载或启动速度。
+    """
+    if UPDATE_OFF:
+        return False
+    with UPDATE_LOCK:
+        UPDATE["state"] = "checking"
+    url = "https://api.github.com/repos/%s/releases/latest" % REPO_SLUG
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "token-trace/%s" % APP_VERSION,
+        "Accept": "application/vnd.github+json",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            d = json.load(r)
+        tag = (d.get("tag_name") or "").strip()
+        page = (d.get("html_url") or "").strip()
+        if not tag:
+            raise ValueError("release 里没有 tag_name")
+    except Exception as e:      # 断网 / 代理 / 限流 / 解析失败，一律不吵
+        with UPDATE_LOCK:
+            UPDATE.update(state="error", at=time.time(),
+                          error="%s: %s" % (type(e).__name__, str(e)[:120]))
+        return False
+    with UPDATE_LOCK:
+        UPDATE.update(state="ok", latest=tag.lstrip("vV"), at=time.time(),
+                      url=page or RELEASES_URL, error="")
+    return True
+
+
+def _update_boot():
+    """启动后台线程：查到新版本在控制台留一行，页面提示由 update_banner() 出。"""
+    if check_update() and update_newer():
+        print("发现新版本 v%s（当前 v%s）：%s"
+              % (UPDATE["latest"], APP_VERSION, UPDATE["url"]))
+
+
+def update_banner():
+    """查到新版本时显示的一条窄提示；其余情况返回空串，不占任何高度。"""
+    if not update_newer():
+        return ""
+    return ('<a class="upd" href="%s"><b>新版本 %s</b>'
+            '<span>当前 v%s · 查看更新说明与安装包</span><i>→</i></a>'
+            % (esc(UPDATE.get("url") or RELEASES_URL),
+               esc(UPDATE["latest"]), esc(APP_VERSION)))
+
+
+def version_link():
+    """页脚版本号：可点，用来手动重查（纯链接跳 /check，零 JS）。"""
+    if update_newer():
+        return ('<a href="%s" title="有新版本 v%s">v%s · 可更新</a>'
+                % (esc(UPDATE.get("url") or RELEASES_URL),
+                   esc(UPDATE["latest"]), esc(APP_VERSION)))
+    return ('<a href="/check" title="检查 GitHub 上的最新版本">v%s · 检查更新</a>'
+            % esc(APP_VERSION))
 
 
 def esc(s):
@@ -1220,6 +1334,16 @@ td.r,th.r{text-align:right}
 footer{margin-top:26px;padding-top:10px;border-top:1px solid var(--line2);font-size:11px;color:var(--dim);display:flex;gap:14px;flex-wrap:wrap}
 footer a{color:var(--faint);text-decoration:none}
 footer a:hover{color:var(--link-h)}
+/* 更新提示：只在真的查到新版本时出现，一条可点的窄条，不占固定高度。
+   没有新版时 update_banner() 返回空串，整条 CSS 不产生任何盒子。 */
+.upd{display:flex;align-items:center;gap:9px;margin:0 0 14px;padding:8px 12px;
+ border:1px solid var(--accent);border-radius:8px;background:var(--panel2);
+ font-size:11.5px;color:var(--fg);text-decoration:none;
+ transition:background-color .2s var(--ease)}
+.upd b{font-weight:600;color:var(--accent)}
+.upd span{color:var(--muted)}
+.upd i{margin-left:auto;font-style:normal;color:var(--accent)}
+.upd:hover{background:var(--track)}
 details.grp{margin-bottom:9px;border:1px solid var(--line);border-radius:9px;overflow:hidden}
 details.grp>summary{padding:9px 13px;cursor:pointer;list-style:none;background:var(--panel2);font-size:12.5px}
 details.grp>summary::-webkit-details-marker{display:none}
@@ -1896,13 +2020,13 @@ def page(title, crumbs, body, sub="", extra_head="", need=(), topbar="",
                 '</div></div>' %
                 esc(boot_note or "正在归集本地会话轨迹 · 数据只读"))
     doc = (head + boot + '<header><div class="wrap">' + crumb(crumbs) + hd +
-           '</div></header><div class="wrap">' + extra_head + body +
+           '</div></header><div class="wrap">' + update_banner() + extra_head + body +
            '<footer><span>本页 HTML @@KB@@ KB</span>' +
            '<span>数据只读 · 全文由后端按需提供 · 无需 JavaScript</span>' +
            back_link(crumbs, footer=True) +
            '<a href="/">索引</a><a href="/stats">全局统计</a>'
            '<a href="/rank">筛选与排序</a><a href="/api">API</a>' +
-           monitor_link("ext") + '</footer>' +
+           monitor_link("ext") + version_link() + '</footer>' +
            back + '</div></html>')
     # 页脚口径与 80 KB 硬闸对齐：算整页响应字节（含内联 CSS 与 header），
     # 不是只算 body。替换会改变长度（"99.9" 与 "100.0" 差 2 字节），迭代到
@@ -4624,6 +4748,9 @@ def api_route(path, q):
             "write_files_basis": ("源码无写文件调用；sys.dont_write_bytecode=%s（非 OS 级探测）"
                                   % sys.dont_write_bytecode),
             "python": sys.version.split()[0],
+            "version": APP_VERSION,
+            "update": {"state": UPDATE["state"], "latest": UPDATE["latest"],
+                       "newer": update_newer(), "checked_at": int(UPDATE["at"])},
             "monitor": ("up" if monitor_url() else "down") if MONITOR_URL else "disabled",
             "monitor_url": MONITOR_URL,
         }))
@@ -4900,7 +5027,7 @@ ROUTE_SPEC = [
     H(r"^/s/([0-9A-Za-z_-]+)$", lambda q, m: v_session(q, m.group(1)),
       "GET /s/<sid>?view=turns|calls&p=", "会话概览（按轮 / 按调用分页）", "/s/{sid}"),
 
-    A("/api/health", "状态、pid、rss_mb、会话数、缓存数、write_files、monitor", "/api/health"),
+    A("/api/health", "状态、pid、rss_mb、版本与更新检查结果、会话数、缓存数、write_files、monitor", "/api/health"),
     A("/api/sessions", "全部会话摘要（新增 hit / miss / rate）", "/api/sessions"),
     A("/api/stats", "跨会话全量聚合", "/api/stats"),
     A("/api/analytics/calls?from=&to=&model=&ws=&tool=&sid=&fields=&refresh=&offset=&limit=",
@@ -4971,6 +5098,16 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return self._authorized()
 
+    def _safe_referer(self):
+        """只回跳本机同源页面；外站或别的端口的 Referer 一律丢弃。"""
+        u = urlsplit(self.headers.get("Referer") or "")
+        port = self.server.server_address[1]
+        if u.scheme != "http" or (u.hostname or "") not in ("127.0.0.1", "localhost", "::1"):
+            return ""
+        if u.port not in (port, None):
+            return ""
+        return u.path + (("?" + u.query) if u.query else "")
+
     def _drain_body(self):
         """消费请求体并关闭连接，避免 HTTP/1.1 下残留 body 被当成下一个请求行。"""
         try:
@@ -5005,6 +5142,15 @@ class Handler(BaseHTTPRequestHandler):
                         b'{"ok":false,"error":"unauthorized"}')
             return
         try:
+            if path == "/check":
+                # 手动重查：跑一次（最多 5 秒）后跳回来源页，不需要中间页或脚本。
+                # 只回跳本机同源地址，Referer 不当开放重定向用。
+                check_update()
+                self.send_response(303)
+                self.send_header("Location", self._safe_referer() or "/")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             if path == "/favicon.ico":
                 self.send_response(204)
                 self.send_header("Content-Length", "0")
@@ -5098,12 +5244,22 @@ def main():
     ap.add_argument("--warm", action="store_true", help="启动时预解析全部会话（可选，约 3 秒）")
     ap.add_argument("--token", default=os.environ.get("TRACE_TOKEN") or "",
                     help="访问令牌；绑定非本机地址时必填，也可由 TRACE_TOKEN 提供")
+    ap.add_argument("--no-update-check", action="store_true",
+                    help="不联网查 GitHub 最新版本（也可用 TRACE_NO_UPDATE_CHECK=1）；"
+                         "默认启动时静默查一次，只写内存")
     a = ap.parse_args()
     if a.host not in ("127.0.0.1", "localhost", "::1") and not a.token:
         ap.error("绑定非本机地址（--host %s）时必须用 --token 设置访问令牌，"
                  "否则会话原文会暴露在网络上" % a.host)
-    global STORE, TOKEN
+    global STORE, TOKEN, UPDATE_OFF
     TOKEN = a.token
+    if a.no_update_check:
+        UPDATE_OFF = True
+    if UPDATE_OFF:
+        UPDATE["state"] = "off"
+    else:
+        # 后台线程，daemon：查不到 5 秒后自己放弃，不拖慢启动、不阻塞任何请求
+        threading.Thread(target=_update_boot, daemon=True).start()
     STORE = Store(a.cache)
     ss = STORE.sessions()
     print("索引 %d 个会话 / %d 个工作区" % (len(ss), len(set(s["ws"] for s in ss))))

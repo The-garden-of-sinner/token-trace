@@ -27,6 +27,9 @@ mkdir -p "$STAGE/DEBIAN" \
 # ---- 程序文件（只放运行必需的，不含 trace/ 页面与开发期产物）
 install -m 644 "$ROOT/trace_server.py" "$ROOT/gen_trace.py" "$ROOT/pricing.py" "$STAGE/usr/share/$PKG/"
 install -m 644 "$ROOT/README.md" "$ROOT/LICENSE" "$STAGE/usr/share/$PKG/"
+# 版本号：trace_server 优先读程序目录的 VERSION，源码运行读 scripts/VERSION。
+# 只有这一个来源，代码里不再抄常量，发版时不会两边对不上。
+install -m 644 "$ROOT/scripts/VERSION" "$STAGE/usr/share/$PKG/VERSION"
 # v1.3.0：pricing 与 sources/ 是运行期硬依赖（import pricing / from sources
 # import bridge），漏装会让 deb 里的服务在第一个请求前就 ImportError。
 mkdir -p "$STAGE/usr/share/$PKG/sources"
@@ -133,7 +136,9 @@ Description: WorkBuddy 会话的逐次调用 token 轨迹
  把本地会话记录还原成逐次调用的 token / 积分 / 缓存命中轨迹，
  以零 JavaScript 的按需服务端页面呈现，内容零截断。
  .
- 只读 ~/.workbuddy 下的会话文件，不联网、不写盘、不需要第三方包。
+ 只读 ~/.workbuddy 下的会话文件，不写盘、不需要第三方包。
+ 联网仅限版本检查（启动时查一次 GitHub 最新 release，只写内存），
+ 可用 --no-update-check 或 TRACE_NO_UPDATE_CHECK=1 关闭。
  安装后从应用菜单打开「Token 轨迹」，或终端执行 token-trace。
 CONTROL
 
