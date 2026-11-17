@@ -3,7 +3,7 @@
 面向数据分析脚本、Notebook 与 BI 取数。网页版 `/api` 页是给人看的接口清单，本文补充
 **字段字典、量纲、取数范式与扩展性说明**。
 
-> **适用范围**：`v2.0.0.2-exp` 及以上（分析端点自该版本起进入 Release）。v2.0.0.2-exp 是
+> **适用范围**：`v2.0.0.3-exp` 及以上（分析端点自该版本起进入 Release）。当前为
 > 19 个 HTML 页面 / 18 个 JSON 端点；其后的改动新增 `/rank` 页面与
 > `/api/stats.costly_blocks`（19 页 / 18 端点，见 §6）。更早版本只有 17 个端点、
 > 没有 `/api/analytics/calls`；任何版本都以服务自身的 `/api` 页为实时清单。
@@ -341,3 +341,4 @@ by_model = df.groupby("model").agg(
 | 2026-11-13 v1.3.0 | 首页新增 `?src=` 平台筛选（空 / `workbuddy` / `zcode` / `codex`，仅 HTML）；会话摘要新增 `src` 与 `cost`（外部平台按刊例价估算，WorkBuddy 积分不变）；`/api/stats` 返回新增 `cost` / `unpriced` / `unit_cost_miss`，`top_calls` 每项新增 `cost` 并改按成本降序，`unit_miss` 分母只取有积分的会话；Codex / ZCode 会话经 `codex://` / `zcode://` 伪路径复用既有会话 / 调用 / 块端点，URL 形状不变；JSON 端点数量与既有字段不变；自检 194 → 195 项 |
 | 2026-11-17 v2.0.0.1-exp | `/api/analytics/calls` 新增 `cost`（刊例价估算）与 `src`（数据来源）两列（16 → 18 列），新增 `?src=` 平台筛选；`/rank` 与 `/tools` 补齐 `src` 平台筛选；会话详情页缓存与增量扫描保持一致；全库扫描接入并发锁；公共文本工具与时间戳转换下沉至 `core.text`；零 JS 与自适应布局优化 |
 | 2026-11-17 v2.0.0.2-exp | 页眉网格布局重构与微距调优；前端手动检查更新重构为主动版本比对（有新版本在新窗口跳转 release，最新版显示比对结果页）；全站去 AI 化文案精简；自动化回归自检增至 244 项 |
+| 2026-11-17 v2.0.0.3-exp | `build_deb.sh` 补打 `core/` 包（修 deb 安装后缺模块）；`core.text._ms` 支持 ISO8601、`codex.py` 复用公共实现；`/search?src=` 概览改报该平台会话数；合成演示数据补齐模型名变体 / 压缩点 token 骤降 / 跨自然日并隔离外部源；自检 244 → 245 项；本文档补 `src` / `cost` 字段与 `?src=` 参数 |
