@@ -133,17 +133,22 @@ UPDATE_LOCK = threading.Lock()
 
 
 def _ver_key(text):
-    """把 1.4.10 / v1.5.0 折成可比的数字元组——字符串比会把 1.4.10 判成小于 1.4.9。"""
+    """版本号折成 ((主版本四元组), 正式版权重)——字符串比会把 1.4.10 判成小于 1.4.9。
+
+    预发布后缀（-exp / -rc1）不参与数字比较，改用独立权重位：同数字的正式版
+    严格大于预发布版。旧实现按 [.+-] 切，"2.0.0-exp" 得 4 元组而 "2.0.0" 得
+    3 元组，Python 里 (2,0,0) > (2,0,0,0) 为 False，预发布用户查不到同名正式版。
+    """
     s = (text or "").strip().lstrip("vV")
     if not s or s.lower() == "dev":
         return None
-    out = []
-    for part in re.split(r"[.+-]", s)[:4]:
-        m = re.match(r"\d+", part)
-        out.append(int(m.group()) if m else 0)
-    while len(out) < 3:
-        out.append(0)
-    return tuple(out)
+    main, sep, pre = s.partition("-")
+    if not sep:
+        main, _, pre = s.partition("+")
+    nums = [int(x) for x in re.findall(r"\d+", main.split("+", 1)[0])[:4]]
+    while len(nums) < 4:
+        nums.append(0)
+    return (tuple(nums), 0 if pre else 1)
 
 
 def update_newer():
@@ -3796,7 +3801,8 @@ def v_search(q, sid=None):
         if sid:
             scan_label = "这个会话"
         elif src:
-            scan_label = "平台 %s 的 %d 个会话" % (esc(src), len(_pick_src(src)))
+            scan_label = "平台 %s 的 %d 个会话" % (
+                esc(PLAT_NAME.get(src, src)), len(_pick_src(src)))
         else:
             scan_label = "全部 %d 个会话" % len(STORE.sessions())
         body += '<h2>命中 %d 条 <small>扫描 %s · %d ms</small></h2>' % (

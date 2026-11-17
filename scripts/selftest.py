@@ -111,12 +111,50 @@ def main():
 
     print("== DSH 源：多帧 zstd 事件流 ==")
     try:
-        import tempfile
+        import ctypes
         import shutil
+        import tempfile
         from sources import dsh as D
+        import sources._zstd as Z
+
+        def _zpack(chunk):
+            """压一帧 zstd：优先 CLI，退回 libzstd ctypes（无 zstd 命令的机器也能测）。"""
+            try:
+                return subprocess.run(["zstd", "-q", "-c"], input=chunk,
+                                      stdout=subprocess.PIPE, check=True).stdout
+            except FileNotFoundError:
+                pass
+            for cand in Z._candidates():
+                try:
+                    lib = ctypes.CDLL(cand)
+                    lib.ZSTD_compressBound.argtypes = [ctypes.c_size_t]
+                    lib.ZSTD_compressBound.restype = ctypes.c_size_t
+                    lib.ZSTD_compress.argtypes = [
+                        ctypes.c_void_p, ctypes.c_size_t,
+                        ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+                    lib.ZSTD_compress.restype = ctypes.c_size_t
+                    lib.ZSTD_isError.argtypes = [ctypes.c_size_t]
+                    lib.ZSTD_isError.restype = ctypes.c_uint
+                    dst = ctypes.create_string_buffer(lib.ZSTD_compressBound(len(chunk)))
+                    n = lib.ZSTD_compress(dst, len(dst), chunk, len(chunk), 3)
+                    if not lib.ZSTD_isError(n):
+                        return dst.raw[:n]
+                except (OSError, AttributeError):
+                    continue
+            raise FileNotFoundError("zstd")
+
         root = tempfile.mkdtemp(prefix="tt-dsh-")
-        sd = os.path.join(root, "sessions", "--ws--", "session-t1")
-        os.makedirs(sd)
+
+        def _write(sid, events, ws="--ws--"):
+            d = os.path.join(root, "sessions", ws, "session-" + sid)
+            os.makedirs(d)
+            lines = [json.dumps(e, ensure_ascii=False).encode() for e in events]
+            # 两段各自压缩再拼接 = 两个独立 zstd 帧，复现「追加写入」
+            blob = b"".join(_zpack(b"\n".join(c) + b"\n")
+                            for c in (lines[:3], lines[3:]) if c)
+            with open(os.path.join(d, "session.v4.jsonl.zstd"), "wb") as fh:
+                fh.write(blob)
+
         ev = [
             {"type": "session", "version": 4, "id": "session-t1",
              "cwd": "/w", "delegationDepth": 0},
@@ -124,50 +162,91 @@ def main():
             {"type": "user/message", "seq": 2, "time": 1780000000200,
              "data": {"content": "第一问"}},
             {"type": "assistant/message", "seq": 3, "time": 1780000001000,
-             "data": {"message": {"source": {"model": "m1"}, "content": "答一"},
+             "data": {"message": {"source": {"model": "m1"},
+                                  "content": [{"type": "thinking", "text": "想一下"},
+                                              {"type": "text", "text": "答一"}]},
                       "usage": {"inputTokens": 10, "outputTokens": 5,
                                 "cacheReadTokens": 100, "cacheWriteTokens": 0}}},
             {"type": "tool/call", "seq": 4, "time": 1780000001100,
-             "data": {"name": "bash"}},
-            {"type": "turn/start", "seq": 5, "time": 1780000002000, "data": {}},
-            {"type": "user/message", "seq": 6, "time": 1780000002100,
+             "data": {"name": "bash", "callId": "c1"}},
+            {"type": "tool/result", "seq": 5, "time": 1780000001200,
+             "data": {"callId": "c1", "content": "ok"}},
+            {"type": "turn/start", "seq": 6, "time": 1780000002000, "data": {}},
+            {"type": "user/message", "seq": 7, "time": 1780000002100,
              "data": {"content": "第二问"}},
-            {"type": "assistant/message", "seq": 7, "time": 1780000003000,
+            {"type": "assistant/message", "seq": 8, "time": 1780000003000,
              "data": {"message": {"source": {"model": "m1"}, "content": "答二"},
                       "usage": {"inputTokens": 20, "outputTokens": 7,
                                 "cacheReadTokens": 200, "cacheWriteTokens": 0}}},
         ]
-        lines = [json.dumps(e, ensure_ascii=False).encode() for e in ev]
-        # 两段各自压缩再拼接 = 两个独立 zstd 帧，复现「追加写入」
-        blob = b"".join(
-            subprocess.run(["zstd", "-q", "-c"], input=b"\n".join(chunk) + b"\n",
-                           stdout=subprocess.PIPE, check=True).stdout
-            for chunk in (lines[:3], lines[3:]))
-        with open(os.path.join(sd, "session.v4.jsonl.zstd"), "wb") as fh:
-            fh.write(blob)
+        _write("t1", ev)
+        sub_ev = [
+            {"type": "session", "id": "session-t2", "cwd": "/w",
+             "delegationDepth": 1, "parentSessionId": "session-t1"},
+            {"type": "user/message", "time": 1780000000500,
+             "data": {"content": "子代理问"}},
+            {"type": "assistant/message", "time": 1780000000900,
+             "data": {"message": {"source": {"model": "m2"}, "content": "子代理答"},
+                      "usage": {"inputTokens": 3, "outputTokens": 2}}},
+        ]
+        _write("t2", sub_ev)
+        _write("other", [{"type": "session", "id": "other", "cwd": "/x",
+                          "delegationDepth": 0},
+                         {"type": "user/message", "time": 1780000000100,
+                          "data": {"content": "无关会话"}}], ws="--other--")
         old_home = D.DSH_HOME
         D.DSH_HOME = root
         D._PARSED.clear()
         try:
             ss = D.scan()
-            check(len(ss) == 1, "dsh 多帧文件完整解析（2 帧拼接，不是只解首帧）")
-            s = ss[0]
+            check(len(ss) == 3, "dsh 多会话扫描：主 / 子代理 / 无关会话各一条")
+            s = next(x for x in ss if x["id"] == "dsh-session-t1")
             check(s["pin"] == 330 and s["hit"] == 300 and s["pout"] == 12,
                   "dsh 用量映射：pin=input+cacheRead+cacheWrite、hit=cacheRead（%d/%d/%d）"
                   % (s["pin"], s["hit"], s["pout"]))
             check(s["turns"] == 2 and s["ai"] == "第一问",
                   "dsh 轮次按 turn/start 计数、标题取首条用户消息")
+            check(sum(1 for _ in D.rows(os.path.join(
+                root, "sessions", "--ws--", "session-t1", "session.v4.jsonl.zstd")))
+                  == len(ev), "dsh 多帧文件完整解析（2 帧拼接，不是只解首帧）")
             ctx, calls, meta, turns = D.build("dsh://session-t1")
             check(len(calls) == 2 and calls[0]["tool"] == "bash",
                   "dsh build 的调用数与工具归属正确")
-            check([b["k"] for b in ctx][:3] == ["user", "assistant", "tool_call"],
+            check([b["k"] for b in ctx][:4] == ["user", "assistant", "tool_call", "tool_result"],
                   "dsh 块序列按事件顺序还原")
+            check(len(calls[0]["out"]) == 2
+                  and calls[0]["out"][0]["kind"] == "thinking"
+                  and calls[0]["out"][-1]["text"] == "答一",
+                  "dsh 助手回复写入 out（思考 + 回答），输出全文与搜索可用")
+            check(any(b["l"] == "工具返回 · bash" for b in ctx),
+                  "dsh tool/result 块标签带工具名，与 Codex / ZCode 一致")
+            rel, unmatched = T.subagent_relations(ss)
+            check(any(x["id"] == "dsh-session-t2" for x in rel.get("dsh-session-t1", []))
+                  and not unmatched,
+                  "dsh 子代理 root/agent_reqs 建立父子关联，首页可自动折叠")
+            seen = []
+            orig_parse = D.parse
+
+            def _spy(p, keep_ctx=True):
+                seen.append(p)
+                return orig_parse(p, keep_ctx=keep_ctx)
+
+            D.parse = _spy
+            try:
+                sub_ctx, sub_calls, _m, _t = D.build("dsh://session-t2")
+            finally:
+                D.parse = orig_parse
+            check(len(seen) == 1 and "session-t2" in seen[0],
+                  "dsh build 只解压命中的会话，不扫全库（实际 %d 个）" % len(seen))
+            check(bool(sub_calls) and bool(sub_calls[0]["out"])
+                  and sub_calls[0]["out"][0]["text"] == "子代理答",
+                  "dsh 子会话 build 的 out 非空")
         finally:
             D.DSH_HOME = old_home
             D._PARSED.clear()
             shutil.rmtree(root, ignore_errors=True)
     except FileNotFoundError:
-        print("  SKIP 本机没有 zstd 命令，跳过 DSH 多帧用例")
+        print("  SKIP 本机没有可用的 zstd 压缩器，跳过 DSH 多帧用例")
 
     print("== 启动临时服务 ==")
     proc = subprocess.Popen(
@@ -506,6 +585,11 @@ def main():
               and T._ver_key("1.4") == T._ver_key("1.4.0")
               and T._ver_key("dev") is None,
               "版本按数字段比较：1.4.10 > 1.4.9；dev 不参与比较")
+        check(T._ver_key("2.1.0") == T._ver_key("2.1.0.0")
+              and T._ver_key("2.1.0") > T._ver_key("2.1.0-exp")
+              and T._ver_key("2.1.0") > T._ver_key("2.0.0.3-exp")
+              and T._ver_key("2.0.0") > T._ver_key("2.0.0-exp"),
+              "预发布比较：同数字正式版严格大于 -exp，四段与三段归一")
         check(T.UPDATE["state"] == "off",
               "导入模块不联网：更新只在页眉开关开启后或 /check 时才查")
         check(T.UPDATE["auto"] is False,

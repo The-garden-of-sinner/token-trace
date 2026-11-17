@@ -23,7 +23,6 @@ import collections
 import glob
 import json
 import os
-import time
 
 try:                                  # 作为包导入（gen_trace / trace_server）
     from ._zstd import decompress as _zdec
@@ -31,14 +30,14 @@ except ImportError:                   # 直接运行本文件自测
     from _zstd import decompress as _zdec
 
 try:
-    from core.text import _ms, est_tokens as _est
+    from core.text import _ms, day_key, est_tokens as _est
 except ImportError:
     try:
-        from ..core.text import _ms, est_tokens as _est
+        from ..core.text import _ms, day_key, est_tokens as _est
     except ImportError:
         import sys
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from core.text import _ms, est_tokens as _est
+        from core.text import _ms, day_key, est_tokens as _est
 
 DSH_HOME = os.environ.get("DSH_HOME", os.path.expanduser("~/.dsh"))
 SESSION_FILE = "session.v4.jsonl.zstd"
@@ -86,6 +85,36 @@ def _text(content):
     return "".join(out)
 
 
+def _out_blocks(content):
+    """answer.content → 输出块列表，与 gen_trace 的 call["out"] 同构。
+
+    思考/推理块单列，正文合并成「回答」；空内容不产块，避免输出全文页出现空分段。
+    """
+    blocks = []
+    if isinstance(content, str):
+        txt = content.strip()
+        return [{"kind": "assistant", "label": "回答", "text": txt}] if txt else blocks
+    answer = []
+    for p in (content or []):
+        if not isinstance(p, dict):
+            continue
+        typ = str(p.get("type") or "")
+        raw = p.get("text")
+        if raw is None:
+            raw = p.get("thinking") or p.get("reasoning")
+        txt = raw if isinstance(raw, str) else ""
+        if not txt.strip():
+            continue
+        if typ in ("thinking", "reasoning"):
+            blocks.append({"kind": "thinking", "label": "思考", "text": txt})
+        elif typ in ("text", ""):
+            answer.append(txt)
+    joined = "".join(answer).strip()
+    if joined:
+        blocks.append({"kind": "assistant", "label": "回答", "text": joined})
+    return blocks
+
+
 def _title(cands, cwd):
     for txt in cands:
         txt = (txt or "").strip()
@@ -98,13 +127,15 @@ def _title(cands, cwd):
 
 def parse(path, keep_ctx=True):
     """解析单个会话，返回 {ctx, calls, meta, title, sid, cwd, bad, depth}。"""
-    meta = {"sid": "", "cwd": "", "depth": 0, "created": 0}
+    meta = {"sid": "", "cwd": "", "depth": 0, "created": 0, "parent": ""}
     title, first_user = "", ""
     ctx, calls, head = [], [], []
     nblocks = 0
     turn_no = 0
     bad = 0
     pending = []          # 本次回答之后出现的工具名，归到上一条调用
+    tool_names = {}       # tool_call_id → 工具名，供 tool/result 的块标签复用
+    last_tool = ""
 
     def close_pending():
         if pending and calls:
@@ -125,6 +156,11 @@ def parse(path, keep_ctx=True):
             meta["cwd"] = d.get("cwd") or ""
             meta["depth"] = int(d.get("delegationDepth") or 0)
             meta["created"] = _ms(d.get("createdAt"))
+            # 子代理会话的父级：事件顶层与 data 里都见过，两种写法都收。
+            parent = (data.get("parentSessionId") or data.get("parentId")
+                      or d.get("parentSessionId") or d.get("parentId"))
+            if parent:
+                meta["parent"] = str(parent)
             continue
         if t == "session/title":
             v = data.get("title")
@@ -154,6 +190,7 @@ def parse(path, keep_ctx=True):
             src = msg.get("source") or {}
             model = str(src.get("model") or "")
             txt = _text(msg.get("content"))
+            out = _out_blocks(msg.get("content")) if keep_ctx else []
             u = data.get("usage") or {}
             if u:
                 ip = int(u.get("inputTokens") or 0)
@@ -162,7 +199,10 @@ def parse(path, keep_ctx=True):
                 cw = int(u.get("cacheWriteTokens") or 0)
                 calls.append({"pin": ip + cr + cw, "hit": cr, "pout": op,
                               "ts": ts, "model": model, "ctxN": nblocks,
-                              "turn": turn_no or 1, "tool": ""})
+                              "turn": turn_no or 1, "tool": "", "out": out})
+            elif out and calls:
+                # 无 usage 的流式分片没有独立调用：并到上一条，别丢输出全文。
+                calls[-1].setdefault("out", []).extend(out)
             if keep_ctx and txt:
                 ctx.append({"k": "assistant", "l": "助手回复", "n": len(txt), "t": txt,
                             "c": model[:120], "ts": ts, "e": _est(txt), "src": "dsh"})
@@ -173,6 +213,12 @@ def parse(path, keep_ctx=True):
         if t == "tool/call":
             name = str(data.get("name") or data.get("tool") or "")
             pending.append(name or "?")
+            if name:
+                last_tool = name
+                tid = str(data.get("callId") or data.get("toolCallId")
+                          or data.get("toolUseId") or data.get("id") or "")
+                if tid:
+                    tool_names[tid] = name
             if keep_ctx:
                 txt = data.get("input") if isinstance(data.get("input"), str) else json.dumps(
                     data.get("input") or {}, ensure_ascii=False)
@@ -184,9 +230,14 @@ def parse(path, keep_ctx=True):
         if t == "tool/result":
             txt = data.get("content") if isinstance(data.get("content"), str) else json.dumps(
                 data.get("content") or {}, ensure_ascii=False)
+            tid = str(data.get("callId") or data.get("toolCallId")
+                      or data.get("toolUseId") or data.get("id") or "")
+            tname = tool_names.get(tid) or last_tool
             if keep_ctx:
-                ctx.append({"k": "tool_result", "l": "工具返回", "n": len(txt), "t": txt,
-                            "c": "", "ts": ts, "e": _est(txt), "src": "dsh"})
+                ctx.append({"k": "tool_result",
+                            "l": ("工具返回 · %s" % tname) if tname else "工具返回",
+                            "n": len(txt), "t": txt,
+                            "c": tname[:120], "ts": ts, "e": _est(txt), "src": "dsh"})
             nblocks += 1
             continue
 
@@ -207,7 +258,7 @@ def parse(path, keep_ctx=True):
         head if not keep_ctx else [b["t"] for b in ctx if b["k"] == "user"])
     return {"ctx": ctx, "calls": calls, "meta": meta, "sid": sid, "cwd": cwd,
             "title": title or _title(cands, cwd),
-            "bad": bad, "depth": meta["depth"]}
+            "bad": bad, "depth": meta["depth"], "parent": meta["parent"]}
 
 
 def _parse_cached(p):
@@ -221,6 +272,10 @@ def _parse_cached(p):
         return hit[1]
     r = parse(p, keep_ctx=False)
     _PARSED[p] = (key, r)
+    if len(_PARSED) > 4096:          # 防止长期运行堆积已删除的路径
+        live = set(session_files())
+        for k in [k for k in _PARSED if k not in live]:
+            _PARSED.pop(k, None)
     return r
 
 
@@ -232,7 +287,7 @@ def _summary(path, r, mtime):
     models, days, turns = {}, {}, set()
     for c in cs:
         models[c["model"]] = models.get(c["model"], 0) + c["pin"]
-        d = time.strftime("%Y-%m-%d", time.localtime(c["ts"] / 1000.0)) if c["ts"] else ""
+        d = day_key(c["ts"])
         if d:
             b = days.setdefault(d, [0, 0])
             b[0] += c["pin"]
@@ -248,8 +303,13 @@ def _summary(path, r, mtime):
         "days": days,
         "agent": "DSH",          # 子代理由 is_sub 标注，列表里显示「子代理 · DSH」
         "is_sub": 1 if r["depth"] > 0 else 0,
-        "root": "", "first_ts": r["calls"][0]["ts"] if r["calls"] else 0,
-        "agent_calls": [], "agent_reqs": [], "skipped": r["bad"], "meta_ok": True,
+        # subagent_relations() 用子会话 root 去父会话 agent_reqs 里找精确对照键。
+        # DSH 事件流没有 Agent function_call，父会话用自身 sid 作为对照键。
+        "root": (r.get("parent") or "") if r["depth"] > 0 else "",
+        "first_ts": r["calls"][0]["ts"] if r["calls"] else 0,
+        "agent_calls": [],
+        "agent_reqs": [r["sid"]] if r["depth"] == 0 and r["sid"] else [],
+        "skipped": r["bad"], "meta_ok": True,
         "ws": r["cwd"] or "(未知工作区)", "src": "dsh",
         "raw_calls": len(r["calls"]), "file": path, "mtime": mtime,
     }
@@ -277,7 +337,10 @@ def build(path):
     """伪路径 dsh://<sid> → (ctx, calls, meta, turns)。"""
     sid = path.split("://", 1)[1]
     files = session_files()
-    cand = [p for p in files if sid in os.path.basename(p)] or files
+    # 文件名固定是 session.v4.jsonl.zstd，sid 在父目录 session-<id> 里。
+    # 旧写法按 basename 过滤永远落空，每次都解压全库日志。
+    cand = [p for p in files
+            if sid in os.path.basename(os.path.dirname(p)) or sid in os.path.basename(p)] or files
     for p in cand:
         try:
             r = parse(p, keep_ctx=True)
