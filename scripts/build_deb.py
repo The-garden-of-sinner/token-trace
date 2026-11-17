@@ -95,6 +95,11 @@ def main():
         if name.endswith(".py"):
             data_files.append(("usr/share/token-trace/sources/" + name,
                                read("sources/" + name), 0o644))
+    coredir = os.path.join(BASE, "core")
+    for name in sorted(os.listdir(coredir)):
+        if name.endswith(".py"):
+            data_files.append(("usr/share/token-trace/core/" + name,
+                               read("core/" + name), 0o644))
     docs = os.path.join(BASE, "docs")
     for name in sorted(os.listdir(docs)):
         path = os.path.join(docs, name)

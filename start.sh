@@ -32,7 +32,7 @@ if [ "${1:-}" = "stop" ]; then
     code="$(curl_auth -s -o /dev/null -w '%{http_code}' --max-time 2 -X POST "${URL}shutdown" 2>/dev/null || true)"
     if [ "$code" = "200" ]; then
         echo "Token 轨迹服务已停止（$URL）"
-    elif pkill -f "trace_server.py --port ${PORT}" 2>/dev/null; then
+    elif pkill -f "trace_server\.py.*${PORT}" 2>/dev/null || pkill -f "trace_server\.py" 2>/dev/null; then
         echo "Token 轨迹服务已停止"
     else
         echo "没有正在运行的 Token 轨迹服务（端口 $PORT）"

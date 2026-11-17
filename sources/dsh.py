@@ -30,12 +30,22 @@ try:                                  # 作为包导入（gen_trace / trace_serv
 except ImportError:                   # 直接运行本文件自测
     from _zstd import decompress as _zdec
 
+try:
+    from core.text import _ms, est_tokens as _est
+except ImportError:
+    try:
+        from ..core.text import _ms, est_tokens as _est
+    except ImportError:
+        import sys
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from core.text import _ms, est_tokens as _est
+
 DSH_HOME = os.environ.get("DSH_HOME", os.path.expanduser("~/.dsh"))
 SESSION_FILE = "session.v4.jsonl.zstd"
 
 # 需要的事件类型。其余行（tool/result、request/header 等）体积最大且这里
 # 用不上，先按子串跳过——一个 100 MB 的会话里绝大多数字节都在工具输出里，
-# 逐行 json.loads 它们纯属浪费。type 字段总在行首附近，只看前 600 字符。
+# 逐行 json.loads 它们纯属浪费。
 _WANT = ('"session"', '"assistant/message"', '"user/message"', '"turn/start"',
          '"session/title"', '"tool/call"', '"tool/result"')
 
@@ -57,27 +67,12 @@ def rows(path):
         line = line.strip()
         if not line:
             continue
-        if not any(k in line[:600] for k in _WANT):
+        if not any(k in line for k in _WANT):
             continue
         try:
             yield json.loads(line)
         except Exception:
             yield {"_bad": 1}
-
-
-def _ms(v):
-    try:
-        x = float(v)
-    except (TypeError, ValueError):
-        return 0
-    return int(x) if x > 0 else 0
-
-
-def _est(s):
-    """与 gen_trace.est_tokens 同口径：CJK 1 字 ≈ 1 token，其余 4 字符 ≈ 1 token。"""
-    import re
-    cjk = len(re.findall(r"[\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff]", s or ""))
-    return cjk + (len(s or "") - cjk + 3) // 4
 
 
 def _text(content):
@@ -145,7 +140,7 @@ def parse(path, keep_ctx=True):
             if not first_user and txt.strip():
                 first_user = txt
             if keep_ctx:
-                ctx.append({"k": "user", "l": "你的输入", "n": len(txt), "t": txt,
+                ctx.append({"k": "user", "l": "用户输入", "n": len(txt), "t": txt,
                             "c": "", "ts": ts, "e": _est(txt), "src": "dsh"})
             elif len(head) < 8:
                 head.append(txt)
@@ -169,7 +164,7 @@ def parse(path, keep_ctx=True):
                               "ts": ts, "model": model, "ctxN": nblocks,
                               "turn": turn_no or 1, "tool": ""})
             if keep_ctx and txt:
-                ctx.append({"k": "assistant", "l": "助手的回答", "n": len(txt), "t": txt,
+                ctx.append({"k": "assistant", "l": "助手回复", "n": len(txt), "t": txt,
                             "c": model[:120], "ts": ts, "e": _est(txt), "src": "dsh"})
             if txt:
                 nblocks += 1
@@ -181,7 +176,7 @@ def parse(path, keep_ctx=True):
             if keep_ctx:
                 txt = data.get("input") if isinstance(data.get("input"), str) else json.dumps(
                     data.get("input") or {}, ensure_ascii=False)
-                ctx.append({"k": "tool_call", "l": "调用 %s 的参数" % name, "n": len(txt),
+                ctx.append({"k": "tool_call", "l": "工具参数 · %s" % name, "n": len(txt),
                             "t": txt, "c": name[:120], "ts": ts, "e": _est(txt), "src": "dsh"})
             nblocks += 1
             continue
@@ -190,7 +185,7 @@ def parse(path, keep_ctx=True):
             txt = data.get("content") if isinstance(data.get("content"), str) else json.dumps(
                 data.get("content") or {}, ensure_ascii=False)
             if keep_ctx:
-                ctx.append({"k": "tool_result", "l": "工具结果", "n": len(txt), "t": txt,
+                ctx.append({"k": "tool_result", "l": "工具返回", "n": len(txt), "t": txt,
                             "c": "", "ts": ts, "e": _est(txt), "src": "dsh"})
             nblocks += 1
             continue

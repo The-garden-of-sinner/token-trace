@@ -48,6 +48,15 @@ def get(path, timeout=40, method="GET"):
 
 
 def main():
+    demo_dir = None
+    if not T.STORE.sessions():
+        import tempfile
+        demo_dir = tempfile.mkdtemp(prefix="tt-selftest-demo-")
+        subprocess.run([sys.executable, "-B", os.path.join(ROOT, "scripts", "make_demo.py"), demo_dir],
+                       check=True, timeout=60)
+        os.environ["WORKBUDDY_HOME"] = demo_dir
+        T.STORE.sessions(refresh=True)
+
     print("== 静态一致性 ==")
     html_items = [r for r in T.ROUTE_SPEC if r["kind"] == "html"]
     api_items = [r for r in T.ROUTE_SPEC if r["kind"] == "api"]
@@ -73,12 +82,16 @@ def main():
           "秒级时间戳按同一口径渲染")
     check(all(T.fmt_ts(v) == "时间未知" for v in (0, -1, 1e15, 1.78e17, None, "x")),
           "零值 / 负值 / 越界 / 非数字退回「时间未知」")
-    ts_sid = max(T.STORE.sessions(), key=lambda x: x["calls"])["id"]
-    ts_views = [T.v_call({}, ts_sid, 1), T.v_compact({}, ts_sid), T.v_stats({})]
-    check(all("58375" not in h for h in ts_views),
-          "调用详情 / 压缩页 / 全局统计均无荒谬年份")
-    check(bool(re.search(r"20\d{2}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", ts_views[0])),
-          "调用详情渲染真实本地时间戳")
+    sessions_all = T.STORE.sessions()
+    if sessions_all:
+        ts_sid = max(sessions_all, key=lambda x: x["calls"])["id"]
+        ts_views = [T.v_call({}, ts_sid, 1), T.v_compact({}, ts_sid), T.v_stats({})]
+        check(all("58375" not in h for h in ts_views),
+              "调用详情 / 压缩页 / 全局统计均无荒谬年份")
+        check(bool(re.search(r"20\d{2}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", ts_views[0])),
+              "调用详情渲染真实本地时间戳")
+    else:
+        check(False, "无可用会话进行时间戳渲染测试")
 
     print("== DSH 源：多帧 zstd 事件流 ==")
     try:
@@ -432,7 +445,7 @@ def main():
         check('class="boot"' in boot and 'class="boot"' not in plain
               and '会话解析中' in boot and '正在整理 119 个会话' in boot,
               "启动层只在首页注入，文案带当前视图真实会话数 / 调用数")
-        check('<script' not in boot and '无需 JavaScript' in boot,
+        check('<script' not in boot and '服务端渲染' in boot,
               "启动层零 JS：撤除交给 CSS 文档时间线与绘制节奏，页脚口径不变")
         check('.boot{position:fixed' in T.CSS_INDEX
               and 'opacity:0;visibility:hidden;pointer-events:none' in T.CSS_INDEX
@@ -487,6 +500,9 @@ def main():
                   and ">版本检查 ↗</a>" in quiet,
                   "「版本检查 ↗」直连仓库 releases，不经后端")
             css = T._squeeze_css(T.CSS)
+            check("calc(100% - 20px)" in T._squeeze_css(".box { width: calc(100% - 20px); }")
+                  and "calc(100% + 20px)" in T._squeeze_css(".box { width: calc(100% + 20px); }"),
+                  "_squeeze_css 保留 calc() 运算符两侧空格")
             check('id="upd-confirm"' in quiet
                   and "可能消耗少量流量（每次约几KB）" in quiet
                   and "不会上传任何本地数据" in quiet
@@ -896,13 +912,18 @@ def main():
               "宽表端点返回统一信封、3 行与全库 total=%s"
               % d.get("meta", {}).get("total"))
         check(d["meta"].get("ts_unit") == "unix_ms"
-              and len(d["meta"]["fields"]) == 16,
-              "meta 声明毫秒时间戳单位与 16 列字段字典")
+              and len(d["meta"]["fields"]) == 18,
+              "meta 声明毫秒时间戳单位与 18 列字段字典")
         check(all(set(r) == set(T.ANALYTICS_FIELDS) for r in d["data"]),
-              "默认每行字段完整（16 列宽表，含 is_sub / root）")
+              "默认每行字段完整（18 列宽表，含 cost / src / is_sub / root）")
         check(all(isinstance(r["is_sub"], bool) and isinstance(r["root"], str)
+                  and isinstance(r["src"], str) and isinstance(r["cost"], (int, float))
                   for r in d["data"]),
-              "新增 is_sub / root 类型正确（bool / str）")
+              "新增 cost / src / is_sub / root 类型正确（bool / str / num）")
+        st_src, b_src = get("/api/analytics/calls?src=workbuddy&limit=3")
+        d_src = json.loads(b_src)
+        check(st_src == 200 and all(r["src"] == "workbuddy" for r in d_src["data"]),
+              "宽表支持 ?src= 平台筛选")
 
         allrows = T.analytics_calls({"limit": ["500"]})[0]["data"]
         sess_names = set(k for s in T.STORE.sessions()
@@ -1229,6 +1250,9 @@ def main():
             proc.wait(timeout=3)
         except Exception:
             proc.kill()
+        if demo_dir and os.path.isdir(demo_dir):
+            import shutil
+            shutil.rmtree(demo_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

@@ -33,6 +33,16 @@ import re
 import sqlite3
 import time
 
+try:
+    from core.text import est_tokens as _est, _ms
+except ImportError:
+    try:
+        from ..core.text import est_tokens as _est, _ms
+    except ImportError:
+        import sys
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from core.text import est_tokens as _est, _ms
+
 AG_HOME = os.environ.get("AG_HOME", os.path.expanduser("~/.gemini/antigravity"))
 _PREFIX = "antigravity://"
 _PARSED = {}          # path -> ((mtime_ns, size), 轻量结果)
@@ -172,13 +182,6 @@ def _workspace(con):
     return ""
 
 
-def _est(s):
-    """与 gen_trace.est_tokens 同口径：CJK 1 字 ≈ 1 token，其余 4 字符 ≈ 1 token。"""
-    s = s or ""
-    cjk = len(re.findall(r"[\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff]", s))
-    return cjk + (len(s) - cjk + 3) // 4
-
-
 def _block(k, label, txt, c, ts):
     return {"k": k, "l": label, "n": len(txt), "t": txt, "c": c,
             "ts": ts, "e": _est(txt), "src": "antigravity"}
@@ -213,16 +216,16 @@ def parse(path, keep_ctx=True):
                 txt = _step_text(pl, 19, 2)
                 user_idxs.append(idx)
                 if txt and keep_ctx:
-                    ctx.append(_block("user", "你的输入", txt, "", ts))
+                    ctx.append(_block("user", "用户输入", txt, "", ts))
             elif st == 15:                     # 模型回答
                 txt = _step_text(pl, 20, 3)
                 if txt and keep_ctx:
-                    ctx.append(_block("assistant", "助手的回答", txt, "", ts))
+                    ctx.append(_block("assistant", "助手回复", txt, "", ts))
             elif st == 132:                    # 工具调用
                 name, args = _tool(pl)
                 txt = args or name
                 if txt and keep_ctx:
-                    ctx.append(_block("tool_call", "调用 %s 的参数" % (name or "工具"),
+                    ctx.append(_block("tool_call", "工具参数 · %s" % (name or "工具"),
                                       txt, (name or "")[:120], ts))
             if txt and keep_ctx:
                 block_idxs.append(idx)
@@ -257,6 +260,10 @@ def _parse_cached(path):
         return hit[1]
     r = parse(path, keep_ctx=False)
     _PARSED[path] = (key, r)
+    if len(_PARSED) > 4096:
+        live = set(session_files())
+        for k in [k for k in _PARSED if k not in live]:
+            _PARSED.pop(k, None)
     return r
 
 
@@ -306,6 +313,8 @@ def scan(home=None):
 def build(path):
     """伪路径 antigravity://<sid> → (ctx, calls, meta, turns)。"""
     sid = path.split("://", 1)[1]
+    if not re.match(r"^[0-9A-Za-z_-]+$", sid):
+        raise ValueError("invalid antigravity session id: " + sid)
     p = os.path.join(AG_HOME, "conversations", sid + ".db")
     r = parse(p, keep_ctx=True)
     cs = r["calls"]

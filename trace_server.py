@@ -76,8 +76,8 @@ PLAT_NAME = dict((k, full) for k, full, _s, _c in PLATFORMS)
 PLAT_SHORT = dict((k, short) for k, _f, short, _c in PLATFORMS)
 PLAT_COLOR = dict((k, c) for k, _f, _s, c in PLATFORMS)
 
-TYPES = {"user": "你的输入", "injected": "系统注入", "tool_result": "工具结果",
-         "tool_call": "工具调用参数", "assistant": "助手回答"}
+TYPES = {"user": "用户输入", "injected": "系统提示", "tool_result": "工具返回",
+         "tool_call": "工具参数", "assistant": "助手回复"}
 ORDER = ["tool_result", "injected", "user", "tool_call", "assistant"]
 # 分类色引用 CSS 令牌：同一组颜色同时用于行内 style、SVG 与图例，
 # 切换深浅色时无需重算任何一行 HTML。短名 --p0..--p4 按 ORDER 顺序对应
@@ -352,9 +352,18 @@ class Store(object):
     def get(self, sid):
         with self.lock:
             if sid in self._cache:
-                d = self._cache.pop(sid)
-                self._cache[sid] = d
-                return d
+                d = self._cache[sid]
+                try:
+                    s_cur = self.by_id(sid)
+                except KeyError:
+                    s_cur = None
+                cur_mtime = s_cur.get("mtime") if s_cur else None
+                cur_calls = s_cur.get("raw_calls", s_cur.get("calls")) if s_cur else None
+                if s_cur and (d.get("_mtime") != cur_mtime or d.get("_calls") != cur_calls):
+                    self._cache.pop(sid, None)
+                else:
+                    self._cache.move_to_end(sid)
+                    return d
             ev = self._loading.get(sid)
             owner = ev is None
             if owner:
@@ -371,6 +380,8 @@ class Store(object):
             t0 = time.time()
             ctx, calls, meta, turns = G.build(s["path"], full=True)
             d = self._derive(s, ctx, calls, meta, turns)
+            d["_mtime"] = s.get("mtime")
+            d["_calls"] = s.get("raw_calls", s.get("calls"))
             d["parse_ms"] = int((time.time() - t0) * 1000)
             with self.lock:
                 self._cache[sid] = d
@@ -615,10 +626,10 @@ def call_brief(c):
 # WorkBuddy 把后台任务通知 / 压缩摘要 / 系统提醒也写成 user 消息，
 # 所以「一轮」不等于「用户发的一条消息」。
 TURN_KIND = OrderedDict([
-    ("user", ("用户消息", "ku", "你输入的提问或指令")),
-    ("task", ("后台任务", "kt", "后台任务状态通知，不是你输入的")),
-    ("compact", ("压缩摘要", "kc", "上下文压缩产生的历史摘要，不是你输入的")),
-    ("injected", ("系统注入", "ki", "只有系统提醒，没有你的正文")),
+    ("user", ("用户消息", "ku", "用户发起的对话消息")),
+    ("task", ("后台任务", "kt", "后台异步任务状态回调")),
+    ("compact", ("压缩摘要", "kc", "上下文压缩生成的历史摘要")),
+    ("injected", ("系统提示", "ki", "系统提醒")),
     ("other", ("内部消息", "ko", "其他内部消息")),
 ])
 
@@ -832,61 +843,67 @@ def block_hits(text, term):
 FIND_CACHE = OrderedDict()   # (term, sid) -> (ts, (rows, warn, sessions, ms))
 
 
-def find_blocks(term, sid=None, refresh=False):
+def find_blocks(term, sid=None, refresh=False, src=None):
     """按块聚合的精确检索：一个块一行，记下全部命中位置与分片分布。
 
-    不建倒排索引，仍是流式正则扫描；结果按 (关键词, 会话) 缓存在进程内，
-    翻页 / 回看 / 点进块页都不会重扫全库原文。调用方需持有 CALC_LOCK。
+    不建倒排索引，仍是流式正则扫描；结果按 (关键词, 会话, 平台) 缓存在进程内，
+    翻页 / 回看 / 点进块页都不会重扫全库原文。
     """
     term = (term or "").strip()
     if len(term) < 2:
         return [], "关键词至少 2 个字", 0, 0
     if len(term) > 200:
         return [], "关键词过长", 0, 0
-    key = (term, sid or "")
+    key = (term, sid or "", src or "")
     now = time.time()
-    if not refresh and key in FIND_CACHE:
-        ts, cached = FIND_CACHE[key]
-        if now - ts < FIND_CACHE_TTL:
-            FIND_CACHE.move_to_end(key)
-            return cached
-        del FIND_CACHE[key]
-    t0 = time.time()
-    rx = re.compile(re.escape(term), re.I)
-    rows = []
-    targets = [STORE.by_id(sid)] if sid else STORE.sessions()
-    for s in targets:
-        d = STORE.get(s["id"])
-        for i, b in enumerate(d["ctx"]):
-            pos = []
-            capped = False
-            for m in rx.finditer(b["t"]):
-                pos.append(m.start())
-                if len(pos) >= FIND_MAX_HITS:
-                    capped = True
-                    break
-            if not pos:
-                continue
-            parts = sorted(set(p // PART_CHARS for p in pos))
-            lo, hi = max(0, pos[0] - 60), min(len(b["t"]), pos[0] + len(term) + 90)
-            rows.append({
-                "kind": "block", "sid": s["id"], "ws": s["ws"], "idx": i,
-                "label": b["l"], "btype": b["k"], "chars": b["n"],
-                "count": len(pos), "capped": capped,
-                "positions": pos[:5], "parts": parts[:FIND_MAX_PARTS],
-                "parts_total": len(parts), "pos": pos[0],
-                "snippet": b["t"][lo:hi],
-                "href": "/s/%s/b/%d?%s" %
-                        (s["id"], i, urlencode({"part": parts[0], "q": term})),
-            })
-    warn = ("部分块命中超过 %d 处，只记录前 %d 处位置" % (FIND_MAX_HITS, FIND_MAX_HITS)
-            if any(r["capped"] for r in rows) else "")
-    result = (rows, warn, len(targets), int((time.time() - t0) * 1000))
-    FIND_CACHE[key] = (now, result)
-    FIND_CACHE.move_to_end(key)
-    while len(FIND_CACHE) > FIND_CACHE_MAX:
-        FIND_CACHE.popitem(last=False)
-    return result
+    with CALC_LOCK:
+        if not refresh and key in FIND_CACHE:
+            ts, cached = FIND_CACHE[key]
+            if now - ts < FIND_CACHE_TTL:
+                FIND_CACHE.move_to_end(key)
+                return cached
+            del FIND_CACHE[key]
+        t0 = time.time()
+        rx = re.compile(re.escape(term), re.I)
+        rows = []
+        if sid:
+            targets = [STORE.by_id(sid)]
+        elif src:
+            targets = [s for s in STORE.sessions() if (s.get("src") or "workbuddy") == src]
+        else:
+            targets = STORE.sessions()
+        for s in targets:
+            d = STORE.get(s["id"])
+            for i, b in enumerate(d["ctx"]):
+                pos = []
+                capped = False
+                for m in rx.finditer(b["t"]):
+                    pos.append(m.start())
+                    if len(pos) >= FIND_MAX_HITS:
+                        capped = True
+                        break
+                if not pos:
+                    continue
+                parts = sorted(set(p // PART_CHARS for p in pos))
+                lo, hi = max(0, pos[0] - 60), min(len(b["t"]), pos[0] + len(term) + 90)
+                rows.append({
+                    "kind": "block", "sid": s["id"], "ws": s["ws"], "idx": i,
+                    "label": b["l"], "btype": b["k"], "chars": b["n"],
+                    "count": len(pos), "capped": capped,
+                    "positions": pos[:5], "parts": parts[:FIND_MAX_PARTS],
+                    "parts_total": len(parts), "pos": pos[0],
+                    "snippet": b["t"][lo:hi],
+                    "href": "/s/%s/b/%d?%s" %
+                            (s["id"], i, urlencode({"part": parts[0], "q": term})),
+                })
+        warn = ("部分块命中超过 %d 处，只记录前 %d 处位置" % (FIND_MAX_HITS, FIND_MAX_HITS)
+                if any(r["capped"] for r in rows) else "")
+        result = (rows, warn, len(targets), int((time.time() - t0) * 1000))
+        FIND_CACHE[key] = (now, result)
+        FIND_CACHE.move_to_end(key)
+        while len(FIND_CACHE) > FIND_CACHE_MAX:
+            FIND_CACHE.popitem(last=False)
+        return result
 
 
 SHELL_TOOLS = ("Bash", "Shell", "execute_command")
@@ -1083,18 +1100,18 @@ def tool_stats_cached(sid=None, refresh=False, src=None):
     """全库遍历较慢且结果稳定，缓存 60 秒（与会话索引同 TTL）。"""
     key = (sid or "") + "|" + (src or "")
     now = time.time()
-    if not refresh and key in TOOL_CACHE:
-        ts, val = TOOL_CACHE[key]
-        if now - ts < TOOL_CACHE_TTL:
-            TOOL_CACHE.move_to_end(key)
-            return val
     with CALC_LOCK:
+        if not refresh and key in TOOL_CACHE:
+            ts, val = TOOL_CACHE[key]
+            if now - ts < TOOL_CACHE_TTL:
+                TOOL_CACHE.move_to_end(key)
+                return val
         val = tool_stats(sid, src)
-    TOOL_CACHE[key] = (now, val)
-    TOOL_CACHE.move_to_end(key)
-    while len(TOOL_CACHE) > 8:
-        TOOL_CACHE.popitem(last=False)
-    return val
+        TOOL_CACHE[key] = (now, val)
+        TOOL_CACHE.move_to_end(key)
+        while len(TOOL_CACHE) > 8:
+            TOOL_CACHE.popitem(last=False)
+        return val
 
 
 def tool_calls(sid, tool, offset=0, limit=40, src=None, by_cost=False):
@@ -1375,7 +1392,8 @@ button,.btn{display:inline-block;padding:6px 13px;border:1px solid var(--border)
 button:hover,.btn:hover{border-color:var(--accent);color:var(--link-h);background:var(--accent-bg)}
 .btn.on{background:var(--accent);color:var(--bg);border-color:var(--accent)}
 .tabs{display:flex;gap:6px;margin:14px 0;flex-wrap:wrap}
-.row{display:grid;align-items:center;gap:9px;padding:7px 11px;border:1px solid var(--line);border-radius:7px;margin-bottom:4px;background:var(--bg);color:var(--fg);font-size:12px}
+.row{display:grid;grid-template-columns:var(--cols,1fr);align-items:center;gap:9px;padding:7px 11px;border:1px solid var(--line);border-radius:7px;margin-bottom:4px;background:var(--bg);color:var(--fg);font-size:12px}
+@media(max-width:760px){.row{grid-template-columns:1fr auto!important;gap:6px;flex-wrap:wrap}.row .grow{grid-column:1/-1}}
 .row:hover{border-color:var(--accent);background:var(--panel);color:var(--fg)}
 .row .grow{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row a,.row a:visited{color:var(--link);text-decoration:none;text-underline-offset:3px}
@@ -2131,7 +2149,7 @@ def page(title, crumbs, body, sub="", extra_head="", need=(), topbar="",
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
             '<title>%s · Token 轨迹</title><style>%s</style>' % (esc(title), _squeeze_css(css)))
     back = back_link(crumbs)
-    h1 = '<h1>%s<span class="badge">完整模式 · 零截断</span></h1>' % esc(title)
+    h1 = '<h1>%s</h1>' % esc(title)
     # 更新控件独占页眉顶行的右上角（面包屑在左），平台切换留在标题行右侧；
     # 两行分开，不再和「平台」挤在同一段里。说明文字再另起一行左对齐。
     top = '<div class="hd-top">%s%s</div>' % (crumb(crumbs), update_tools())
@@ -2154,7 +2172,7 @@ def page(title, crumbs, body, sub="", extra_head="", need=(), topbar="",
     doc = (head + boot + '<header><div class="wrap">' + top + hd +
            '</div></header><div class="wrap">' + update_banner() + extra_head + body +
            '<footer><span>本页 HTML @@KB@@ KB</span>' +
-           '<span>数据只读 · 全文由后端按需提供 · 无需 JavaScript</span>' +
+           '<span>只读本地数据 · 服务端渲染</span>' +
            back_link(crumbs, footer=True) +
            monitor_link("ext") + version_link() +
            '<span class="foot-copy">© 大晋帝国之谶 · '
@@ -3074,7 +3092,7 @@ def block_row_html(d, i, sid, seq, j, st):
             nfmt(b.get("e") or G.est_tokens(b["t"])),
             nfmt(len(block_users(d, j)))))
     return ('<a class="row" title="%s" href="/s/%s/b/%d?ref=%d" '
-            'style="grid-template-columns:52px 64px 92px 1fr 84px 62px">'
+            'style="--cols:52px 64px 92px 1fr 84px 62px">'
             '<span class="idx">#%d</span><span class="chip %s">%s</span>'
             '%s'
             '<span class="grow"><b style="font-weight:500">%s</b>%s</span>'
@@ -3130,7 +3148,7 @@ def call_row(d, c, sid, show_turn=True):
     r = (c["hit"] / c["pin"]) if c["pin"] else None
     cls = "bad" if (r is not None and r < 0.5) else ("warn2" if (r is not None and r < 0.8) else "")
     pct = "%.1f%%" % (r * 100) if r is not None else "—"
-    return ('<a class="row %s" href="/s/%s/c/%d" style="grid-template-columns:40px 90px 1fr 78px 78px 78px 66px 60px 92px">'
+    return ('<a class="row %s" href="/s/%s/c/%d" style="--cols:40px 90px 1fr 78px 78px 78px 66px 60px 92px">'
             '<span class="idx">#%d</span>%s'
             '<span class="grow"><b style="font-weight:500">%s</b>%s</span>'
             '<span class="num">输入 %s</span><span class="num">未命中 %s</span>'
@@ -3146,7 +3164,7 @@ def call_row(d, c, sid, show_turn=True):
 
 def turn_row(d, t, sid):
     b = turn_brief(d, t)
-    return ('<a class="row" href="/s/%s/t/%d" style="grid-template-columns:52px 1fr 68px 92px 72px 90px 74px 62px">'
+    return ('<a class="row" href="/s/%s/t/%d" style="--cols:52px 1fr 68px 92px 72px 90px 74px 62px">'
             '<span class="idx">轮 %d</span>'
             '<span class="grow">%s<b style="font-weight:500">%s</b>%s</span>'
             '<span class="num">%d 次</span><span class="num">输入 %s</span>'
@@ -3248,8 +3266,12 @@ def v_index(q):
          urlencode([("sort", k)] + ([("src", src)] if src else []) +
                    ([("ws", ws)] if ws else [])), lab)
         for k, lab in sort_opts)
-    clear_ws = (('<a class="tb-clear" href="/">清除工作区筛选：%s ✕</a>' % esc(ws))
-                if ws else "")
+    clear_q = [("sort", sort)] if sort != "mtime" else []
+    if src:
+        clear_q.append(("src", src))
+    clear_href = "/?" + urlencode(clear_q) if clear_q else "/"
+    clear_ws = (('<a class="tb-clear" href="%s">清除工作区筛选：%s ✕</a>' %
+                 (esc(clear_href), esc(ws))) if ws else "")
     # 平台切换挂到大标题同一栏（header 里的 .platbar）；只在检测到外部源时出现。
     # 本机没有某个平台的会话时（没装、或还没写过记录），那一项不再可点：
     # 渲染成置灰的 span 并挂 title 说明，避免点进去看到一页空白。
@@ -3305,7 +3327,7 @@ def v_index(q):
                    % (esc(PLAT_NAME.get(src, src)), esc(name))) + tag
         else:
             money = "%.1f 分" % s["credit"]
-        return ('<a class="%s" href="/s/%s" style="grid-template-columns:1fr 96px 108px 92px 92px 82px 70px">'
+        return ('<a class="%s" href="/s/%s" style="--cols:1fr 96px 108px 92px 92px 82px 70px">'
                 '<span class="grow">%s%s<b style="font-weight:500">%s</b>'
                 '<span class="fine" style="display:block">%s · %s%s</span></span>'
                 '<span class="num">%d 轮</span><span class="num">%d 次调用</span>'
@@ -3314,8 +3336,8 @@ def v_index(q):
                 '<span class="num">%s</span></a>' %
                 (rowcls, esc(s["id"]), br, tag, esc(label[:70]),
                  esc(s["id"][:8]), esc(s["model"] or "?"), note,
-                 s["turns"], s["calls"], "%.1fM" % (s["pin"] / 1e6),
-                 "%.0fk" % (s["pout"] / 1000), money, t))
+                 s["turns"], s["calls"], kh(s["pin"]),
+                 kh(s["pout"]), money, t))
 
     def sub_row(k, parent, nested):
         tag = ('<span class="chip ks" title="子代理会话 · %s">子代理 · %s</span>' %
@@ -3441,7 +3463,7 @@ def v_session(q, sid):
         total = len(d["calls"])
         p = clamp_p(q, total, PAGE_CALLS)
         lo = p * PAGE_CALLS
-        body += '<h2>全部 %s 次调用 <small>每页 %d 条，一次都不省</small></h2>' % (nfmt(total), PAGE_CALLS)
+        body += '<h2>全部 %s 次调用 <small>每页 %d 条</small></h2>' % (nfmt(total), PAGE_CALLS)
         for k in range(lo, min(lo + PAGE_CALLS, total)):
             body += call_row(d, d["calls"][k], sid)
             body += call_hit_fold(d, k, sid)
@@ -3463,8 +3485,8 @@ def v_session(q, sid):
                 flt.append('<a class="%s" href="/s/%s?kind=%s" title="%s">%s %d</a>' %
                            ("on" if kind == k else "", esc(sid), k, esc(why), esc(lab), counts[k]))
         body += '<div class="tkfilter">' + "".join(flt) + '</div>'
-        body += ('<div class="fine" style="margin:0 0 12px">只有「用户消息」是你输入的内容；'
-                 '后台任务通知、压缩摘要与系统提醒由客户端写入，也各占一轮。</div>')
+        body += ('<div class="fine" style="margin:0 0 12px">「用户消息」为用户发起的对话；'
+                 '后台任务、压缩摘要与系统提醒由客户端自动写入，同样计入轮次。</div>')
         shown_turns = all_turns if kind == "all" else [
             t for t in all_turns if (t.get("kind") or "other") == kind]
         total = len(shown_turns)
@@ -3481,7 +3503,7 @@ def v_session(q, sid):
             body += '<h3>缓存冷启动断点 <small>上一次 &gt;80% 命中、这一次 &lt;50%</small></h3>'
             for i in d["cold"][:10]:
                 c = d["calls"][i]
-                body += ('<a class="row bad" href="/s/%s/c/%d" style="grid-template-columns:56px 1fr 100px 92px 82px">'
+                body += ('<a class="row bad" href="/s/%s/c/%d" style="--cols:56px 1fr 100px 92px 82px">'
                          '<span class="idx">#%d</span><span class="grow">轮 %d · 命中率从 &gt;80%% 掉到 %.1f%%</span>'
                           '<span class="num">输入 %s</span><span class="num">未命中 %s</span>'
                           '<span class="num credit">%s</span></a>' %
@@ -3508,11 +3530,11 @@ def v_turn(q, sid, turn):
                      ("系统注入", nfmt(tb["inj"]) + " 字")] +
                     ([("积分", "%.2f" % tb["credit"])] if tb["credit"] > 0 else []))
         kind = tb["kind"]
-        heads = {"user": "你这一轮问的是：",
-                 "task": "后台任务通知（不是你输入的）：",
-                 "compact": "上下文压缩摘要（不是你输入的）：",
-                 "injected": "系统注入（不是你输入的）：",
-                 "other": "内部消息（不是你输入的）："}
+        heads = {"user": "用户消息：",
+                 "task": "后台任务通知：",
+                 "compact": "上下文压缩摘要：",
+                 "injected": "系统提示：",
+                 "other": "内部消息："}
         body += ('<div class="note">%s<b>%s</b> %s</div>' %
                  (turn_chip(kind), heads.get(kind, heads["other"]), esc(tb["disp"])))
         if kind != "user":
@@ -3524,7 +3546,7 @@ def v_turn(q, sid, turn):
     # 一轮可能含几百次调用：不分页会把单页撑过 80 KB 硬闸（长会话实测 89 KB）。
     p = clamp_p(q, len(idxs), PAGE_CALLS)
     lo = p * PAGE_CALLS
-    body += '<h2>这一轮的 %s 次调用 <small>每页 %d 条，一次都不省</small></h2>' % (
+    body += '<h2>这一轮的 %s 次调用 <small>每页 %d 条</small></h2>' % (
         nfmt(len(idxs)), PAGE_CALLS)
     for i in idxs[lo:lo + PAGE_CALLS]:
         body += call_row(d, d["calls"][i], sid, show_turn=False)
@@ -3602,7 +3624,7 @@ def v_call(q, sid, seq):
     if c["out"]:
         body += '<h2>本次输出 <small>不占输入上下文；每段全文可分片查看</small></h2>'
         for k, seg in enumerate(c["out"]):
-            body += ('<a class="row" href="/s/%s/o/%d?seg=%d" style="grid-template-columns:70px 1fr 100px 70px">'
+            body += ('<a class="row" href="/s/%s/o/%d?seg=%d" style="--cols:70px 1fr 100px 70px">'
                      '<span class="chip t">%s</span><span class="grow">%s</span>'
                      '<span class="num">%s 字</span><span class="num" style="color:var(--link-h)">全文 →</span></a>' %
                      (esc(sid), seq, k, esc(seg["kind"]), esc(seg["label"]),
@@ -3693,7 +3715,7 @@ def v_block(q, sid, idx):
     body += '<h3>哪些调用带上了这个块 <small>共 %s 次，列最近 12 次</small></h3>' % nfmt(len(users))
     for k in list(users)[-12:][::-1]:
         c = d["calls"][k]
-        body += ('<a class="row" href="/s/%s/c/%d" style="grid-template-columns:64px 1fr 100px 80px">'
+        body += ('<a class="row" href="/s/%s/c/%d" style="--cols:64px 1fr 100px 80px">'
                  '<span class="idx">#%d</span><span class="grow">轮 %d · %s</span>'
                   '<span class="num">输入 %s</span><span class="num credit">%s</span></a>' %
                   (esc(sid), c["seq"], c["seq"], c["turn"], esc(c["tool"] or "最终回答"),
@@ -3790,10 +3812,11 @@ def v_find(q, sid=None):
     """按块聚合的精确检索：列出所有命中块，并直接跳到命中所在分片。"""
     term = qstr(q, "q")
     p = qint(q, "p")
+    src = "" if sid else qstr(q, "src")
     d = STORE.get(sid) if sid else None
     with CALC_LOCK:
         rows, warn, nsessions, ms = find_blocks(
-            term, sid=sid, refresh=qstr(q, "refresh") == "1")
+            term, sid=sid, refresh=qstr(q, "refresh") == "1", src=src)
     total = len(rows)
     p = clamp_p(q, total, FIND_MAX_BLOCKS)
     lo = p * FIND_MAX_BLOCKS
@@ -3802,15 +3825,22 @@ def v_find(q, sid=None):
     action = "/s/%s/search" % sid if sid else "/search"
     base = "/s/%s/find" % sid if sid else "/find"
     crumbs = [("索引", "/")] + ([(d["title"][:24], "/s/%s" % sid)] if d else []) + [("块检索", "")]
-    body = search_box(action, term, "blocks", placeholder="关键词：列出所有命中的上下文块")
+    hidden = ('<input type="hidden" name="src" value="%s">' % esc(src)) if src else ""
+    body = search_box(action, term, "blocks", placeholder="关键词：列出所有命中的上下文块",
+                      extra=hidden)
     body += ('<div class="note">按<b>块</b>聚合：一个块只列一行，给出块内命中总数与它们落在'
              '哪些 %s 字分片。点片号直接跳到该片并高亮，超长块不用手翻几十页。'
              '与<a href="%s">全文搜索</a>共用同一份原文，不建索引、不落盘。</div>' %
              (nfmt(PART_CHARS), esc("/s/%s/search" % sid if sid else "/search")))
+    ref_qs = {}
+    if term:
+        ref_qs["q"] = term
+    if src:
+        ref_qs["src"] = src
+    ref_qs["refresh"] = "1"
     body += ('<div class="fine">结果按关键词缓存 %d 秒，翻页与回看不重扫；源文件有新增会话时'
-             '点<a href="%s">强制重检</a>。首次检索含解析会话全文，约几秒。</div>' %
-             (FIND_CACHE_TTL,
-              esc(base + ("?" + urlencode({"q": term, "refresh": "1"}) if term else ""))))
+             '点<a href="%s">强制重检</a>。首次检索需解析未缓存的会话文件，后续直接命中内存缓存。</div>' %
+             (FIND_CACHE_TTL, esc(base + "?" + urlencode(ref_qs))))
     if warn:
         body += '<div class="warn">%s</div>' % esc(warn)
     if term:
@@ -3839,7 +3869,8 @@ def v_find(q, sid=None):
         body += pager(base, q, p, FIND_MAX_BLOCKS, total, "个块")
     else:
         body += '<div class="note">输入至少 2 个字开始检索。</div>'
-    return page("块检索", crumbs, body, sub="按块聚合 · 命中分片直跳 · 零脚本")
+    return page("块检索", crumbs, body, sub="按块聚合 · 命中分片直跳 · 零脚本",
+                topbar="" if sid else plat_switch(STORE.sessions(), src, "/find", keep=[("q", term)] if term else []))
 
 
 def v_tools(q, sid=None):
@@ -3854,11 +3885,14 @@ def v_tools(q, sid=None):
     src = "" if sid else qstr(q, "src")
     st = tool_stats_cached(sid=sid, refresh=qstr(q, "refresh") == "1", src=src)
     base = "/s/%s/tools" % sid if sid else "/tools"
+    base_q = {"src": src} if src else {}
     d = STORE.get(sid) if sid else None
     crumbs = [("索引", "/")] + ([(d["title"][:24], "/s/%s" % sid)] if d else []) + [("工具与命令", "")]
+    hidden = ('<input type="hidden" name="src" value="%s">' % esc(src)) if src else ""
     body = ('<form class="searchbox" method="get" action="%s">'
+            '%s'
             '<input type="text" name="q" value="%s" placeholder="筛选工具名 / 程序名">'
-            '<button type="submit">筛选</button></form>' % (base, esc(raw_q)))
+            '<button type="submit">筛选</button></form>' % (base, hidden, esc(raw_q)))
     body += kpi([("工具种类", nfmt(len(st["tools"]))),
                  ("总调用", nfmt(st["total_calls"])),
                  ("Shell 执行", nfmt(st["shell_runs"])),
@@ -3882,7 +3916,7 @@ def v_tools(q, sid=None):
         for r in rows:
             money = ("%.2f 分" % r["credit"]) if r["credit"] > 0 else (
                 "≈¥%.2f" % (r.get("cost") or 0.0))
-            body += ('<a class="row" href="%s" style="grid-template-columns:74px 1fr 70px 92px 88px 82px">'
+            body += ('<a class="row" href="%s" style="--cols:74px 1fr 70px 92px 88px 82px">'
                      '<span class="idx">#%d</span><span class="grow">%s</span>'
                      '<span class="num">轮 %d</span><span class="num">输入 %s</span>'
                      '<span class="num credit">%s</span><span class="num">%s</span></a>' %
@@ -3894,7 +3928,7 @@ def v_tools(q, sid=None):
         body += '<div class="tabs">' + "".join(
             '<a class="btn %s" href="%s">%s</a>' %
             ("on" if view == v else "",
-             esc(base + "?" + urlencode({"view": v, "q": raw_q})), lab)
+             esc(base + "?" + urlencode(dict(base_q, view=v, q=raw_q))), lab)
             for v, lab in (("tools", "按工具"), ("progs", "按程序"))) + '</div>'
         if view == "tools":
             rows = [x for x in st["tools"] if term in x["tool"].lower()]
@@ -3902,13 +3936,13 @@ def v_tools(q, sid=None):
             mx = max((x["calls"] for x in st["tools"]), default=1) or 1
             body += '<h2>工具调用 <small>共 %s 种</small></h2>' % nfmt(len(rows))
             for x in rows[p * PAGE_CALLS:(p + 1) * PAGE_CALLS]:
-                body += ('<div class="row" style="grid-template-columns:142px 1fr 76px 84px 88px 68px 82px">'
+                body += ('<div class="row" style="--cols:142px 1fr 76px 84px 88px 68px 82px">'
                          '<span class="grow"><a href="%s">%s</a></span>'
                          '<span class="bar"><i class="h" style="width:%.1f%%"></i></span>'
                          '<span class="num">%s 次</span><span class="num">命中 %.1f%%</span>'
                           '<span class="num credit">%s</span>'
                           '<span class="num">%d 会话</span><span class="num">%s</span></div>' %
-                          (esc(base + "?" + urlencode({"tool": x["tool"]})), esc(x["tool"]),
+                          (esc(base + "?" + urlencode(dict(base_q, tool=x["tool"]))), esc(x["tool"]),
                            x["calls"] / mx * 100, nfmt(x["calls"]), x["rate"] * 100,
                            money_label(x["credit"], x.get("cost")),
                            x["session_count"], esc(x["last"])))
@@ -3918,7 +3952,7 @@ def v_tools(q, sid=None):
             mx = max((x["runs"] for x in st["progs"]), default=1) or 1
             body += '<h2>Shell 程序 <small>共 %s 种</small></h2>' % nfmt(len(rows))
             for x in rows[p * PAGE_CALLS:(p + 1) * PAGE_CALLS]:
-                body += ('<div class="row" style="grid-template-columns:180px 1fr 88px 110px">'
+                body += ('<div class="row" style="--cols:180px 1fr 88px 110px">'
                          '<span class="grow">%s</span>'
                          '<span class="bar"><i class="h" style="width:%.1f%%"></i></span>'
                          '<span class="num">%s 次</span>'
@@ -3926,9 +3960,14 @@ def v_tools(q, sid=None):
                          (esc(x["prog"]), x["runs"] / mx * 100,
                           nfmt(x["runs"]), nfmt(x["chars"])))
         body += pager(base, q, p, PAGE_CALLS, len(rows), "种")
+    plat_keep = [("view", view)]
+    if tool:
+        plat_keep.append(("tool", tool))
+    if raw_q:
+        plat_keep.append(("q", raw_q))
     return page("工具与命令", crumbs, body,
                 sub="工具 usage 聚合 · Shell 程序 best-effort 提取",
-                topbar="" if sid else plat_switch(STORE.sessions(), src, "/tools"))
+                topbar="" if sid else plat_switch(STORE.sessions(), src, "/tools", keep=plat_keep))
 
 
 def v_map(q, sid):
@@ -4129,7 +4168,7 @@ def v_compact(q, sid):
                          "%.1f%%" % (a["rate"] * 100),
                          "%+.0f pp" % ((a["rate"] - b["rate"]) * 100), True)
             body += line("真实积分 credit", "%.2f" % b["credit"], "%.2f" % a["credit"],
-                         "%+.2f" % (a["credit"] - b["credit"]), True)
+                         "%+.2f" % (a["credit"] - b["credit"]), a["credit"] <= b["credit"])
             body += line("修正前 可见字数（旧口径）", nfmt(b["chars_old"]), nfmt(a["chars_old"]),
                          "%+.0f%%" % r["chars_old_delta_pct"], False)
             body += line("修正后 可见字数 [vf,ctxN)", nfmt(b["chars_new"]), nfmt(a["chars_new"]),
@@ -4182,7 +4221,7 @@ def v_stats(q):
               if compact_sid else ''))
     body += '<h2>最贵的 20 次调用 <small>按刊例价估算 · 非账单</small></h2>'
     for x in st["top_calls"]:
-        body += ('<a class="row bad" href="/s/%s/c/%d" style="grid-template-columns:64px 1fr 104px 84px 84px">'
+        body += ('<a class="row bad" href="/s/%s/c/%d" style="--cols:64px 1fr 104px 84px 84px">'
                  '<span class="idx">#%d</span><span class="grow">%s · %s</span>'
                  '<span class="num">输入 %s</span><span class="num">命中 %.1f%%</span>'
                  '<span class="num credit">¥%.3f</span></a>' %
@@ -4190,7 +4229,7 @@ def v_stats(q):
                   nfmt(x["pin"]), x["rate"] * 100, x["cost"]))
     body += '<h2>最大的 20 个上下文块 <small>点进去分片看全文</small></h2>'
     for x in st["top_blocks"]:
-        body += ('<a class="row" href="/s/%s/b/%d" style="grid-template-columns:64px 1fr 110px 76px">'
+        body += ('<a class="row" href="/s/%s/b/%d" style="--cols:64px 1fr 110px 76px">'
                  '<span class="idx">#%d</span><span class="grow">%s · %s</span>'
                  '<span class="num">%s 字</span><span class="num" style="color:var(--link-h)">全文 →</span></a>' %
                  (esc(x["sid"]), x["idx"], x["idx"], TYPES.get(x["kind"], x["kind"]),
@@ -4199,7 +4238,7 @@ def v_stats(q):
              '不是真实账单，只衡量重复携带量</small></h2>')
     for x in st["costly_blocks"]:
         body += ('<a class="row bad" href="/s/%s/b/%d" '
-                 'style="grid-template-columns:64px 1fr 106px 82px 92px">'
+                 'style="--cols:64px 1fr 106px 82px 92px">'
                  '<span class="idx">#%d</span><span class="grow">%s · %s</span>'
                  '<span class="num">≈ %s token</span><span class="num">× %s 次</span>'
                  '<span class="num credit">≈ %s</span></a>' %
@@ -4208,7 +4247,7 @@ def v_stats(q):
     body += '<h2>缓存冷启动断点 <small>共 %d 次；按当次输入量排序，列前 30</small></h2>' % len(st["cold"])
     for x in st["cold"][:30]:
         ts = fmt_ts(x["ts"], "%m-%d %H:%M", "?")
-        body += ('<a class="row bad" href="/s/%s/c/%d" style="grid-template-columns:64px 1fr 104px 84px 84px 66px">'
+        body += ('<a class="row bad" href="/s/%s/c/%d" style="--cols:64px 1fr 104px 84px 84px 66px">'
                  '<span class="idx">#%d</span><span class="grow">%s · %s</span>'
                  '<span class="num">输入 %s</span><span class="num">命中 %.1f%%</span>'
                   '<span class="num credit">%s</span><span class="num">%s</span></a>' %
@@ -4218,7 +4257,7 @@ def v_stats(q):
     body += ('<div class="tabs"><a class="btn" href="/api/stats">同一份数据的 JSON</a>'
              '<a class="btn" href="/">← 回索引</a></div>')
     return page("全局统计", [("索引", "/"), ("全局统计", "")], body,
-                sub="跨会话全量聚合 · 每次访问现算，不缓存结论",
+                sub="跨会话全量聚合 · 实时计算",
                 topbar=plat_switch(ss_all, src, "/stats"))
 
 
@@ -4232,41 +4271,44 @@ _RANK_CACHE = {}
 def rank_rows(what):
     """把每一个块 / 每一次调用本身作为一行，不做会话或日期聚合。
 
-    块行 = (sid, 会话标题, 块号, 块对象, 估算 token, 被携带次数)；
-    调用行 = (sid, 会话标题, 调用对象)。行内只放引用与已算好的整数，
+    块行 = (sid, 会话标题, 块号, 块对象, 估算 token, 被携带次数, day_key, src)；
+    调用行 = (sid, 会话标题, 调用对象, day_key, canon_model, src)。行内只放引用与已算好的整数，
     展示 HTML 只为当前页拼装——全库 1.5 万块在排序阶段不生成任何字符串。
     """
-    ss = STORE.sessions()
-    key = (what, id(ss), len(ss))
-    hit = _RANK_CACHE.get(key)
-    # 只把 id 存进 key 是不够的：旧索引列表一旦被回收，新列表可能分配到同一
-    # 地址，刷新后就会误命中旧结果。缓存 value 持有 ss 本身可杜绝 id 复用，
-    # `is ss` 再挡一层，失效判定不依赖分配器的偶然行为。
-    if hit is not None and hit[0] is ss:
-        return hit[1]
-    rows = []
-    if what == "block":
-        for s in ss:
-            d = STORE.get(s["id"])
-            uses = block_use_counts(d)
-            title = s["title"] or s["id"]
-            for i, b in enumerate(d["ctx"]):
-                est = b.get("e") or (b["n"] // 3)
-                # 日期 / 归一键随行预计算：筛选时只做字符串比较，不再逐行调
-                # day_key（15k 次 localtime）或 canon_model（8k 次正则）。
-                rows.append((s["id"], title, i, b, est, uses[i],
-                             G.day_key(b.get("ts"))))
-    else:
-        for s in ss:
-            d = STORE.get(s["id"])
-            title = s["title"] or s["id"]
-            for c in d["calls"]:
-                rows.append((s["id"], title, c, G.day_key(c.get("ts")),
-                             G.canon_model(c.get("model"))))
-    if len(_RANK_CACHE) > 8:
-        _RANK_CACHE.clear()
-    _RANK_CACHE[key] = (ss, rows)
-    return rows
+    with CALC_LOCK:
+        ss = STORE.sessions()
+        key = (what, id(ss), len(ss))
+        hit = _RANK_CACHE.get(key)
+        # 只把 id 存进 key 是不够的：旧索引列表一旦被回收，新列表可能分配到同一
+        # 地址，刷新后就会误命中旧结果。缓存 value 持有 ss 本身可杜绝 id 复用，
+        # `is ss` 再挡一层，失效判定不依赖分配器的偶然行为。
+        if hit is not None and hit[0] is ss:
+            return hit[1]
+        rows = []
+        if what == "block":
+            for s in ss:
+                d = STORE.get(s["id"])
+                uses = block_use_counts(d)
+                title = s["title"] or s["id"]
+                src = s.get("src") or "workbuddy"
+                for i, b in enumerate(d["ctx"]):
+                    est = b.get("e") or (b["n"] // 3)
+                    # 日期 / 归一键随行预计算：筛选时只做字符串比较，不再逐行调
+                    # day_key（15k 次 localtime）或 canon_model（8k 次正则）。
+                    rows.append((s["id"], title, i, b, est, uses[i],
+                                 G.day_key(b.get("ts")), src))
+        else:
+            for s in ss:
+                d = STORE.get(s["id"])
+                title = s["title"] or s["id"]
+                src = s.get("src") or "workbuddy"
+                for c in d["calls"]:
+                    rows.append((s["id"], title, c, G.day_key(c.get("ts")),
+                                 G.canon_model(c.get("model")), src))
+        if len(_RANK_CACHE) > 8:
+            _RANK_CACHE.clear()
+        _RANK_CACHE[key] = (ss, rows)
+        return rows
 
 
 def rank_sort_key(what, sort):
@@ -4300,7 +4342,7 @@ def rank_metric(what, sort, r):
     return c["pin"] + c["pout"]
 
 
-def rank_filter(what, rows, kinds, dfrom, dto, exclude_compact=False):
+def rank_filter(what, rows, kinds, dfrom, dto, exclude_compact=False, src=""):
     """按种类 / 时间筛选排行行，各维可单独或任意组合。
 
     kinds 支持单个字符串（兼容旧调用）或逗号分隔的多值 / 集合：块按块类型（k）
@@ -4310,6 +4352,9 @@ def rank_filter(what, rows, kinds, dfrom, dto, exclude_compact=False):
     时间按对象时间戳的本地日期做闭区间比较，任一端为空表示该侧不限。
     日期与归一键已在 rank_rows() 里预计算，这里只做字符串比较。
     """
+    if src:
+        si = 7 if what == "block" else 5
+        rows = [r for r in rows if r[si] == src]
     if isinstance(kinds, str):
         kinds = set(x for x in kinds.split(",") if x)
     else:
@@ -4339,16 +4384,17 @@ def rank_sorted(what, sort):
     15 879 块按乘积排序一次约 98 ms；缓存后筛选请求只剩一次 O(n) 过滤。
     与 rank_rows() 一样用索引对象身份做失效判定。
     """
-    ss = STORE.sessions()
-    key = (what, sort)
-    hit = _RANK_SORTED.get(key)
-    if hit is not None and hit[0] is ss:
-        return hit[1]
-    rows = sorted(rank_rows(what), key=rank_sort_key(what, sort))
-    if len(_RANK_SORTED) > 8:
-        _RANK_SORTED.clear()
-    _RANK_SORTED[key] = (ss, rows)
-    return rows
+    with CALC_LOCK:
+        ss = STORE.sessions()
+        key = (what, sort)
+        hit = _RANK_SORTED.get(key)
+        if hit is not None and hit[0] is ss:
+            return hit[1]
+        rows = sorted(rank_rows(what), key=rank_sort_key(what, sort))
+        if len(_RANK_SORTED) > 8:
+            _RANK_SORTED.clear()
+        _RANK_SORTED[key] = (ss, rows)
+        return rows
 
 
 def v_rank(q):
@@ -4359,6 +4405,8 @@ def v_rank(q):
     sort = qstr(q, "sort", sorts[0])
     if sort not in sorts:
         sort = sorts[0]          # 白名单：非法值一律回落，不拼进 HTML / 排序键
+
+    src = qstr(q, "src")
 
     # ---- 筛选：种类多选（块类型 / 模型归一键）+ 时间闭区间 + 压缩摘要开关 ----
     # k 可以是单个值，也可以是逗号分隔的多个值；单值 URL 与旧版完全兼容。
@@ -4382,13 +4430,15 @@ def v_rank(q):
     dto = _norm_date(qstr(q, "to", ""))
 
     rows = rank_filter(what, rank_sorted(what, sort), kind, dfrom, dto,
-                       exclude_compact=(what == "block" and not show_compact))
+                       exclude_compact=(what == "block" and not show_compact), src=src)
     size = PAGE_BLOCKS
     p = clamp_p(q, len(rows), size)
     shown = rows[p * size:(p + 1) * size]
     mx = max((rank_metric(what, sort, r) for r in rows), default=0) or 1
 
     filt = {}
+    if src:
+        filt["src"] = src
     if kind:
         filt["k"] = kind
     if dfrom:
@@ -4477,6 +4527,8 @@ def v_rank(q):
     prev_last = (datetime.date(cy, cm, 1) - datetime.timedelta(days=1)).day
     prev_ym = "%04d-%02d" % (cy - (cm == 1), 12 if cm == 1 else cm - 1)
     next_ym = "%04d-%02d" % (cy + (cm == 12), 1 if cm == 12 else cm + 1)
+    prev_y = "%04d-%02d" % (cy - 1, cm)
+    next_y = "%04d-%02d" % (cy + 1, cm)
 
     def date_href(field, val):
         d = dict(filt)
@@ -4511,15 +4563,19 @@ def v_rank(q):
         # 切月份是链接跳转；带 cal/calfield 回来时让对应弹层保持展开，
         # 连点几个月不用反复打开。
         opened = " open" if (cal_field == field and cal_raw) else ""
-        return ('<details class="datepick"%s><summary>%s</summary>'
+        return ('<details name="rank-cal" class="datepick"%s><summary>%s</summary>'
                 '<div class="calpop">'
-                '<div class="calhd"><a href="%s" aria-label="上个月">‹</a>'
-                '<b>%d 年 %d 月</b><a href="%s" aria-label="下个月">›</a></div>'
+                '<div class="calhd"><a href="%s" aria-label="上一年">«</a>'
+                '<a href="%s" aria-label="上个月">‹</a>'
+                '<b>%d 年 %d 月</b><a href="%s" aria-label="下个月">›</a>'
+                '<a href="%s" aria-label="下一年">»</a></div>'
                 '<div class="calgrid">%s%s</div>'
                 '<div class="calft"><a href="%s">今天</a><a href="%s">清除</a></div>'
                 '</div></details>' %
                 (opened, esc(cur or label),
-                 cal_href(prev_ym, field), cy, cm, cal_href(next_ym, field),
+                 cal_href(prev_y, field), cal_href(prev_ym, field),
+                 cy, cm,
+                 cal_href(next_ym, field), cal_href(next_y, field),
                  week, "".join(cells),
                  date_href(field, today.isoformat()), date_href(field, "")))
 
@@ -4540,9 +4596,14 @@ def v_rank(q):
         if show_compact:
             cx_hidden = '<input type="hidden" name="cx" value="1">'
 
+    src_hidden = ('<input type="hidden" name="src" value="%s">' % esc(src)) if src else ""
+    clear_d = {"what": what, "sort": sort}
+    if src:
+        clear_d["src"] = src
     filt_html = ('<form class="searchbox" method="get" action="/rank">'
                  '<input type="hidden" name="what" value="%s">'
                  '<input type="hidden" name="sort" value="%s">'
+                 '%s'
                  '<input type="hidden" name="k" value="%s">%s'
                  '<input type="hidden" name="from" value="%s">'
                  '<input type="hidden" name="to" value="%s">'
@@ -4553,11 +4614,11 @@ def v_rank(q):
                  '</span>'
                  '<span class="sb-main"><button type="submit">筛选</button>'
                  '<a class="btn" href="%s">清空</a></span></form>' %
-                 (esc(what), esc(sort), esc(kind), cx_hidden, esc(dfrom), esc(dto),
+                 (esc(what), esc(sort), src_hidden, esc(kind), cx_hidden, esc(dfrom), esc(dto),
                   esc(kind_label), pick_html,
                   date_pick("from", "起始日期", dfrom),
                   date_pick("to", "结束日期", dto), cx_html,
-                  esc("/rank?" + urlencode({"what": what, "sort": sort}))))
+                  esc("/rank?" + urlencode(clear_d))))
     n_label = (("筛选后块数" if filt else "块总数") if what == "block"
                else ("筛选后调用数" if filt else "调用总数"))
     pager_q = {"what": [what], "sort": [sort]}
@@ -4595,14 +4656,14 @@ def v_rank(q):
             body += '<div class="note">没有匹配当前筛选条件的块，换个种类或时间范围试试。</div>'
         else:
             cols = "52px 1fr 150px 118px 84px 76px 92px 48px"
-            body += ('<div class="row" style="grid-template-columns:%s">'
+            body += ('<div class="row" style="--cols:%s">'
                      '<span class="idx">#</span><span class="grow">块</span>'
                      '<span>来源会话</span><span>写入时间</span>'
                      '<span class="num">块 token</span><span class="num">被携带</span>'
                      '<span class="num">乘积</span><span class="num">占比</span></div>' % cols)
             for n, r in enumerate(shown, p * size + 1):
-                sid, title, i, b, est, u, _day = r
-                body += ('<div class="row" style="grid-template-columns:%s">'
+                sid, title, i, b, est, u, _day = r[:7]
+                body += ('<div class="row" style="--cols:%s">'
                          '<span class="idx">#%d</span>'
                          '<span class="grow"><a href="/s/%s/b/%d">'
                          '%s'
@@ -4645,14 +4706,14 @@ def v_rank(q):
             body += '<div class="note">没有匹配当前筛选条件的调用，换个模型或时间范围试试。</div>'
         else:
             cols = "52px 1fr 150px 128px 82px 82px 92px 48px"
-            body += ('<div class="row" style="grid-template-columns:%s">'
+            body += ('<div class="row" style="--cols:%s">'
                      '<span class="idx">#</span><span class="grow">会话 · 轮次</span>'
                      '<span>模型</span><span>时间</span>'
                      '<span class="num">输入</span><span class="num">输出</span>'
                      '<span class="num">合计</span><span class="num">占比</span></div>' % cols)
             for n, r in enumerate(shown, p * size + 1):
-                sid, title, c, _day, _canon = r
-                body += ('<div class="row" style="grid-template-columns:%s">'
+                sid, title, c, _day, _canon = r[:5]
+                body += ('<div class="row" style="--cols:%s">'
                          '<span class="idx">#%d</span>'
                          '<span class="grow"><a href="/s/%s" title="%s">%s</a> '
                          '<a href="/s/%s/c/%d">#%d</a></span>'
@@ -4672,7 +4733,9 @@ def v_rank(q):
 
     body += ('<div class="tabs"><a class="btn" href="/stats">← 全局统计</a>'
              '<a class="btn" href="/">← 回索引</a></div>')
-    return page("筛选与排序", [("索引", "/"), ("筛选与排序", "")], body, sub=sub)
+    topbar_keep = [("what", what), ("sort", sort)] + [(k, v) for k, v in filt.items() if k != "src"]
+    return page("筛选与排序", [("索引", "/"), ("筛选与排序", "")], body, sub=sub,
+                topbar=plat_switch(STORE.sessions(), src, "/rank", keep=topbar_keep))
 
 
 def v_api_doc(q):
@@ -4713,7 +4776,7 @@ def v_api_doc(q):
              '<code>scripts/selftest.py</code> 共用同一份 <code>ROUTE_SPEC</code> 声明；'
              '新增端点只需在声明里加一行。</div>')
     return page("API 文档", [("索引", "/"), ("API", "")], body,
-                sub="零 JavaScript 的前端，本身就建立在这套按需查询之上")
+                sub="只读 JSON 接口 · 供脚本与数据分析工具调用")
 
 
 # ---------------------------------------------------------------- JSON API
@@ -4734,8 +4797,8 @@ def paged(data, total, offset, limit, base, q):
 # ------------------------------------------------ 分析宽表（给外部程序取数用）
 ANALYTICS_FIELDS = (
     "sid", "seq", "ts", "date", "model", "tool",
-    "pin", "hit", "miss", "pout", "credit", "rate", "turn", "ws",
-    "is_sub", "root",
+    "pin", "hit", "miss", "pout", "credit", "cost", "rate", "turn", "ws",
+    "src", "is_sub", "root",
 )
 ANALYTICS_MAX_LIMIT = 500     # 与 API_MAX_LIMIT 对齐，避免一次序列化过大
 
@@ -4810,51 +4873,57 @@ def analytics_calls(q):
     mf = G.canon_model(qstr(q, "model").strip())
     wf = qstr(q, "ws").strip().lower()
     tf = qstr(q, "tool").strip().lower()
+    src_f = qstr(q, "src").strip()
     sid_f = qstr(q, "sid").strip()          # 精确匹配单个会话 id
     refresh = qstr(q, "refresh") == "1"
 
     # refresh=1 会同时失效会话全文缓存（见 Store.sessions），让宽表与
     # /api/sessions 看到同一份最新 jsonl；分页链接不再携带它，避免每页重扫。
-    sessions = STORE.sessions(refresh=refresh)
-    total, rows = 0, []
-    for s in sessions:
-        if sid_f and s["id"] != sid_f:
-            continue
-        if not _session_may_hit(s, lo, hi):
-            continue
-        ws = s.get("ws") or ""
-        if wf and wf not in ws.lower():
-            continue
-        d = STORE.get(s["id"])
-        for c in d["calls"]:
-            ts = c.get("ts") or 0
-            try:
-                tsf = float(ts)
-            except (TypeError, ValueError):
-                tsf = 0.0
-            if (lo is not None and tsf < lo) or (hi is not None and tsf > hi):
+    with CALC_LOCK:
+        sessions = STORE.sessions(refresh=refresh)
+        total, rows = 0, []
+        for s in sessions:
+            if src_f and (s.get("src") or "workbuddy") != src_f:
                 continue
-            model = display_model(c.get("model"))
-            if mf and G.canon_model(model) != mf:
+            if sid_f and s["id"] != sid_f:
                 continue
-            tool = c.get("tool") or ""
-            if tf and tf not in tool.lower():
+            if not _session_may_hit(s, lo, hi):
                 continue
-            if off <= total < off + lim:
-                pin = c.get("pin") or 0
-                hit = c.get("hit") or 0
-                full = {
-                    "sid": s["id"], "seq": c.get("seq"), "ts": ts,
-                    "date": fmt_ts(ts, "%Y-%m-%d", ""), "model": model,
-                    "tool": tool, "pin": pin, "hit": hit, "miss": pin - hit,
-                    "pout": c.get("pout") or 0, "credit": c.get("credit") or 0,
-                    "rate": (hit / pin) if pin else None,
-                    "turn": c.get("turn", 0), "ws": ws,
-                    "is_sub": bool(s.get("is_sub")),
-                    "root": s.get("root") or "",
-                }
-                rows.append(dict((k, full[k]) for k in cols))
-            total += 1
+            ws = s.get("ws") or ""
+            if wf and wf not in ws.lower():
+                continue
+            d = STORE.get(s["id"])
+            for c in d["calls"]:
+                ts = c.get("ts") or 0
+                try:
+                    tsf = float(ts)
+                except (TypeError, ValueError):
+                    tsf = 0.0
+                if (lo is not None and tsf < lo) or (hi is not None and tsf > hi):
+                    continue
+                model = display_model(c.get("model"))
+                if mf and G.canon_model(model) != mf:
+                    continue
+                tool = c.get("tool") or ""
+                if tf and tf not in tool.lower():
+                    continue
+                if off <= total < off + lim:
+                    pin = c.get("pin") or 0
+                    hit = c.get("hit") or 0
+                    full = {
+                        "sid": s["id"], "seq": c.get("seq"), "ts": ts,
+                        "date": fmt_ts(ts, "%Y-%m-%d", ""), "model": model,
+                        "tool": tool, "pin": pin, "hit": hit, "miss": pin - hit,
+                        "pout": c.get("pout") or 0, "credit": c.get("credit") or 0,
+                        "cost": round(call_cost(c), 4),
+                        "rate": (hit / pin) if pin else None,
+                        "turn": c.get("turn", 0), "ws": ws,
+                        "src": s.get("src") or "workbuddy",
+                        "is_sub": bool(s.get("is_sub")),
+                        "root": s.get("root") or "",
+                    }
+                    rows.append(dict((k, full[k]) for k in cols))
+                total += 1
 
     q_next = dict((k, v) for k, v in q.items() if k != "refresh")
     resp = paged(rows, total, off, lim, "/api/analytics/calls", q_next)
@@ -4865,6 +4934,7 @@ def analytics_calls(q):
                          "indexed_at": round(STORE._index_at, 3),
                          "source_mtime_max": round(latest, 3),
                          "data_as_of": fmt_ts(latest * 1000, "%Y-%m-%d %H:%M:%S", ""),
+                         "row_count": len(rows),
                          "refreshed": refresh})
     return resp, 200
 
@@ -5191,7 +5261,7 @@ HTML_ROUTES = [(r["pattern"], r["view"]) for r in ROUTE_SPEC if r["kind"] == "ht
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "TokenTrace/1.0"
+    server_version = "TokenTrace/" + APP_VERSION
     protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *args):
@@ -5278,6 +5348,17 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authorized():
             self._reply(401, "application/json; charset=utf-8",
                         b'{"ok":false,"error":"unauthorized"}')
+            return
+        if getattr(self, "_set_cookie", False) and "token" in q and not path.startswith(("/api/", "/health")):
+            clean_q = {k: v for k, v in q.items() if k != "token"}
+            clean_qs = ("?" + urlencode(clean_q, doseq=True)) if clean_q else ""
+            clean_loc = path + clean_qs
+            self.send_response(303)
+            self.send_header("Location", clean_loc)
+            self.send_header("Set-Cookie",
+                             "trace_token=%s; Path=/; HttpOnly; SameSite=Strict" % TOKEN)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
             return
         try:
             if path == "/update-toggle":

@@ -32,17 +32,42 @@ try:                                  # 作为包导入（gen_trace / trace_serv
 except ImportError:                   # 直接运行本文件自测
     from _zstd import decompress as _zdec
 
+try:
+    from core.text import est_tokens as _est
+except ImportError:
+    try:
+        from ..core.text import est_tokens as _est
+    except ImportError:
+        import sys
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from core.text import est_tokens as _est
+
+_CODEX_SYS_TAGS = (
+    "environment_context",
+    "user_instructions",
+    "permissions_instructions",
+    "collaboration_mode",
+    "skills_instructions",
+    "context",
+    "file",
+    "files",
+    "recommended_plugins",
+)
+_CODEX_TAG_RE = re.compile(
+    r"^<\s*(?:" + "|".join(_CODEX_SYS_TAGS) + r")(?:\s|>)", re.I)
+
 CODEX_HOME = os.environ.get("CODEX_HOME", os.path.expanduser("~/.codex"))
 
 
 def _ms(v):
-    """ISO8601 → 毫秒。gen_trace._ms() 只吃数字，这里必须自己转。"""
+    """ISO8601 → 毫秒。"""
     if isinstance(v, (int, float)):
-        return int(v)
+        return int(v) if v > 1e11 else int(v * 1000)
     try:
         return int(datetime.datetime.fromisoformat(
             str(v).replace("Z", "+00:00")).timestamp() * 1000)
     except Exception:
+        return 0
         return 0
 
 
@@ -143,7 +168,7 @@ def parse(path, keep_ctx=True):
                 k = {"user": "user", "assistant": "assistant"}.get(role, "injected")
                 # Codex 把 environment_context / recommended_plugins 也塞成
                 # role=user 的 message，块分类和标题都必须把它们排除掉
-                if k == "user" and re.match(r"^<[a-z_][a-z0-9_]*>", _text(pl).lstrip()):
+                if k == "user" and _CODEX_TAG_RE.match(_text(pl).lstrip()):
                     k = "injected"
             if k:
                 txt = _text(pl) if pt == "message" else (
@@ -152,11 +177,11 @@ def parse(path, keep_ctx=True):
                     txt = pl.get("output") or ""
                 if not isinstance(txt, str):
                     txt = json.dumps(txt, ensure_ascii=False)
-                kind_label = {"user": ("你的输入", "user"),
-                              "assistant": ("助手的回答", "assistant"),
-                              "tool_call": ("调用 %s 的参数" % (pl.get("name") or ""), ""),
-                              "tool_result": ("工具结果 · %s" % (pl.get("name") or ""), ""),
-                              "injected": ("注入内容", "")}[k]
+                kind_label = {"user": ("用户输入", "user"),
+                              "assistant": ("助手回复", "assistant"),
+                              "tool_call": ("工具参数 · %s" % (pl.get("name") or ""), ""),
+                              "tool_result": ("工具返回 · %s" % (pl.get("name") or ""), ""),
+                              "injected": ("系统提示", "")}[k]
                 txt = str(txt)
                 if keep_ctx:
                     ctx.append({"k": k, "l": kind_label[0], "n": len(txt), "t": txt,
@@ -232,20 +257,13 @@ def _title(ctx, cwd):
         if b["k"] != "user" or not txt:
             continue
         # 注入的环境/插件/文件清单也走 role=user 的 message，标题要跳过它们
-        if txt.startswith("<") and ">" in txt[:80]:
+        if _CODEX_TAG_RE.match(txt):
             continue
         if txt.startswith(_INJ_HEAD):
             continue
         first = " ".join(txt.split())
         return first[:40] + ("…" if len(first) > 40 else "")
     return os.path.basename((cwd or "").rstrip("/")) or "(无标题)"
-
-
-def _est(s):
-    """与 gen_trace.est_tokens 同口径：CJK 1 字 ≈ 1 token，其余 4 字符 ≈ 1 token。"""
-    import re
-    cjk = len(re.findall(r"[\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff]", s or ""))
-    return cjk + (len(s or "") - cjk + 3) // 4
 
 
 def _merge_calls(parts):

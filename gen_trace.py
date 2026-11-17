@@ -17,62 +17,19 @@ from pathlib import Path
 
 import pricing      # 刊例价估算：会话级成本按各模型输入占比分摊 hit/pout
 
+try:
+    from core.text import _ms, est_tokens, day_key, _CJK_RE
+except ImportError:
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from core.text import _ms, est_tokens, day_key, _CJK_RE
+
 SR = re.compile(r"<system-reminder[^>]*>(.*?)</system-reminder>", re.S)
 MAX_TEXT = 3000      # 块字典里存的上限（全文）
 PREVIEW = 600        # 调用内部就地展开时的预览长度
 INLINE_BLOCKS = 3    # 每次调用就地展开几块，其余跳到字典
 MAX_CALLS = 150      # 单页最多渲染多少次调用，超出只留最近这些
-CHIP = {"hit": "命中", "miss": "未命中", "part": "跨边界", "none": "上下文"}
-
-
-def _ms(v):
-    """timestamp 归一成毫秒数值：int / float / 字符串 / None 都接受，非正值记 0。
-
-    jsonl 是外部数据，timestamp 偶尔会被写成字符串；下游要做减法（子代理关系）、
-    取最大值（工具聚合的最后使用时间），类型不统一就会在渲染时炸成 500。
-    """
-    try:
-        x = float(v)
-    except (TypeError, ValueError):
-        return 0
-    if not (x > 0):
-        return 0
-    return int(x) if x == int(x) else x
-
-
-_CJK_RE = re.compile(
-    r"[\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff\U00010000-\U0010ffff]")
-
-
-def est_tokens(s):
-    """粗略估算原文 token 数：CJK 按 1 字 ≈ 1 token，其余按 4 字符 ≈ 1 token。
-
-    只用于展示与排序，页面统一带 ``≈`` 标注，**不冒充官方 tokenizer**（见 README
-    已知限制）。在 push() 时算一次存进块对象，避免长块在每次渲染时重复扫全文。
-    """
-    cjk = sum(1 for _ in _CJK_RE.finditer(s))
-    other = len(s) - cjk
-    return cjk + (other + 3) // 4
-
-
-def day_key(v):
-    """把一条 jsonl 记录的 timestamp 换成本地日期 YYYY-MM-DD，无效值返回空串。
-
-    首页「按时间」折线和「会话活动日历」要按**每次调用实际发生日**分桶，
-    而不是把整个会话塞进 mtime（文件最后修改日）那一天——长会话常跨多天。
-    口径与 trace_server.fmt_ts 一致：毫秒 / 秒都接受，范围校验挡住 Windows
-    CRT 对越界 localtime 抛 OSError(Errno 22)、Linux 给出荒谬年份。
-    """
-    try:
-        n = float(v)
-        if not (0 < n < 1e14):
-            return ""
-        sec = n / 1000.0 if n > 1e11 else n
-        if not (0 < sec < 32503680000):
-            return ""
-        return time.strftime("%Y-%m-%d", time.localtime(sec))
-    except (OSError, ValueError, OverflowError, TypeError):
-        return ""
+CHIP = {"hit": "已命中", "miss": "未命中", "part": "部分命中", "none": "无计费"}
 
 
 def trim(ctx, calls, turns, limit=MAX_CALLS):
@@ -471,11 +428,11 @@ def block(b, state):
     """就地展开的块 —— 预览版，正文截到 PREVIEW，完整内容在页尾字典里"""
     t = b["t"]
     if len(t) > PREVIEW:
-        t = t[:PREVIEW] + f"\n…（预览只显示前 {PREVIEW} 字，完整内容见页尾上下文块字典）"
+        t = t[:PREVIEW] + f"\n…（仅预览前 {PREVIEW} 字，完整内容见文末字典）"
     return (f'<details class="blk {state} {b["k"]}">'
             f'<summary><span class="hd1"><span class="chip {state}">{CHIP[state]}</span>'
             f'<b>{html.escape(b["l"])}</b><span class="sz">{b["n"]:,} 字</span>'
-            f'<span class="hint2">点开看原文</span></span>{cmd_html(b, 180)}</summary>'
+            f'<span class="hint2">展开原文</span></span>{cmd_html(b, 180)}</summary>'
             f'<pre>{html.escape(t)}</pre></details>')
 
 
@@ -511,7 +468,7 @@ def body_html(ctx, c):
     lo = c.get("vf", 0)
     blocks = ctx[lo:c["ctxN"]]
     if not blocks:
-        return '<p class="none">这次调用之前没有可见上下文（首轮的系统提示不在 jsonl 里，只体现在 token 计数中）。</p>'
+        return '<p class="none">无历史消息块（首轮系统提示词未写入对话日志，已计入输入 Token）。</p>'
     total = sum(b["n"] for b in blocks)
     ratio = (c["hit"] / c["pin"]) if c["pin"] else None
 
@@ -523,7 +480,7 @@ def body_html(ctx, c):
     else:
         parts.append(f'<p class="tot">本次带上 {len(blocks)} 块 / {total:,} 字 · '
                      f'缓存命中 {ratio:.1%} · 接口报输入 {c["pin"]:,} token'
-                     f'<br><span class="fine">token 含系统提示与工具定义，字数只是可见部分，两者不可直接换算</span></p>')
+                     f'<br><span class="fine">输入 Token 含系统提示与工具定义，与正文字符数非 1:1 对应。</span></p>')
         cut = total * ratio
 
     if lo:
@@ -555,9 +512,8 @@ def body_html(ctx, c):
             miss_rows.append(block(b, state) if miss_n < INLINE_BLOCKS else block_head(b, state, idx))
             miss_n += 1
     if miss_n > INLINE_BLOCKS:
-        miss_rows.append(f'<p class="agg">未命中共 {miss_n} 块，前 {INLINE_BLOCKS} 块就地展开，'
-                         f'其余 {miss_n - INLINE_BLOCKS} 块点标题跳到页尾「上下文块字典」看全文'
-                         f'（同一块在多次调用里会重复出现，字典里只存一份）</p>')
+        miss_rows.append(f'<p class="agg">未命中共 {miss_n} 块（已展开前 {INLINE_BLOCKS} 块，'
+                         f'其余请点击标题跳转至文末字典查看）。</p>')
     if not split_done:
         hit_rows.append(f'<p class="agg good">全部 {hit_n} 块 / {hit_sz:,} 字都命中缓存</p>')
 
@@ -585,8 +541,8 @@ def render(ctx, calls, meta, turns, src, back="", trimmed=0):
     total_sz = sum(sz.values()) or 1
     palette = {"tool_result": "#888780", "injected": "#EF9F27", "user": "#378ADD",
                "tool_call": "#B4B2A9", "assistant": "#1D9E75"}
-    names = {"tool_result": "工具结果", "injected": "系统注入", "user": "你的输入",
-             "tool_call": "工具调用", "assistant": "助手回答"}
+    names = {"tool_result": "工具返回", "injected": "系统提示", "user": "用户输入",
+             "tool_call": "工具参数", "assistant": "助手回复"}
     order = ["tool_result", "injected", "user", "tool_call", "assistant"]
     compose = "".join(f'<i style="width:{sz[k]/total_sz*100:.2f}%;background:{palette[k]}"></i>'
                       for k in order if sz[k])
@@ -641,7 +597,7 @@ def render(ctx, calls, meta, turns, src, back="", trimmed=0):
   </summary>
   <div class="tbody">
     <p class="tmeta">这一轮分 {t['n']} 次调用完成 · 输入 {pin:,} token（命中 {hit:,}，{rr:.0%}）· 输出 {pout:,} token · <b>积分 {cred:.2f}</b>
-    {f'<br><span class="coldnote">首次调用只命中 {first["hit"]/first["pin"]:.0%} —— 多半是重启或换会话后缓存失效，这一次按全价计费 {first["credit"]:.2f} 分</span>' if cold else ''}
+    {f'<br><span class="coldnote">首调缓存命中率 {first["hit"]/first["pin"]:.0%}（可能因会话切换或缓存过期触发全量重算，消耗 {first["credit"]:.2f} 积分）</span>' if cold else ''}
     {f'<br><span class="fine">含系统注入 {t["inj"]:,} 字</span>' if t.get("inj") else ''}</p>
     {''.join(call_html(c) for c in cs)}
   </div>
@@ -658,6 +614,7 @@ def render(ctx, calls, meta, turns, src, back="", trimmed=0):
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Token 轨迹 · {html.escape(title)}</title>
 <style>
 *{{box-sizing:border-box}}
@@ -779,19 +736,16 @@ h2.dicth{{font-size:15px;font-weight:500;margin:34px 0 4px;padding-top:18px;bord
   {f'<div><b>{tcredit:.1f}</b><span>累计积分（{tcredit/max(1,len(billed)):.3f}/次）</span></div>' if tcredit else ''}
 </div>
 
-<h4 class="sec">进入上下文的文本构成 <small>按字符数，反映谁在占你的上下文</small></h4>
+<h4 class="sec">上下文字符构成 <small>按原始字符数统计</small></h4>
 <div class="compose">{compose}</div>
 <div class="legend">{legend}</div>
 
 <div class="note">
-点任意一条调用 → 展开<b>这次请求实际带上的完整上下文</b>，命中缓存的块折叠成一行汇总，
-未命中的块逐条列出，中间那条黄线就是缓存边界。<br>
-再点任意一个块 → 展开该块原文。命中边界按字数比例估算，块级准确、块内会有误差。<br>
+点击调用展开上下文明细，黄线以上为缓存命中区，以下为未命中区；点击具体块可查看原文（缓存边界按字符占比估算）。<br>
 每条末尾的「x.xx 分」是接口回传的 <code>credit</code> 逐次累加；本机实测单价约 0.014 积分/万 token（已含缓存折扣），
 <b>积分差异基本等于用量差异</b>，不是单价变了。
 </div>
 
-<div class="flow">全部纯 HTML 折叠，不需要脚本。</div>
 {''.join(rounds_html)}
 
 <h2 class="dicth" id="dict">上下文块字典 <a href="#top" style="font-size:11px;color:#B4B2A9;font-weight:400;text-decoration:none">↑ 顶部</a></h2>
@@ -993,6 +947,7 @@ def scan_all(force=False):
     best = dict((k, max(v, key=v.get)) for k, v in all_labels.items() if v)
     out = []
     seen = {}
+    idx_by_sid = {}
     for s in stats:
         sid, f = s["id"], s["path"]
         if sid in seen:
@@ -1000,7 +955,7 @@ def scan_all(force=False):
                   file=sys.stderr)
         seen[sid] = f
         info = meta.get(sid, {})
-        out.append({
+        entry = {
             "path": f, "id": sid,
             "ws": info.get("cwd") or s.get("ws") or
                   os.path.basename(os.path.dirname(f)).replace("-", "/"),
@@ -1021,7 +976,12 @@ def scan_all(force=False):
             "hit": s["hit"], "miss": s["miss"], "rate": s["rate"],
             "skipped": s["skipped"],
             "meta_ok": meta_ok,
-        })
+        }
+        if sid in idx_by_sid:
+            out[idx_by_sid[sid]] = entry
+        else:
+            idx_by_sid[sid] = len(out)
+            out.append(entry)
     # 全库统一展示名：同一底层模型在所有会话、首页构成环、会话列表里都只
     # 出现一次，且统一用得票最多的官方写法。不同分组键若展示名相同（老数据
     # 缺 model 时按显示名分组），在这里自然合并。
@@ -1076,6 +1036,7 @@ def render_index(sessions):
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Token 轨迹索引</title>
 <style>
 *{{box-sizing:border-box}}

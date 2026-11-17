@@ -21,6 +21,16 @@ import os
 import sqlite3
 import time
 
+try:
+    from core.text import _ms, est_tokens as _est, day_key
+except ImportError:
+    try:
+        from ..core.text import _ms, est_tokens as _est, day_key
+    except ImportError:
+        import sys
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from core.text import _ms, est_tokens as _est, day_key
+
 ZCODE_HOME = os.environ.get("ZCODE_HOME", os.path.expanduser("~/.zcode"))
 
 
@@ -35,17 +45,8 @@ def connect(home=None):
     return con
 
 
-def _ms(v):
-    try:
-        return int(float(v))
-    except (TypeError, ValueError):
-        return 0
-
-
 def _day(ms):
-    if not (0 < ms < 1e14):
-        return ""
-    return time.strftime("%Y-%m-%d", time.localtime(ms / 1000.0))
+    return day_key(ms)
 
 
 def _tool_name(tools):
@@ -103,7 +104,8 @@ def blocks(con, sid):
       where p.session_id = ?
       order by m.time_created, p.time_created, p.rowid
     """, (sid,))
-    ctx, msg_role, last_tool = [], {}, {}
+    ctx, msg_role = [], {}
+    last_ts = 0
     for r in rows:
         try:
             p = json.loads(r["pdata"])
@@ -116,12 +118,17 @@ def blocks(con, sid):
                 msg_role[r["message_id"]] = "assistant"
         role = msg_role[r["message_id"]]
         t = p.get("type")
-        ts = _ms(r["time_created"])
+        raw_ts = _ms(r["time_created"]) or _ms(r["mts"])
+        if raw_ts > 0:
+            ts = raw_ts
+            last_ts = raw_ts
+        else:
+            ts = last_ts
         if t == "text":
             txt = p.get("text") or ""
             if txt:
                 ctx.append({"k": "user" if role == "user" else "assistant",
-                            "l": "你的输入" if role == "user" else "助手的回答",
+                            "l": "用户输入" if role == "user" else "助手回复",
                             "n": len(txt), "t": txt, "c": "", "ts": ts,
                             "e": _est(txt), "src": "zcode"})
         elif t == "tool":
@@ -130,13 +137,12 @@ def blocks(con, sid):
             inp = st.get("input") or {}
             args = json.dumps(inp, ensure_ascii=False, indent=1)
             cmd = inp.get("command") or inp.get("file_path") or ""
-            ctx.append({"k": "tool_call", "l": "调用 %s 的参数" % name, "n": len(args),
+            ctx.append({"k": "tool_call", "l": "工具参数 · %s" % name, "n": len(args),
                         "t": args, "c": str(cmd)[:120], "ts": ts, "e": _est(args),
                         "src": "zcode"})
             out = st.get("output") or ""
             if out:
-                last_tool[p.get("callID") or r["id"]] = str(cmd)[:120]
-                ctx.append({"k": "tool_result", "l": "工具结果 · %s" % name,
+                ctx.append({"k": "tool_result", "l": "工具返回 · %s" % name,
                             "n": len(out), "t": out, "c": str(cmd)[:120], "ts": ts,
                             "e": _est(out), "src": "zcode"})
         elif t == "file":
@@ -144,13 +150,6 @@ def blocks(con, sid):
             ctx.append({"k": "injected", "l": "附件 · %s" % fn, "n": len(fn), "t": fn,
                         "c": "", "ts": ts, "e": _est(fn), "src": "zcode"})
     return ctx
-
-
-def _est(s):
-    """与 gen_trace.est_tokens 同口径：CJK 1 字 ≈ 1 token，其余 4 字符 ≈ 1 token。"""
-    import re
-    cjk = len(re.findall(r"[\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff]", s or ""))
-    return cjk + (len(s or "") - cjk + 3) // 4
 
 
 def system_prompts(modelio_files, limit=None):
@@ -201,7 +200,7 @@ def build(con, sid):
     j = 0
     for c in cs:
         ts = c["ts"]
-        while j < len(ctx) and (ctx[j]["ts"] or 0) <= ts:
+        while j < len(ctx) and 0 < (ctx[j]["ts"] or 0) <= ts:
             j += 1
         c["ctxN"] = j
     row = con.execute("select title from session where id = ?", (sid,)).fetchone()

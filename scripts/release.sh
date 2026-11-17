@@ -19,6 +19,16 @@ SUMS="$ROOT/dist/SHA256SUMS"
 
 [ -f "$DEB" ] || { echo "找不到 $DEB，先运行 ./scripts/build_deb.sh $VERSION"; exit 1; }
 
+# 校验文档版本号同步
+if ! grep -q "$VERSION" "$ROOT/README.md"; then
+    echo "README.md 缺少当前版本号 $VERSION，请先同步文档"
+    exit 1
+fi
+if ! grep -q "$VERSION" "$ROOT/docs/API.md"; then
+    echo "docs/API.md 缺少当前版本号 $VERSION，请先同步文档"
+    exit 1
+fi
+
 # 确认 tag 已在远端，否则 GitHub 会悄悄用默认分支 HEAD 造一个不受控的 tag
 if ! git -C "$ROOT" ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
     echo "远端缺少 tag v$VERSION，请先打 tag 并推送："

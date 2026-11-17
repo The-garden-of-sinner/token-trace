@@ -45,6 +45,7 @@ VERSION_FILE = os.path.join(BASE, "scripts", "VERSION")
 # 相对仓库根的路径；key 同时作为 bundle 里的模块键，loader 按
 # fullname.replace(".", "/") 查 "xxx.py" / "xxx/__init__.py"。
 SOURCES = ("trace_server.py", "gen_trace.py", "pricing.py",
+           "core/__init__.py", "core/text.py",
            "sources/__init__.py", "sources/bridge.py",
            "sources/codex.py", "sources/zcode.py", "sources/dsh.py",
            "sources/_zstd.py", "sources/antigravity.py")
@@ -92,16 +93,17 @@ echo   ---------------------------------------------------------
 echo(
 
 rem Already running? Just open the browser, never start a second process.
-%PYEXE% %PYARGS% -c "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:%PORT%/health',timeout=1).read().strip()==b'ok' else 1)" >nul 2>&1
+%PYEXE% %PYARGS% -c "import urllib.request,os,sys;tk=os.environ.get('TRACE_TOKEN','');req=urllib.request.Request('http://127.0.0.1:%PORT%/health');tk and req.add_header('Authorization','Bearer '+tk);sys.exit(0 if urllib.request.urlopen(req,timeout=1).read().strip()==b'ok' else 1)" >nul 2>&1
 if not errorlevel 1 goto open
 
 call :extract
 if errorlevel 1 exit /b 1
 
-start "Token Trace" /MIN %PYEXE% %PYARGS% "%APPDIR%\launcher.py" --port %PORT%
+if defined TRACE_TOKEN (set "TOKEN_ARG=--token %TRACE_TOKEN%") else (set "TOKEN_ARG=")
+start "Token Trace" /MIN %PYEXE% %PYARGS% "%APPDIR%\launcher.py" --port %PORT% %TOKEN_ARG%
 set /a TRIES=0
 :wait
-%PYEXE% %PYARGS% -c "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:%PORT%/health',timeout=1).read().strip()==b'ok' else 1)" >nul 2>&1
+%PYEXE% %PYARGS% -c "import urllib.request,os,sys;tk=os.environ.get('TRACE_TOKEN','');req=urllib.request.Request('http://127.0.0.1:%PORT%/health');tk and req.add_header('Authorization','Bearer '+tk);sys.exit(0 if urllib.request.urlopen(req,timeout=1).read().strip()==b'ok' else 1)" >nul 2>&1
 if not errorlevel 1 goto open
 set /a TRIES+=1
 if %TRIES% GEQ 20 goto failwait
@@ -113,17 +115,19 @@ echo Service did not become ready on port %PORT%. Try "status" or check the mini
 exit /b 1
 
 :open
-start "" "%URL%/"
-echo   Ready: %URL%/
+set "OPEN_URL=%URL%/"
+if defined TRACE_TOKEN set "OPEN_URL=%URL%/?token=%TRACE_TOKEN%"
+start "" "%OPEN_URL%"
+echo   Ready: %OPEN_URL%
 exit /b 0
 
 :stop
-%PYEXE% %PYARGS% -c "import urllib.request;urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:%PORT%/shutdown',data=b'',method='POST'),timeout=3).read()" >nul 2>&1
+%PYEXE% %PYARGS% -c "import urllib.request,os;tk=os.environ.get('TRACE_TOKEN','');req=urllib.request.Request('http://127.0.0.1:%PORT%/shutdown',data=b'',method='POST');tk and req.add_header('Authorization','Bearer '+tk);urllib.request.urlopen(req,timeout=3).read()" >nul 2>&1
 if errorlevel 1 (echo Not running on port %PORT%.) else (echo Stopped.)
 exit /b 0
 
 :status
-%PYEXE% %PYARGS% -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:%PORT%/api/health',timeout=2).read().decode())"
+%PYEXE% %PYARGS% -c "import urllib.request,os;tk=os.environ.get('TRACE_TOKEN','');req=urllib.request.Request('http://127.0.0.1:%PORT%/api/health',timeout=2);tk and req.add_header('Authorization','Bearer '+tk);print(urllib.request.urlopen(req).read().decode())"
 if errorlevel 1 echo Not running on port %PORT%.
 exit /b 0
 
