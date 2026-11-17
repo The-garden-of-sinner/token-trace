@@ -496,9 +496,10 @@ def main():
                   and quiet.index('class="updbox"') < quiet.index('class="hdrow"')
                   and 'class="hdrow"' in quiet,
                   "更新控件独占页眉右上角（面包屑行），与平台切换分行")
-            check('href="%s"' % T.RELEASES_URL in quiet
+            check('href="/check"' in quiet
+                  and 'target="_blank"' in quiet
                   and ">版本检查 ↗</a>" in quiet,
-                  "「版本检查 ↗」直连仓库 releases，不经后端")
+                  "「版本检查 ↗」新窗口主动比对版本，有新版本才跳转 release")
             css = T._squeeze_css(T.CSS)
             check("calc(100% - 20px)" in T._squeeze_css(".box { width: calc(100% - 20px); }")
                   and "calc(100% + 20px)" in T._squeeze_css(".box { width: calc(100% + 20px); }"),
@@ -549,7 +550,7 @@ def main():
                   and '<a href="/stats">全局统计</a>' not in quiet
                   and '<a href="/rank">筛选与排序</a>' not in quiet
                   and 'href="/api">API</a>' not in quiet
-                  and 'href="/check"' not in quiet
+                  and 'href="/check"' not in quiet[quiet.index("<footer>"):]
                   and "· 检查更新" not in quiet
                   and "© 大晋帝国之谶" in quiet
                   and T.ZHIHU_URL in quiet and T.GITHUB_URL in quiet
@@ -562,6 +563,10 @@ def main():
                   and "releases/tag/v9.9.9" in upd
                   and ("当前 v%s" % T.APP_VERSION) in upd,
                   "查到更新时出一条提示，带当前版本与 release 链接")
+            check('class="upd-ver upd-new"' in upd
+                  and "releases/tag/v9.9.9" in upd
+                  and ">新版本 v9.9.9 ↗</a>" in upd,
+                  "发现新版本时版本检查按钮展示新版本直达链接")
             check("<script" not in upd, "更新提示不引入任何脚本")
             T.UPDATE.update(latest=T.APP_VERSION)
             check(not T.update_newer()
@@ -1240,6 +1245,9 @@ def main():
               and (hv.get("update") or {}).get("auto") is False,
               "/api/health 暴露版本号与自动检查开关（v%s / %s，--no-update-check 生效）"
               % (hv.get("version"), (hv.get("update") or {}).get("state")))
+        st_chk, b_chk = get("/check")
+        check(st_chk == 200 and "版本检查已被禁用" in b_chk.decode("utf-8", "ignore"),
+              "/check 在 --no-update-check 禁用下返回说明页而不是直接跳转 release")
     finally:
         try:
             get("/shutdown", timeout=3, method="POST")

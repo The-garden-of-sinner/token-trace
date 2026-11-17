@@ -152,14 +152,14 @@ def update_newer():
     return bool(cur and latest and latest > cur)
 
 
-def check_update(timeout=5.0):
+def check_update(timeout=5.0, force=False):
     """查一次 GitHub 最新 release，结果只写内存。
 
-    这是本项目**唯一**的主动外联：只在启动时跑一次，之后仅当用户点「检查
-    更新」才重试；`TRACE_NO_UPDATE_CHECK=1` 或 `--no-update-check` 可整个关掉。
+    这是本项目**唯一**的主动外联：只在启动时跑一次，之后仅当用户手动点「版本检查」
+    或开启自动更新时才查；`TRACE_NO_UPDATE_CHECK=1` 或 `--no-update-check` 可整个关掉。
     任何失败都静默（state=error），绝不让网络问题影响页面加载或启动速度。
     """
-    if UPDATE_OFF or not UPDATE.get("auto", False):
+    if UPDATE_OFF or (not force and not UPDATE.get("auto", False)):
         return False
     with UPDATE_LOCK:
         UPDATE["state"] = "checking"
@@ -252,9 +252,13 @@ def update_tools():
     # 一道淡分隔划开「自动 / 手动」即可；当前版本是状态说明，不再加第二道线，
     # 否则三段两线把一枚小胶囊切得太碎。
     sep = '<i class="upd-sep" aria-hidden="true"></i>'
-    ver = ('<a class="upd-ver" href="%s" '
-           'title="打开仓库发布页，手动查看最新版本与安装包">版本检查 ↗</a>'
-           % esc(RELEASES_URL))
+    if update_newer():
+        ver = ('<a class="upd-ver upd-new" href="%s" target="_blank" rel="noopener" '
+               'title="发现新版本 v%s，点击前往发布页查看更新说明与安装包">新版本 v%s ↗</a>'
+               % (esc(UPDATE.get("url") or RELEASES_URL), esc(UPDATE.get("latest")), esc(UPDATE.get("latest"))))
+    else:
+        ver = ('<a class="upd-ver" href="/check" target="_blank" rel="noopener" '
+               'title="主动比对版本：发现新版本时在新窗口打开 Release 界面">版本检查 ↗</a>')
     cur = ('<span class="upd-cur" title="当前运行的版本">当前版本 '
            '<code>v%s</code></span>' % esc(APP_VERSION))
     return ('<div class="updbox">%s%s%s%s%s</div>'
@@ -1173,21 +1177,22 @@ a{color:var(--link);text-decoration-color:var(--rule);text-underline-offset:3px}
 a:hover{color:var(--link-h)}
 .wrap{max-width:1120px;margin:0 auto;padding:0 26px}
 header{background:var(--panel);border-bottom:1px solid var(--line);padding:16px 0 13px;margin-bottom:20px}
-.crumb{font-size:11.5px;color:var(--faint);margin-bottom:5px}
+header .wrap{display:grid;grid-template-columns:1fr auto;column-gap:24px;align-items:start}
+.hd-top{display:contents}
+.hdrow{display:contents}
+.crumb{grid-column:1;grid-row:1;font-size:11.5px;color:var(--faint);margin:0 0 2px;line-height:1.35}
 .crumb a{color:var(--link);text-decoration:none;text-underline-offset:3px}
 .crumb a:hover{color:var(--link-h);text-decoration:underline;text-decoration-color:var(--rule)}
 .crumb .sep{color:var(--dim);margin:0 6px}
-h1{font-size:19px;font-weight:500;margin:0 0 3px}
-/* 标题与小字同一行：小字靠右，省掉一行高度；窄屏自动折回标题下方 */
-.hdrow{display:flex;align-items:baseline;gap:16px;flex-wrap:wrap}
+h1{grid-column:1;grid-row:2;font-size:19px;font-weight:500;margin:0;line-height:1.35}
 .hdrow h1{margin:0}
-.sub{color:var(--muted);font-size:12px;margin-left:auto;text-align:right;max-width:62%}
+.sub{grid-column:1;grid-row:3;color:var(--muted);font-size:12px;margin:3px 0 0 0;text-align:left;max-width:none}
 @media(max-width:720px){.sub{margin-left:0;text-align:left;max-width:none}}
 /* 首页：平台切换与大标题同栏。这里自带一份分段控件样式，不依赖 CSS_INDEX
    片段是否加载；其余页面不渲染 .platbar，不受影响。 */
-.sub.sub-wide{margin-left:0;text-align:left;max-width:none;margin-top:5px}
-/* 平台切换整体下移一截：标题与它之间留出呼吸空间，不再挤在同一条基线上 */
-.platbar{display:inline-flex;align-items:center;gap:8px;margin:12px 0 0 auto;flex-wrap:wrap}
+.sub.sub-wide{margin-left:0;text-align:left;max-width:none;margin-top:3px}
+/* 平台切换整体下移：留出充足呼吸空间，不再紧贴上方更新控件 */
+.platbar{grid-column:2;grid-row:3;justify-self:end;align-self:start;display:inline-flex;align-items:center;gap:8px;margin:10px 0 0 auto;flex-wrap:wrap}
 .platbar .tb-lab{font-size:10.5px;letter-spacing:.06em;color:var(--faint)}
 .platbar .tb-seg{display:inline-flex;background:var(--track);border-radius:999px;padding:2px;
  flex-wrap:wrap;justify-content:flex-end}
@@ -1207,17 +1212,19 @@ h1{font-size:19px;font-weight:500;margin:0 0 3px}
 }
 /* 本机没有该平台的会话：不可点，靠 title 说明原因（无 X 会话记录） */
 .platbar .tb-seg .off{color:var(--faint);opacity:.55;cursor:not-allowed;user-select:none}
-@media(max-width:720px){.platbar{margin-left:0}}
-/* 页眉顶行：面包屑在左、更新控件在最右上角；平台切换单独留在标题行右侧，
-   两行分开才有区分度。窄屏折行后控件自然落到面包屑下方。 */
-.hd-top{display:flex;align-items:center;justify-content:space-between;
- gap:14px;flex-wrap:wrap}
+@media(max-width:720px){
+ header .wrap{display:flex;flex-direction:column;gap:8px}
+ .hd-top{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+ .hdrow{display:flex;flex-direction:column;gap:8px}
+ .platbar{margin:4px 0 0 0}
+ .crumb{margin-bottom:0}
+}
 /* 更新控件做成一枚独立的胶囊：字号比面包屑大、淡底 + 细边框 + 轻阴影，
-   和周围的纯文字板块拉开层次。内部统一成一种中灰，靠字重/底色区分层级，
-   不再出现「框里套框 + 两道竖线 + 三种灰」的拼装感。 */
+   和周围的纯文字板块拉开层次。内部统一成一种中灰，靠字重/底色区分层级。 */
 .updbox{display:inline-flex;align-items:center;gap:10px;font-size:12px;
  padding:5px 12px;border:1px solid var(--upd-bd);border-radius:10px;
- background:var(--upd-bg);box-shadow:var(--shadow);color:var(--muted)}
+ background:var(--upd-bg);box-shadow:var(--shadow);color:var(--muted);
+ grid-column:2;grid-row:1 / span 2;justify-self:end;align-self:start}
 .sw{display:inline-flex;align-items:center;gap:7px;color:var(--muted);
  text-decoration:none;white-space:nowrap}
 .sw:hover{color:var(--accent)}
@@ -1239,6 +1246,7 @@ h1{font-size:19px;font-weight:500;margin:0 0 3px}
  transition:background-color .2s var(--ease),color .2s var(--ease),
  border-color .2s var(--ease)}
 .upd-ver:hover{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+.upd-ver.upd-new{background:var(--accent);color:var(--bg);border-color:var(--accent);font-weight:600}
 /* 当前版本只是版本区的状态说明，用最轻的一档，不跟药丸抢视线 */
 .upd-cur{color:var(--faint);font-variant-numeric:tabular-nums;white-space:nowrap}
 /* 确认层：:target 显隐，遮罩与「取消」都是 href="#" 清掉 fragment 即收起，零脚本。
@@ -3029,7 +3037,7 @@ def block_treemap(d, sid, limit=24, kind=None):
             'aria-label="上下文块地图，面积与字数成正比">%s</svg>'
             '<div class="map-cap"><div class="legend">%s</div>'
             '<span>· 面积 ∝ 字数，颜色 = 类型，深浅 = 相对大小</span>'
-            '<span>· 最大的 %d 块占归档原文 %.1f%%；点块看不截断全文</span></div>' %
+            '<span>· 最大的 %d 块占归档原文 %.1f%%；点击块查看原文明细</span></div>' %
             ("".join(body), legend, len(picked), covered / total_arch * 100))
 
 
@@ -3396,7 +3404,7 @@ def v_index(q):
     # 元数据降级提示放在列表之后：它不影响会话列表本身，不该抢占首屏
     body += meta_warn
     return page("会话索引", [("索引", "")], body,
-                sub="%d 个会话 · 点任一会话进入全量轨迹（不裁调用、不裁文本）" % total_shown,
+                sub="%d 个会话 · 点击会话进入完整调用轨迹" % total_shown,
                 need=("index",), topbar=plat,
                 boot_note="正在整理 %d 个会话 · %s 次模型调用" %
                           (len(ss), nfmt(total_calls)))
@@ -3433,7 +3441,7 @@ def v_session(q, sid):
                  '已跳过；本页统计与上下文不含这些行。刷新页面可重试。</div>' % st["skipped_lines"])
     body += ('<div class="note">这个会话的 %s 次调用、%s 个上下文块、%s 字原文<b>全部可查</b>：'
              '按轮 / 按调用翻页，点任意一次调用看它当时带上的完整块列表，'
-             '再点任意一块看<b>不截断</b>的全文（超长块自动分片）。</div>' %
+             '可点击任意块查看原文明细（超长块自动分片展示）。</div>' %
              (nfmt(st["calls"]), nfmt(st["blocks"]), nfmt(st["chars"])))
     biggest = max((b["n"] for b in d["ctx"]), default=0)
     hint = ("含 %.1f 万字的长块" % (biggest / 1e4)) if biggest >= 1e4 else "含长块"
@@ -3552,7 +3560,7 @@ def v_turn(q, sid, turn):
         body += call_row(d, d["calls"][i], sid, show_turn=False)
     body += pager("/s/%s/t/%d" % (sid, turn), q, p, PAGE_CALLS, len(idxs), "次调用")
     return page(label + " · " + d["title"][:28], crumbs, body,
-                sub="点任意一次调用 → 看它当时带上的完整上下文")
+                sub="点击调用查看当次完整上下文")
 
 
 def v_call(q, sid, seq):
@@ -3584,7 +3592,7 @@ def v_call(q, sid, seq):
     body += ('<div class="note">工具 <b>%s</b> · 模型 %s · %s<br>'
              '下面列出这次请求<b>实际带上的全部 %s 个块</b>，每行徽章标注命中 / 未命中 / 跨边界，'
              '颜色只作辅助。<b>连续命中块默认折叠成一行「#a–#b 块缓存命中」，'
-             '点一下再逐块展开</b>；点任意一行看该块不截断的全文。</div>' %
+             '点一下再逐块展开</b>；点击任意行可查看对应块的完整内容。</div>' %
              (esc(c["tool"] or "最终回答"), esc(c["model"]),
               fmt_ts(c["ts"]),
               nfmt(o["n"])))
@@ -3725,7 +3733,7 @@ def v_block(q, sid, idx):
            '<a class="btn %s" href="/s/%s/b/%d">下一块 →</a>' %
            ("off" if idx >= len(d["ctx"]) - 1 else "", esc(sid), idx + 1) + '</div>')
     return page("块 #%d · %s" % (idx, b["l"]), crumbs, body + nav,
-                sub="完整原文（分片显示）· %s 字" % nfmt(b["n"]))
+                sub="原文明细 · 共 %s 字" % nfmt(b["n"]))
 
 
 def v_output(q, sid, seq):
@@ -3802,9 +3810,9 @@ def v_search(q, sid=None):
                      (esc(h["href"]), esc(h["kind"]), esc(h["label"]),
                       nfmt(h["chars"]), nfmt(h["pos"]), esc(h["ws"]), sn))
     else:
-        body += '<div class="note">输入关键词搜索；结果里的每一条都能点进去看不截断的全文。</div>'
+        body += '<div class="note">输入关键词检索；点击结果项可查看对应原文明细。</div>'
     return page("全文搜索", crumbs, body,
-                sub="服务端逐行扫描全库原文，不建索引、不落盘",
+                sub="全库原文实时逐行检索",
                 topbar="" if sid else plat_switch(STORE.sessions(), src, "/search"))
 
 
@@ -3830,7 +3838,7 @@ def v_find(q, sid=None):
                       extra=hidden)
     body += ('<div class="note">按<b>块</b>聚合：一个块只列一行，给出块内命中总数与它们落在'
              '哪些 %s 字分片。点片号直接跳到该片并高亮，超长块不用手翻几十页。'
-             '与<a href="%s">全文搜索</a>共用同一份原文，不建索引、不落盘。</div>' %
+             '与<a href="%s">全文搜索</a>共用同一数据源。</div>' %
              (nfmt(PART_CHARS), esc("/s/%s/search" % sid if sid else "/search")))
     ref_qs = {}
     if term:
@@ -3869,7 +3877,7 @@ def v_find(q, sid=None):
         body += pager(base, q, p, FIND_MAX_BLOCKS, total, "个块")
     else:
         body += '<div class="note">输入至少 2 个字开始检索。</div>'
-    return page("块检索", crumbs, body, sub="按块聚合 · 命中分片直跳 · 零脚本",
+    return page("块检索", crumbs, body, sub="按块聚合 · 命中分片快速跳转",
                 topbar="" if sid else plat_switch(STORE.sessions(), src, "/find", keep=[("q", term)] if term else []))
 
 
@@ -3993,7 +4001,7 @@ def v_map(q, sid):
                 ("本页铺砖", "%d 块" % limit)])
     body += tabs
     body += ('<div class="viz"><div class="viz-hd"><b>上下文块地图</b>'
-             '<small>面积 ∝ 原文字符数 · 点块看不截断全文</small></div>' +
+             '<small>面积 ∝ 原文字符数 · 点击查看块详情</small></div>' +
              block_treemap(d, sid, limit, kind or None) + '</div>')
     body += ('<div class="note"><b>口径与边界</b>：面积是块的原文字符数，不是官方 token 归因；'
              '本图按「归档全文」口径统计，<b>不等于某次请求真正带上的上下文</b>。'
@@ -4005,7 +4013,7 @@ def v_map(q, sid):
     body += ('<div class="tabs"><a class="btn" href="/s/%s">← 会话概览</a>'
              '<a class="btn" href="/s/%s/trend">上下文趋势</a></div>' % (esc(sid), esc(sid)))
     return page("上下文块地图", crumbs, body,
-                sub="按需渲染 · 零脚本钻取 · 字数为原文统计")
+                sub="上下文块构成与分布图 · 字数为原文统计")
 
 
 def v_trend(q, sid):
@@ -4038,15 +4046,11 @@ def v_trend(q, sid):
                  ("最大可见字", nfmt(mx)),
                  ("最大单步变化", nfmt(mxd)),
                  ("冷启动断点", nfmt(len(d["cold"])))])
-    body += ('<div class="note">每根柱是一次%s的<b>可见上下文</b>（≈ 字数为原文统计，'
-             '不含系统提示与工具 schema，非官方 tokenizer）。'
-             '累计模式把 %d 类内容压成<b>一条色带</b>，净变化模式墨青为增长、红色为回落；'
-             '高度按本页最大值归一化（翻页时刻度随本页数据重标定，跨页比高低请看左侧刻度），'
-             '左侧为刻度、背景横线为 25%% 网格。'
-             '细折线是缓存命中率（顶 = 100%%）。悬停看数值，点柱或表格行直达该次调用的完整块清单。'
-             '顶部 ● 标记命中率骤降的冷启动调用，✂ 标记上下文压缩：'
-             '那一柱可见字数会断崖下降，是历史被摘要替换，不是缓存失效。</div>' %
-             ("模型调用" if g == "call" else "轮（取该轮最后一次调用）", len(ORDER)))
+    body += ('<div class="note">每根柱表示一次%s的<b>可见上下文</b>（字数按原文统计）。'
+             '累计模式展示各类内容组成，净变化模式显示字数增减；'
+             '细折线表示缓存命中率。悬停可看数值，点击柱状图直达对应调用的块清单；'
+             '顶部 ● 标记冷启动调用，✂ 标记上下文压缩。</div>' %
+             ("模型调用" if g == "call" else "轮（取该轮末次调用）"))
     body += '<div class="legend">' + "".join(
         '<span><b style="background:%s"></b>%s</span>' % (PALETTE[k], esc(TYPES[k]))
         for k in ORDER) + '<span><b style="background:var(--fg);opacity:.45"></b>命中率折线</span></div>'
@@ -4106,7 +4110,7 @@ def v_trend(q, sid):
         body += row + '</a>'
     body += pager(base, q, p, PAGE_CALLS, len(rows),
                   "次调用" if g == "call" else "轮")
-    return page("上下文趋势", crumbs, body, sub="逐调用演化 · 累计组成 / 净变化 · 零脚本")
+    return page("上下文趋势", crumbs, body, sub="逐调用演化 · 累计组成与净变化")
 
 
 def v_compact(q, sid):
@@ -4122,13 +4126,10 @@ def v_compact(q, sid):
                 ("已退役历史", nfmt(st["retired_chars"]) + " 字"),
                 ("真实累计输入", nfmt(st["pin"]) + " token")] +
                ([("真实累计积分", "%.2f" % st["credit"])] if st["credit"] > 0 else []))
-    body += ('<div class="note"><b>怎么核对</b>：WorkBuddy 压缩会把历史替换成一条摘要，'
-             '真实 <code>rawUsage.prompt_tokens</code> 应骤降。'
-             '<b>修正前</b>我们把压缩前的旧块继续累加，可见字数反而上涨；'
-             '<b>修正后</b>按 <code>[vf, ctxN)</code> 只算摘要之后的内容，'
-             '应与真实输入<b>同方向下降</b>。'
-             '「真实账单」三列是接口原值，未经任何估算；'
-             '点「调用」可看该次请求实际带上的块清单。</div>')
+    body += ('<div class="note"><b>指标说明</b>：上下文压缩将历史内容替换为摘要块，'
+             '使得后续调用的实际输入 token 回落。'
+             '此处展示压缩前后可见字数与实际账单的变化对照；'
+             '点击对应调用可查看当次实际携带的块清单。</div>')
     if not rows:
         body += '<p class="none">这个会话没有发生过上下文压缩，所有可见区间都是 [0, ctxN)。</p>'
         return page("压缩事件", crumbs, body, sub="%s · 未发生压缩" % d["title"][:30])
@@ -4211,13 +4212,11 @@ def v_stats(q):
     # 两张卡片内容都偏窄，各占整行时右边大片留白；并排成左右两栏（窄屏回落单列）。
     body += ('<div class="viz2">' + compose_bar(st["compose"]) +
              activity_heatmap(ss) + '</div>')
-    body += ('<div class="note">上面每个数字都是<b>全量</b>算出来的（%d ms，遍历 %d 个会话全文），'
-             '不是抽样、不是截断后的静态页统计。<b>归档原文</b>是全部块的总字数，'
-             '包含已被压缩替换、但保留下来供全文检索的历史；'
-             '<b>可见峰值合计</b>是各会话单次请求真实带上量的峰值之和。'
-             '发生压缩的会话，后者会明显小于前者%s。</div>' %
+    body += ('<div class="note"><b>统计说明</b>：耗时 %d ms，覆盖 %d 个会话。'
+             '<b>归档原文</b>为全量上下文块字符数汇总（包含保留供检索的历史块）；'
+             '<b>可见峰值合计</b>为各会话单次请求可见上下文峰值之和%s。</div>' %
              (ms, st["sessions"],
-              ('，<a href="/s/%s/compact">可在压缩事件页逐条核对</a>' % esc(compact_sid))
+              ('，<a href="/s/%s/compact">可在压缩事件页查看明细</a>' % esc(compact_sid))
               if compact_sid else ''))
     body += '<h2>最贵的 20 次调用 <small>按刊例价估算 · 非账单</small></h2>'
     for x in st["top_calls"]:
@@ -4639,14 +4638,10 @@ def v_rank(q):
                     ("被携带合计", nfmt(uses)),
                     ("当前排序", {"token": "块 token", "count": "被携带次数",
                                  "product": "token × 次数"}[sort])])
-        body += ('<div class="note">每一行就是一个<b>上下文块本身</b>，不是按会话 / '
-                 '日期聚合出来的桶。<b>块 token</b> 是这块原文的估算量（<b>≈ 估算</b>，'
-                 '非官方 tokenizer、非真实账单）；<b>被携带</b> 是它被后续请求带进上下文的'
-                 '次数；<b>乘积</b> = 块 token × 被携带次数，也就是「成本最高的块」的口径。'
-                 '「种类」可<b>多选组合</b>（在下拉里逐项点选 / 取消），「时间」按块'
-                 '<b>写入</b>的本地日期闭区间筛选，两者可任意叠加。'
-                 '默认已排除「压缩摘要」块（上下文压缩产生的历史摘要，单块几十万字，'
-                 '会把按 token 排行的前几名全占掉），需要时点筛选栏的开关纳入。</div>')
+        body += ('<div class="note"><b>统计说明</b>：展示各上下文块的独立明细。'
+                 '<b>块 token</b> 为原文估算量；<b>被携带</b>为被后续请求带入上下文的次数；'
+                 '<b>乘积</b> = 块 token × 被携带次数。支持按种类与写入时间筛选；'
+                 '默认已过滤上下文压缩摘要块，可通过开关纳入。</div>')
         body += ('<div class="tabs"><b>对象</b>%s</div>' %
                  tabs((("block", "上下文块"), ("call", "调用")), what, tab_obj))
         body += ('<div class="tabs"><b>排序</b>%s</div>' %
@@ -4680,8 +4675,7 @@ def v_rank(q):
                           kh(est), nfmt(u), kh(est * u),
                           rank_metric(what, sort, r) / mx * 100))
             body += pager("/rank", pager_q, p, size, len(rows), "块")
-        sub = ("逐块排行 · 每行一个上下文块 · 支持种类 / 时间筛选 · "
-               "按 token / 被携带次数 / 乘积排序 · 零脚本")
+        sub = "逐块排行 · 支持按种类与时间筛选 · 按 token、被携带次数或乘积排序"
     else:
         total = sum(r[2]["pin"] + r[2]["pout"] for r in rows)
         tin = sum(r[2]["pin"] for r in rows)
@@ -4691,12 +4685,9 @@ def v_rank(q):
                     ("输入 / 输出", "%s / %s" % (kh(tin), kh(tout))),
                     ("当前排序", {"token": "合计 token", "in": "输入 token",
                                  "out": "输出 token"}[sort])])
-        body += ('<div class="note">每一行就是<b>一次调用本身</b>。token 取自接口 '
-                 '<code>rawUsage</code> 的真实用量，不做估算；<b>输入 + 输出 = 合计</b>。'
-                 '一次调用只有一个「次数」，所以没有次数 / 乘积排序，改为在合计 / 输入 / '
-                 '输出三个 token 口径间切换。「模型」与「时间」可任意组合，时间按调用'
-                 '<b>发生</b>的本地日期闭区间筛选。'
-                 '</div>')
+        body += ('<div class="note"><b>统计说明</b>：展示各次模型调用的用量明细。'
+                 'token 取自接口原始用量（输入 + 输出 = 合计）。'
+                 '支持按模型与调用时间筛选，可在合计、输入、输出三个排序口径间切换。</div>')
         body += ('<div class="tabs"><b>对象</b>%s</div>' %
                  tabs((("block", "上下文块"), ("call", "调用")), what, tab_obj))
         body += ('<div class="tabs"><b>排序</b>%s</div>' %
@@ -4728,8 +4719,7 @@ def v_rank(q):
                           nfmt(c["pin"]), nfmt(c["pout"]), nfmt(c["pin"] + c["pout"]),
                           rank_metric(what, sort, r) / mx * 100))
             body += pager("/rank", pager_q, p, size, len(rows), "次")
-        sub = ("逐调用排行 · 每行一次调用 · 支持模型 / 时间筛选 · "
-               "按合计 / 输入 / 输出 token 排序 · 零脚本")
+        sub = "逐调用排行 · 支持按模型与时间筛选 · 按合计、输入或输出 token 排序"
 
     body += ('<div class="tabs"><a class="btn" href="/stats">← 全局统计</a>'
              '<a class="btn" href="/">← 回索引</a></div>')
@@ -5380,13 +5370,32 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             if path == "/check":
-                # 手动重查：跑一次（最多 5 秒）后跳回来源页，不需要中间页或脚本。
-                # 只回跳本机同源地址，Referer 不当开放重定向用。
-                check_update()
-                self.send_response(303)
-                self.send_header("Location", self._safe_referer() or "/")
-                self.send_header("Content-Length", "0")
-                self.end_headers()
+                # 手动检查更新：主动联网比对版本
+                # 若发现新版本，在新窗口中 303 重定向到新版本 release 页面；
+                # 若无新版本或检查受阻，在新窗口中渲染比对结果页面。
+                if not UPDATE_OFF:
+                    check_update(force=True)
+                if update_newer():
+                    self.send_response(303)
+                    self.send_header("Location", UPDATE.get("url") or RELEASES_URL)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                crumbs = [("索引", "/"), ("版本检查", "")]
+                if UPDATE_OFF:
+                    msg = '服务已通过 <code>--no-update-check</code> 启动，版本检查已被禁用。当前运行版本为 <b>v%s</b>。' % esc(APP_VERSION)
+                elif UPDATE.get("state") == "error":
+                    msg = '版本检查暂时无法连接到 GitHub（%s），当前运行版本为 <b>v%s</b>。<div style="margin-top:12px"><a class="btn" href="/check">重新检查</a></div>' % (
+                        esc(UPDATE.get("error", "网络连接异常")), esc(APP_VERSION))
+                else:
+                    msg = '已完成版本比对：当前运行版本 <b>v%s</b> 已是最新版本，无需更新。' % esc(APP_VERSION)
+                body = ('<div class="note" style="margin-top:20px">%s</div>'
+                        '<div class="tabs" style="margin-top:16px">'
+                        '<a class="btn" href="/">返回首页</a>'
+                        '<a class="btn" href="%s" target="_blank" rel="noopener">全部 Releases ↗</a>'
+                        '</div>' % (msg, esc(RELEASES_URL)))
+                html_doc = page("版本检查", crumbs, body)
+                self._reply(200, "text/html; charset=utf-8", html_doc.encode("utf-8"))
                 return
             if path == "/favicon.ico":
                 self.send_response(204)
