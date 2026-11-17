@@ -8,6 +8,7 @@
 - 本地日期字符串转换：闭区间校验防 Windows CRT 越界抛错。
 """
 
+import datetime
 import re
 import time
 
@@ -19,12 +20,20 @@ def _ms(v):
     """timestamp 归一成毫秒数值：int / float / 字符串 / None 都接受，非正值记 0。
 
     外部日志与数据库中时间戳可能为秒（如 17...）或毫秒（17...000），字符串或浮点数。
+    Codex rollout 等来源直接用 ISO8601 字符串（如 2026-10-25T13:03:11.364Z），
+    这里一并解析，避免各源各写一份局部 _ms 造成口径漂移。
     下游做相减、聚合与最大值计算时需保证类型一致。
     """
     try:
         x = float(v)
     except (TypeError, ValueError):
-        return 0
+        # 非纯数字字符串：按 ISO8601 解析（Codex rollout 用 2026-10-25T13:03:11.364Z）。
+        # 必须放在 float 失败之后——ISO 字符串也以数字开头，不能靠前缀判断。
+        try:
+            return int(datetime.datetime.fromisoformat(
+                str(v).strip().replace("Z", "+00:00")).timestamp() * 1000)
+        except Exception:
+            return 0
     if not (x > 0):
         return 0
     if 0 < x < 1e11:     # 秒级时间戳转为毫秒

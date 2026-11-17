@@ -34,6 +34,10 @@ install -m 644 "$ROOT/scripts/VERSION" "$STAGE/usr/share/$PKG/VERSION"
 # import bridge），漏装会让 deb 里的服务在第一个请求前就 ImportError。
 mkdir -p "$STAGE/usr/share/$PKG/sources"
 install -m 644 "$ROOT/sources/"*.py "$STAGE/usr/share/$PKG/sources/"
+# v2.0.0.2-exp：core/ 也是运行期硬依赖（from core.text import _ms / est_tokens /
+# day_key），漏装会让 deb 里的服务在解析第一条会话时 ModuleNotFoundError。
+mkdir -p "$STAGE/usr/share/$PKG/core"
+install -m 644 "$ROOT/core/"*.py "$STAGE/usr/share/$PKG/core/"
 # 应用菜单图标：desktop 里写图标名 token-trace，由 hicolor 主题解析
 install -m 644 "$ROOT/assets/token-trace.png" \
          "$STAGE/usr/share/icons/hicolor/256x256/apps/token-trace.png"

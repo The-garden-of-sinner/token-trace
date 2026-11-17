@@ -89,8 +89,9 @@ curl -s "http://127.0.0.1:8765/api/analytics/calls?limit=3" | python3 -m json.to
 | `ws` | 不限 | 工作区路径**大小写不敏感子串**匹配 |
 | `tool` | 不限 | 工具名**大小写不敏感子串**匹配 |
 | `sid` | 不限 | 会话 id **精确匹配**，只取一个会话（与 `ws` 的子串语义不同）；不存在时返回空 `data` |
+| `src` | 不限 | 数据来源平台**精确匹配**：`workbuddy` / `zcode` / `codex` / `dsh` / `antigravity`；为空表示全部平台 |
 | `refresh` | `0` | `1` 强制重扫源 jsonl 并失效会话全文缓存，同时在 `meta` 给出数据新鲜度；`next` 不携带它，翻页复用已刷新的缓存 |
-| `fields` | 全部 16 列 | 逗号分隔的列投影；非法列名返回 **400**（不静默忽略） |
+| `fields` | 全部 18 列 | 逗号分隔的列投影；非法列名返回 **400**（不静默忽略） |
 | `offset` / `limit` | `0` / `200` | `limit` 上限 **500**，超出自动夹到 500 |
 
 非法 `from` / `to`、`from > to`、非法 `fields` 都返回 400 + 错误信封。
@@ -142,10 +143,12 @@ curl -s "http://127.0.0.1:8765/api/analytics/calls?limit=3" | python3 -m json.to
 | `hit` | int | token | 缓存命中 token |
 | `miss` | int | token | `pin - hit`，未命中 |
 | `pout` | int | token | 输出 token |
-| `credit` | float | 积分 | 本次调用计费 |
+| `credit` | float | 积分 | 本次调用计费（WorkBuddy 平台口径） |
+| `cost` | float | 元 | 按外部平台刊例价**估算**的成本；WorkBuddy 会话为 `0`（其账单以积分为准，两套账并列） |
 | `rate` | float \| null | 0–1 | `hit / pin`；`pin=0` 时为 **`null`** |
 | `turn` | int | — | 所属轮次 |
 | `ws` | str | — | 工作区路径（每行冗余，宽表自包含，便于直接 group by） |
+| `src` | str | — | 数据来源平台：`workbuddy` / `zcode` / `codex` / `dsh` / `antigravity` |
 | `is_sub` | bool | — | 是否子代理会话（`agent-*` 或带 `isSubAgent` 标记） |
 | `root` | str | — | 父会话的 `rootRequestId`；主会话为 `""` |
 

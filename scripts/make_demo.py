@@ -27,6 +27,12 @@ T0 = int(BASE.timestamp() * 1000)
 
 MODEL = "deepseek-v4.1-flash"          # 平台公开的模型 ID
 MODEL_NAME = "DeepSeek V4.1 Flash"
+# 同一底层模型的展示名写法变体：真库里随客户端版本出现过这三种，演示数据也要
+# 覆盖，才能验证 call_brief / model_display_map 把它们收敛成同一个展示名。
+MODEL_NAME_VARIANTS = (
+    "DeepSeek V4.1 Flash", "DeepSeek-V4.1-Flash",
+    "Deepseek-V4.1-Flash", "deepseek-v4.1-flash",
+)
 CWD = "/home/linwei/work/order-service"
 PROJ_DIR = "home-linwei-work-order-service"
 R = random.Random(20260302)
@@ -631,6 +637,7 @@ SIDE = [
                         "三个用例都过了，包括 50 并发抢同一个 key 只扣款一次。"),
                   ]),
              dict(q="如果 Redis 挂了怎么办，别把下单整个堵死",
+                  gap_ms=26 * 3600_000,   # 这一轮跨到次日，制造跨自然日会话
                   calls=[
                       C("Grep", {"pattern": "redis|fallback|degrade", "path": "internal/"},
                         "internal/cache/redis.go:31:    if err != nil { return err }\n"
@@ -679,7 +686,10 @@ def usage(n):
 
 def prov(n, final=False):
     u, nxt = usage(n)
-    return ({"model": MODEL, "requestModelId": MODEL, "requestModelName": MODEL_NAME,
+    # 2/3 用标准展示名、1/3 轮换写法变体：真库同一 deepseek-v4.1-flash 就有
+    # 这几种写法，用于验证 call_brief / model_display_map 收敛到同一个展示名。
+    name = MODEL_NAME if n % 3 else MODEL_NAME_VARIANTS[1 + (n // 3) % 3]
+    return ({"model": MODEL, "requestModelId": MODEL, "requestModelName": name,
              "agent": "cli", "conversationRequestId": "req-" + hid(12),
              "rawUsage": u}, nxt)
 
@@ -694,11 +704,19 @@ def write_session(s, idx, counter):
     n = counter
     for ti, turn in enumerate(s["turns"], 1):
         ts += 900
+        # 让部分演示会话跨自然日：在指定轮前跳 26 小时（无论本地时区是哪一档，
+        # 都足以落到下一天），这样 scan_all 的 days 会分成两个日期分桶，
+        # 覆盖「按调用真实日期分桶」而不是整段压到 mtime 那一天的场景。
+        ts += turn.get("gap_ms", 0)
         up = {"type": "message", "role": "user", "timestamp": ts,
               "content": [{"type": "text", "text": turn["q"] + turn.get("inj", "")}]}
         if turn.get("compact"):
             up["providerData"] = {"agent": "cli", "isCompacted": True,
                                   "compactType": "auto", "isSummary": True}
+            # 压缩后历史被摘要替换：真实 prompt_tokens 应骤降。把调用计数回拨，
+            # 让 usage(n) 后续的输入 token 明显低于压缩前，与可见字数同方向，
+            # 否则 compact_rows 的 pin_delta 与 chars_new_delta 反号、一致性判假。
+            n = 1
         else:
             up["providerData"] = {"agent": "cli",
                                   "conversationRequestId": "req-" + hid(12)}

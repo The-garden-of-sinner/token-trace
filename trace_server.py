@@ -3791,8 +3791,16 @@ def v_search(q, sid=None):
     if warn:
         body += '<div class="warn">%s</div>' % esc(warn)
     if term:
+        # 按平台检索时只报实际参与扫描的会话数，不报全库总数，否则 src 筛选
+        # 形同虚设：结果只有 codex，文案却说「扫描全部 N 个会话」。
+        if sid:
+            scan_label = "这个会话"
+        elif src:
+            scan_label = "平台 %s 的 %d 个会话" % (esc(src), len(_pick_src(src)))
+        else:
+            scan_label = "全部 %d 个会话" % len(STORE.sessions())
         body += '<h2>命中 %d 条 <small>扫描 %s · %d ms</small></h2>' % (
-            len(hits), "这个会话" if sid else "全部 %d 个会话" % len(STORE.sessions()), ms)
+            len(hits), scan_label, ms)
         rx = re.compile(re.escape(term), re.I)
         for h in hits:
             raw = h["snippet"]

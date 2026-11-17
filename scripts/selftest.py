@@ -49,12 +49,28 @@ def get(path, timeout=120, method="GET"):
 
 def main():
     demo_dir = None
-    if not T.STORE.sessions():
+    # 是否需要合成数据：只看 WorkBuddy 主源有没有 jsonl。不要在这里调
+    # STORE.sessions()——它会连带触发外部源 import，把开发机上真实的
+    # codex / antigravity 日志读进来，导致演示库被真实会话污染。
+    import glob as _glob
+    _wb = T.G.data_dir()
+    has_wb = bool(_glob.glob(os.path.join(str(_wb), "projects", "*", "*.jsonl")))
+    if not has_wb:
         import tempfile
+        import atexit
         demo_dir = tempfile.mkdtemp(prefix="tt-selftest-demo-")
+        # 双保险：正常路径在末尾 finally 清理；若在此之前抛异常，交给 atexit。
+        atexit.register(lambda d=demo_dir: __import__("shutil").rmtree(d, ignore_errors=True))
         subprocess.run([sys.executable, "-B", os.path.join(ROOT, "scripts", "make_demo.py"), demo_dir],
                        check=True, timeout=60)
         os.environ["WORKBUDDY_HOME"] = demo_dir
+        # 外部源模块在首次 scan 时才把 HOME 固化成模块常量，必须在第一次
+        # STORE.sessions() 之前把它们指向演示目录下的空子目录。变量名以源码为准：
+        # antigravity 读的是 AG_HOME（不是 ANTIGRAVITY_HOME）。
+        for _var in ("CODEX_HOME", "ZCODE_HOME", "DSH_HOME", "AG_HOME"):
+            _empty = os.path.join(demo_dir, "_empty_" + _var.lower())
+            os.makedirs(_empty, exist_ok=True)
+            os.environ[_var] = _empty
         T.STORE.sessions(refresh=True)
 
     print("== 静态一致性 ==")
@@ -281,9 +297,23 @@ def main():
                   "未压缩会话 vf 全为 0（口径完全不变）")
 
         print("== 分页越界一致性 ==")
+        # 越界检索词从样例会话正文里现取，保证真实库与合成演示库都必定命中：
+        # 写死 "token" 时演示数据讲的是 checkout 排查、不含该词，第 1 页即 0 行，
+        # 会把「越界不空表」误判成失败。
+        probe_term = ""
+        for _b in T.STORE.get(sid)["ctx"]:
+            _m = re.search(r"[A-Za-z]{4,}", _b.get("t") or "")
+            if _m:
+                probe_term = _m.group(0)
+                break
+        if not probe_term:   # 纯中文会话退而求其次：取一个双字词，find 下限是 2 字
+            _m = re.search(r"[\u4e00-\u9fff]{2,}", " ".join(
+                (_b.get("t") or "") for _b in T.STORE.get(sid)["ctx"]))
+            probe_term = _m.group(0)[:4] if _m else ""
+        check(bool(probe_term), "从样例会话正文取到越界检索词（%s）" % probe_term)
         paged = ["/s/{sid}?view=calls&p=999", "/s/{sid}/c/1?p=999",
                  "/s/{sid}/t/1?p=999",
-                 "/find?q=token&p=999", "/tools?p=999",
+                 "/find?q=%s&p=999" % probe_term, "/tools?p=999",
                  "/s/{sid}/trend?p=999", "/?p=999"]
         for path in paged:
             st, body = get(path.replace("{sid}", sid))
@@ -1059,10 +1089,11 @@ def main():
         check("写入时间" in hb and "估算 token" in hb and "≈" in hb,
               "块全文页 KPI 显示时间戳与 ≈ 估算 token")
         cb = T.global_stats()["costly_blocks"]
-        check(len(cb) == 20
-              and all(cb[i]["cost"] >= cb[i + 1]["cost"] for i in range(19))
+        # 真实库携带块通常远超 20，演示库不足 20；只要求非空、至多 20、降序且口径自洽。
+        check(0 < len(cb) <= 20
+              and all(cb[i]["cost"] >= cb[i + 1]["cost"] for i in range(len(cb) - 1))
               and all(x["cost"] == x["est"] * x["users"] for x in cb),
-              "最贵的块按「估算 token × 被携带次数」降序（20 条）")
+              "最贵的块按「估算 token × 被携带次数」降序（%d 条）" % len(cb))
 
         print("== 逐块 / 逐调用排行 /rank ==")
         for what in ("block", "call"):

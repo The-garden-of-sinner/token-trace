@@ -20,7 +20,6 @@
   对应这次回答调用的工具；没有则视为最终回答。
 """
 import collections
-import datetime
 import glob
 import json
 import os
@@ -33,14 +32,14 @@ except ImportError:                   # 直接运行本文件自测
     from _zstd import decompress as _zdec
 
 try:
-    from core.text import est_tokens as _est
+    from core.text import est_tokens as _est, _ms
 except ImportError:
     try:
-        from ..core.text import est_tokens as _est
+        from ..core.text import est_tokens as _est, _ms
     except ImportError:
         import sys
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from core.text import est_tokens as _est
+        from core.text import est_tokens as _est, _ms
 
 _CODEX_SYS_TAGS = (
     "environment_context",
@@ -57,18 +56,6 @@ _CODEX_TAG_RE = re.compile(
     r"^<\s*(?:" + "|".join(_CODEX_SYS_TAGS) + r")(?:\s|>)", re.I)
 
 CODEX_HOME = os.environ.get("CODEX_HOME", os.path.expanduser("~/.codex"))
-
-
-def _ms(v):
-    """ISO8601 → 毫秒。"""
-    if isinstance(v, (int, float)):
-        return int(v) if v > 1e11 else int(v * 1000)
-    try:
-        return int(datetime.datetime.fromisoformat(
-            str(v).replace("Z", "+00:00")).timestamp() * 1000)
-    except Exception:
-        return 0
-        return 0
 
 
 def _day(ms):
