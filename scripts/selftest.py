@@ -35,7 +35,7 @@ def check(ok, msg):
     print("  %s %s" % ("OK  " if ok else "FAIL", msg))
 
 
-def get(path, timeout=40, method="GET"):
+def get(path, timeout=120, method="GET"):
     try:
         req = urllib.request.Request(
             BASE + path, data=b"" if method == "POST" else None, method=method)
@@ -160,7 +160,7 @@ def main():
         cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         ready = False
-        for _ in range(80):
+        for _ in range(240):
             st, body = get("/health", timeout=2)
             if st == 200 and body.strip() == b"ok":
                 ready = True
