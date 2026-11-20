@@ -679,15 +679,15 @@ def main():
                       "border-radius:2px}" in css
                   and ">检查更新</a>" in quiet,
                   "胶囊只分两区一线：自动 | 当前版本 + 检查更新，版本号是灰底细边框的 markdown 行内代码小块")
-            check(".upd-ver{display:inline-flex;align-items:center;padding:2px 10px; "
-                  "border:1px solid var(--upd-bd);border-radius:7px;background:var(--track); " in css
+            check(".upd-ver{display:inline-flex;align-items:center;padding:1px 10px; "
+                  "border:1px solid var(--upd-bd);border-radius:6px;background:var(--track); " in css
                   and ".upd-ver:hover{background:var(--accent);color:var(--bg);"
                       "border-color:var(--accent)}" in css
                   and ".updbox{display:inline-flex;align-items:center;gap:10px;font-size:12px; "
-                       "padding:5px 12px;border:1px solid var(--upd-bd);border-radius:10px; " in css
+                       "padding:3px 12px;border:1px solid var(--upd-bd);border-radius:9px; " in css
                   and "--upd-bg:#E8EEE8;--upd-bd:#C9D6CB;" in css
                   and "--upd-bg:#2A3731;--upd-bd:#41524A;" in css,
-                  "检查更新按钮与版本号统一灰底 + 细边框一族，胶囊 10px 圆角 + 莫兰迪双主题底")
+                  "检查更新按钮与版本号统一灰底 + 细边框一族，胶囊压窄（3px 上下 + 9px 圆角）+ 莫兰迪双主题底")
             check('class="foot-brand"' in quiet
                   and '<b>token-trace</b><i>v%s</i>' % T.APP_VERSION in quiet
                   and ".foot-brand{display:inline-flex;align-items:center;gap:9px;"

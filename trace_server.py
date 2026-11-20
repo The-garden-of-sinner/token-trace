@@ -1267,7 +1267,7 @@ h1{grid-column:1;grid-row:2;font-size:19px;font-weight:500;margin:0;line-height:
 /* 更新控件做成一枚独立的胶囊：字号比面包屑大、淡底 + 细边框 + 轻阴影，
    和周围的纯文字板块拉开层次。内部统一成一种中灰，靠字重/底色区分层级。 */
 .updbox{display:inline-flex;align-items:center;gap:10px;font-size:12px;
- padding:5px 12px;border:1px solid var(--upd-bd);border-radius:10px;
+ padding:3px 12px;border:1px solid var(--upd-bd);border-radius:9px;
  background:var(--upd-bg);box-shadow:var(--shadow);color:var(--muted);
  grid-column:2;grid-row:1 / span 2;justify-self:end;align-self:start}
 .sw{display:inline-flex;align-items:center;gap:7px;color:var(--muted);
@@ -1285,8 +1285,8 @@ h1{grid-column:1;grid-row:2;font-size:19px;font-weight:500;margin:0;line-height:
 .upd-sep{width:1px;height:13px;background:var(--upd-bd);display:inline-block;flex:none}
 /* 手动检查是版本区里唯一的可点药丸：跟版本号 code 块统一成「灰底 + 细边框」
    一族（不用白底，免得在灰绿胶囊上跳出来），靠主色字 + hover 填实色表达可点。 */
-.upd-ver{display:inline-flex;align-items:center;padding:2px 10px;
- border:1px solid var(--upd-bd);border-radius:7px;background:var(--track);
+.upd-ver{display:inline-flex;align-items:center;padding:1px 10px;
+ border:1px solid var(--upd-bd);border-radius:6px;background:var(--track);
  color:var(--accent-d);text-decoration:none;white-space:nowrap;
  transition:background-color .2s var(--ease),color .2s var(--ease),
  border-color .2s var(--ease)}
