@@ -612,8 +612,9 @@ def main():
                   "更新控件独占页眉右上角（面包屑行），与平台切换分行")
             check('href="/check"' in quiet
                   and 'target="_blank"' in quiet
-                  and ">版本检查 ↗</a>" in quiet,
-                  "「版本检查 ↗」新窗口主动比对版本，有新版本才跳转 release")
+                  and ">检查更新</a>" in quiet
+                  and "版本检查 ↗" not in quiet,
+                  "「检查更新」无箭头，新窗口主动比对版本，有新版本才跳转 release")
             css = T._squeeze_css(T.CSS)
             check("calc(100% - 20px)" in T._squeeze_css(".box { width: calc(100% - 20px); }")
                   and "calc(100% + 20px)" in T._squeeze_css(".box { width: calc(100% + 20px); }"),
@@ -637,14 +638,15 @@ def main():
                   and ".upd-acts .btn{font-size:12px;padding:6px 16px;" in css,
                   "确认层按钮分层：取消在前，实心主按钮「确定开启」在右")
             check(quiet.count('class="upd-sep"') == 1
-                  and quiet.index('class="upd-sep"') < quiet.index('class="upd-ver"')
+                  and quiet.index('class="upd-sep"') < quiet.index('class="upd-cur"')
+                  and quiet.index('class="upd-cur"') < quiet.index('class="upd-ver"')
                   and 'class="upd-cur" title="当前运行的版本">当前版本 '
                       '<code>v%s</code></span>' % T.APP_VERSION in quiet
                   and ".upd-cur code{background:var(--track);color:var(--accent-d);"
                       "padding:0 4px; border:1px solid var(--upd-bd);"
                       "border-radius:2px}" in css
-                  and ">版本检查 ↗</a>" in quiet,
-                  "胶囊只分两区一线：自动 | 手动检查 + 当前版本，版本号是灰底细边框的 markdown 行内代码小块")
+                  and ">检查更新</a>" in quiet,
+                  "胶囊只分两区一线：自动 | 当前版本 + 检查更新，版本号是灰底细边框的 markdown 行内代码小块")
             check(".upd-ver{display:inline-flex;align-items:center;padding:2px 10px; "
                   "border:1px solid var(--upd-bd);border-radius:7px;background:var(--track); " in css
                   and ".upd-ver:hover{background:var(--accent);color:var(--bg);"

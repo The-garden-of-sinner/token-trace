@@ -217,12 +217,12 @@ def version_link():
 
 
 def update_tools():
-    """标题栏右侧的更新控件：自动检查开关 + 版本检查外链，纯 CSS 零脚本。
+    """标题栏右侧的更新控件：自动检查开关 + 检查更新入口，纯 CSS 零脚本。
 
     - 开启态点一下即关；关闭态点一下弹确认层，确认后才打开。
     - 确认层靠 `#upd-confirm` 的 :target 显隐（不用 dialog.showModal()），
       取消链接指向 `#` 即收起；整个交互不引入任何脚本。
-    - 版本检查是直达仓库 releases 的外链，本机不跑检查、不下载、不安装。
+    - 检查更新走 /check 在新窗口做版本比对，本机不下载、不安装。
     """
     if UPDATE_OFF:
         sw = ('<span class="sw sw-dis" role="switch" aria-checked="false" '
@@ -253,7 +253,7 @@ def update_tools():
         '<a class="btn" href="#">取消</a>'
         '<a class="btn on" href="/update-toggle?on=1">确定开启</a>'
         '</div></div></div>')
-    # 内部只分两区：控制区（自动开关）| 版本区（手动检查 + 当前版本）。
+    # 内部只分两区：控制区（自动开关）| 版本区（当前版本 + 检查更新）。
     # 一道淡分隔划开「自动 / 手动」即可；当前版本是状态说明，不再加第二道线，
     # 否则三段两线把一枚小胶囊切得太碎。
     sep = '<i class="upd-sep" aria-hidden="true"></i>'
@@ -263,11 +263,11 @@ def update_tools():
                % (esc(UPDATE.get("url") or RELEASES_URL), esc(UPDATE.get("latest")), esc(UPDATE.get("latest"))))
     else:
         ver = ('<a class="upd-ver" href="/check" target="_blank" rel="noopener" '
-               'title="主动比对版本：发现新版本时在新窗口打开 Release 界面">版本检查 ↗</a>')
+               'title="主动比对版本：发现新版本时在新窗口打开 Release 界面">检查更新</a>')
     cur = ('<span class="upd-cur" title="当前运行的版本">当前版本 '
            '<code>v%s</code></span>' % esc(APP_VERSION))
     return ('<div class="updbox">%s%s%s%s%s</div>'
-            % (sw, sep, ver, cur, modal))
+            % (sw, sep, cur, ver, modal))
 
 
 def esc(s):
