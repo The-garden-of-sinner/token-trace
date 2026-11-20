@@ -517,6 +517,10 @@ def main():
         names = re.findall(r'<span class="g">(.*?)</span>', ov)
         check(names == ["WorkBuddy", "ZCode", "Codex"],
               "构成环改为按平台拼接三段，不再按跨平台模型聚合（%s）" % names)
+        shuffled = T.index_overview(list(reversed(tri)))
+        names_shuf = re.findall(r'<span class="g">(.*?)</span>', shuffled)
+        check(names_shuf == ["WorkBuddy", "ZCode", "Codex"],
+              "平台环图例按输入 token 降序，与单平台按模型环一致（%s）" % names_shuf)
         pcts = [float(x) for x in re.findall(r"<em>([\d.]+)%</em>", ov)]
         check(len(pcts) == 3 and abs(sum(pcts) - 100) < 0.15
               and abs(pcts[0] - 60) < 0.15,
@@ -525,6 +529,9 @@ def main():
         pctsx = [float(x) for x in re.findall(r"<em>([\d.]+)%</em>", ovx)]
         check("其他" in ovx and len(pctsx) == 4 and abs(sum(pctsx) - 100) < 0.15,
               "未知来源归「其他」，环仍闭合到 100%%（%s）" % pctsx)
+        names_x = re.findall(r'<span class="g">(.*?)</span>', ovx)
+        check(names_x[-1] == "其他",
+              "「其他」固定排在末尾，与单平台环的合并尾部一致（%s）" % names_x)
         ovm = T.index_overview(tri, focus="zcode")
         check("按模型 · 输入 token" in ovm and "近 3 个月" in ovm
               and "按平台 · 输入 token" not in ovm and "ZCode 平台内" in ovm,
@@ -570,6 +577,11 @@ def main():
         check('class="boot"' in boot and 'class="boot"' not in plain
               and '会话解析中' in boot and '正在整理 119 个会话' in boot,
               "启动层只在首页注入，文案带当前视图真实会话数 / 调用数")
+        back_boot = T.page("会话索引", [("索引", "")],
+                           '<div class="ovgrid"></div>', need=("index",),
+                           with_boot=False)
+        check('class="boot"' not in back_boot,
+              "检查更新回跳首页不重播「会话解析中」启动层")
         check('<script' not in boot and '服务端渲染' in boot,
               "启动层零 JS：撤除交给 CSS 文档时间线与绘制节奏，页脚口径不变")
         check('.boot{position:fixed' in T.CSS_INDEX
@@ -1399,13 +1411,16 @@ def main():
         st_chk, hd_chk, _ = get_noredirect(
             "/check", headers={"Referer": BASE + "/stats?x=1"})
         loc_chk = hd_chk.get("Location", "")
-        check(st_chk == 303 and loc_chk == "/stats?x=1#upd-result",
+        check(st_chk == 303 and loc_chk == "/stats?x=1&_upd=1#upd-result",
               "/check 查完 303 回来源页带 #upd-result，不渲染独立结果页（%s %s）"
               % (st_chk, loc_chk))
         st_evil, hd_evil, _ = get_noredirect(
             "/check", headers={"Referer": "https://evil.example/x"})
-        check(st_evil == 303 and hd_evil.get("Location") == "/#upd-result",
+        check(st_evil == 303 and hd_evil.get("Location") == "/?_upd=1#upd-result",
               "外站 Referer 一律回首页，不给开放跳转留口子")
+        st_back, b_back = get("/?_upd=1")
+        check(st_back == 200 and b'class="boot"' not in b_back,
+              "带 _upd=1 回跳的首页跳过首屏加载动画，直接展示检查结果")
     finally:
         try:
             get("/shutdown", timeout=3, method="POST")

@@ -2175,7 +2175,7 @@ def _squeeze_css(css):
 
 
 def page(title, crumbs, body, sub="", extra_head="", need=(), topbar="",
-         boot_note=""):
+         boot_note="", with_boot=True):
     """need 显式声明本页需要的图表样式片段（"viz"/"hm"/"map"/"chart"/
     "fold"/"nav"/"index"），与 body 探测取并集。
 
@@ -2218,7 +2218,7 @@ def page(title, crumbs, body, sub="", extra_head="", need=(), topbar="",
     # 动画到点后的第一次绘制恰是长帧结束后的那一帧，于是「加载完成再切主页」
     # 自然成立。基础态隐藏 + reduced-motion / 打印整层 display:none 双保险。
     boot = ''
-    if is_index:
+    if is_index and with_boot:
         boot = ('<div class="boot" aria-hidden="true"><div class="boot-in">'
                 '<div class="boot-logo"><i></i></div>'
                 '<div class="boot-t">会话解析中</div>'
@@ -2787,6 +2787,9 @@ def _platform_charts(ss, total, raw_total):
         by_src[s.get("src") or "workbuddy"] += s["pin"]
     segs = [(k, name, color, by_src[k])
             for k, name, color in platforms if by_src.get(k)]
+    # 与单平台「按模型」环一致：按输入 token 降序，不让 PLATFORMS 的声明顺序
+    # 把用量小的平台顶到前面。颜色随平台走，不按名次重分配。
+    segs.sort(key=lambda x: -x[3])
     residual = raw_total - sum(v for _, _, _, v in segs)
     if residual > 0:
         segs.append(("other", "其他", "var(--p4)", residual))
@@ -3449,14 +3452,17 @@ def v_index(q):
                  '<div class="in">%s</div></details>' %
                  (esc(name), n_all, money_note, part, kid_note, "".join(cards)))
     if total_shown > PAGE_SESSIONS:
-        body += pager("/", q, pg, PAGE_SESSIONS, total_shown, "个会话")
+        # _upd=1 只是「刚查完更新、别再播首屏 boot」的一次性标记，不进翻页链接
+        page_q = {k: v for k, v in q.items() if k != "_upd"}
+        body += pager("/", page_q, pg, PAGE_SESSIONS, total_shown, "个会话")
     # 元数据降级提示放在列表之后：它不影响会话列表本身，不该抢占首屏
     body += meta_warn
     return page("会话索引", [("索引", "")], body,
                 sub="%d 个会话 · 点击会话进入完整调用轨迹" % total_shown,
                 need=("index",), topbar=plat,
                 boot_note="正在整理 %d 个会话 · %s 次模型调用" %
-                          (len(ss), nfmt(total_calls)))
+                          (len(ss), nfmt(total_calls)),
+                with_boot=not q.get("_upd"))
 
 
 def v_session(q, sid):
@@ -5434,6 +5440,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not UPDATE_OFF:
                     check_update(force=True)
                 back = self._safe_referer() or "/"
+                # _upd=1 让回到的首页跳过首屏 boot：那是「会话解析中」动画，
+                # 不是更新检查的加载态；检查已由 /check 自己完成，不该重播一遍。
+                back += ("&" if "?" in back else "?") + "_upd=1"
                 self.send_response(303)
                 self.send_header("Location", back + "#upd-result")
                 self.send_header("Content-Length", "0")
