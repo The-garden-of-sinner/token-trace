@@ -47,6 +47,22 @@ def get(path, timeout=120, method="GET"):
         return 0, str(e).encode("utf-8", "replace")
 
 
+def get_noredirect(path, timeout=120, headers=None):
+    """不跟随 303，用来核验 /check 的 Location 与状态码。"""
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, hdrs, newurl):
+            return None
+
+    req = urllib.request.Request(BASE + path, headers=headers or {})
+    try:
+        with urllib.request.build_opener(_NoRedirect).open(req, timeout=timeout) as r:
+            return r.status, dict(r.headers), r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, dict(e.headers), e.read()
+    except Exception as e:
+        return 0, {}, str(e).encode("utf-8", "replace")
+
+
 def main():
     demo_dir = None
     # 是否需要合成数据：只看 WorkBuddy 主源有没有 jsonl。不要在这里调
@@ -280,7 +296,7 @@ def main():
             path = r["sample"].replace("{sid}", sid)
             st, body = get(path)
             sc = body.count(b"<script")
-            # 同机工具互链与「版本检查」的 GitHub releases 都是用户主动点的
+            # 同机工具互链与「检查更新」的 GitHub releases 都是用户主动点的
             # 导航链接，不属于「依赖外部资源」；抹掉再扫，避免误判成 CDN。
             scan = body.replace(b"http://127.0.0.1", b"loopback") \
                        .replace(b"http://localhost", b"loopback") \
@@ -610,12 +626,16 @@ def main():
                   and quiet.index('class="updbox"') < quiet.index('class="hdrow"')
                   and 'class="hdrow"' in quiet,
                   "更新控件独占页眉右上角（面包屑行），与平台切换分行")
-            check('href="/check"' in quiet
-                  and 'target="_blank"' in quiet
-                  and ">检查更新</a>" in quiet
-                  and "版本检查 ↗" not in quiet,
-                  "「检查更新」无箭头，新窗口主动比对版本，有新版本才跳转 release")
             css = T._squeeze_css(T.CSS)
+            check('<a class="upd-ver" href="/check" '
+                  'title="主动比对版本：检查后在本页弹出结果浮窗">检查更新</a>' in quiet
+                  and "版本检查 ↗" not in quiet,
+                  "「检查更新」无箭头，同窗口走 /check 检查并弹出结果浮窗")
+            check('id="upd-result"' in quiet
+                  and ".upd-result:target{display:flex}" in css
+                  and "已是最新版本" in quiet
+                  and 'class="upd-scrim" href="#"' in quiet,
+                  "结果浮窗复用 :target 显隐与确认层皮肤，无脚本、可点遮罩关闭")
             check("calc(100% - 20px)" in T._squeeze_css(".box { width: calc(100% - 20px); }")
                   and "calc(100% + 20px)" in T._squeeze_css(".box { width: calc(100% + 20px); }"),
                   "_squeeze_css 保留 calc() 运算符两侧空格")
@@ -655,7 +675,7 @@ def main():
                        "padding:5px 12px;border:1px solid var(--upd-bd);border-radius:10px; " in css
                   and "--upd-bg:#E8EEE8;--upd-bd:#C9D6CB;" in css
                   and "--upd-bg:#2A3731;--upd-bd:#41524A;" in css,
-                  "版本检查按钮与版本号统一灰底 + 细边框一族，胶囊 10px 圆角 + 莫兰迪双主题底")
+                  "检查更新按钮与版本号统一灰底 + 细边框一族，胶囊 10px 圆角 + 莫兰迪双主题底")
             check('class="foot-brand"' in quiet
                   and '<b>token-trace</b><i>v%s</i>' % T.APP_VERSION in quiet
                   and ".foot-brand{display:inline-flex;align-items:center;gap:9px;"
@@ -680,9 +700,10 @@ def main():
                   and ("当前 v%s" % T.APP_VERSION) in upd,
                   "查到更新时出一条提示，带当前版本与 release 链接")
             check('class="upd-ver upd-new"' in upd
-                  and "releases/tag/v9.9.9" in upd
-                  and ">新版本 v9.9.9 ↗</a>" in upd,
-                  "发现新版本时版本检查按钮展示新版本直达链接")
+                  and '<a class="upd-ver upd-new" href="#upd-result"' in upd
+                  and ">有可用更新 v9.9.9</a>" in upd
+                  and ">打开 Release ↗</a>" in upd,
+                  "发现新版本时按钮变成「有可用更新」，点击就地弹结果浮窗")
             check("<script" not in upd, "更新提示不引入任何脚本")
             T.UPDATE.update(latest=T.APP_VERSION)
             check(not T.update_newer()
@@ -690,6 +711,11 @@ def main():
                   "最新版等于当前版时不提示（不制造假更新）")
             T.UPDATE.update(latest="0.1.0", state="ok")
             check(not T.update_newer(), "更旧的 release 不提示（拒绝降级提示）")
+            T.UPDATE.update(state="error", error="URLError: timed out", latest="", url="")
+            err = T.page("索引", [("索引", "")], "<p>x</p>")
+            check("检查未完成" in err and "URLError: timed out" in err
+                  and 'href="/check">重新检查</a>' in err,
+                  "检查失败时浮窗显示原因并给重试入口")
             T.UPDATE.update(auto=False, state="off", latest="", url="")
             off = T.page("索引", [("索引", "")], "<p>x</p>")
             check('href="#upd-confirm"' in off
@@ -697,6 +723,14 @@ def main():
                   "关闭态点开关才走确认层")
             check(not T.check_update() and T.UPDATE["state"] == "off",
                   "关掉后 check_update 直接返回，不产生任何网络请求")
+            was_off = T.UPDATE_OFF
+            try:
+                T.UPDATE_OFF = True
+                dis = T.page("索引", [("索引", "")], "<p>x</p>")
+                check("检查已禁用" in dis and "--no-update-check" in dis,
+                      "禁用自动检查时浮窗说明原因，不制造假更新")
+            finally:
+                T.UPDATE_OFF = was_off
         finally:
             T.UPDATE.clear()
             T.UPDATE.update(saved)
@@ -1362,9 +1396,16 @@ def main():
               and (hv.get("update") or {}).get("auto") is False,
               "/api/health 暴露版本号与自动检查开关（v%s / %s，--no-update-check 生效）"
               % (hv.get("version"), (hv.get("update") or {}).get("state")))
-        st_chk, b_chk = get("/check")
-        check(st_chk == 200 and "版本检查已被禁用" in b_chk.decode("utf-8", "ignore"),
-              "/check 在 --no-update-check 禁用下返回说明页而不是直接跳转 release")
+        st_chk, hd_chk, _ = get_noredirect(
+            "/check", headers={"Referer": BASE + "/stats?x=1"})
+        loc_chk = hd_chk.get("Location", "")
+        check(st_chk == 303 and loc_chk == "/stats?x=1#upd-result",
+              "/check 查完 303 回来源页带 #upd-result，不渲染独立结果页（%s %s）"
+              % (st_chk, loc_chk))
+        st_evil, hd_evil, _ = get_noredirect(
+            "/check", headers={"Referer": "https://evil.example/x"})
+        check(st_evil == 303 and hd_evil.get("Location") == "/#upd-result",
+              "外站 Referer 一律回首页，不给开放跳转留口子")
     finally:
         try:
             get("/shutdown", timeout=3, method="POST")

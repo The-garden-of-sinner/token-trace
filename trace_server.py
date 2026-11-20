@@ -160,7 +160,7 @@ def update_newer():
 def check_update(timeout=5.0, force=False):
     """查一次 GitHub 最新 release，结果只写内存。
 
-    这是本项目**唯一**的主动外联：只在启动时跑一次，之后仅当用户手动点「版本检查」
+    这是本项目**唯一**的主动外联：只在启动时跑一次，之后仅当用户手动点「检查更新」
     或开启自动更新时才查；`TRACE_NO_UPDATE_CHECK=1` 或 `--no-update-check` 可整个关掉。
     任何失败都静默（state=error），绝不让网络问题影响页面加载或启动速度。
     """
@@ -210,6 +210,45 @@ def update_banner():
                esc(UPDATE["latest"]), esc(APP_VERSION)))
 
 
+def update_result_modal():
+    """检查结果浮窗：由 /check 查完 303 回原页的 #upd-result 触发，纯 CSS :target。
+
+    四种状态都在服务端渲染进每页，碎片只负责显隐；不常驻「已是最新」横幅，
+    免得每次打开页面都喊一遍。
+    """
+    if UPDATE_OFF:
+        eyebrow, title, msg = ("更新检查", "检查已禁用",
+                               "服务通过 <code>--no-update-check</code> 启动，本机不做版本检查。")
+        acts = '<a class="btn" href="#">知道了</a>'
+    elif UPDATE.get("state") == "error":
+        eyebrow = "更新检查"
+        title = "检查未完成"
+        msg = "暂时无法连接 GitHub（%s）。" % esc(UPDATE.get("error", "网络连接异常"))
+        acts = ('<a class="btn" href="#">关闭</a>'
+                '<a class="btn on" href="/check">重新检查</a>')
+    elif update_newer():
+        eyebrow = "更新检查"
+        title = "有可用更新 v%s" % esc(UPDATE.get("latest"))
+        msg = ("当前运行版本 v%s，前往发布页查看更新说明与安装包。"
+               % esc(APP_VERSION))
+        acts = ('<a class="btn" href="#">知道了</a>'
+                '<a class="btn on" href="%s" target="_blank" rel="noopener">'
+                '打开 Release ↗</a>' % esc(UPDATE.get("url") or RELEASES_URL))
+    else:
+        eyebrow = "更新检查"
+        title = "已是最新版本"
+        msg = "当前运行版本 v%s，无需更新。" % esc(APP_VERSION)
+        acts = '<a class="btn" href="#">知道了</a>'
+    return ('<div class="upd-result" id="upd-result">'
+            '<a class="upd-scrim" href="#" aria-label="关闭检查结果"></a>'
+            '<div class="upd-card" role="alertdialog" aria-label="更新检查结果">'
+            '<div class="upd-eyebrow"><span class="upd-dot" aria-hidden="true"></span>'
+            '%s</div>'
+            '<h3 class="upd-title">%s</h3><p>%s</p>'
+            '<div class="upd-acts">%s</div></div></div>'
+            % (eyebrow, title, msg, acts))
+
+
 def version_link():
     """页脚品牌签名：项目名做主字、版本做徽章，左分割线与说明文字隔离。"""
     return ('<span class="foot-brand"><b>token-trace</b>'
@@ -217,12 +256,13 @@ def version_link():
 
 
 def update_tools():
-    """标题栏右侧的更新控件：自动检查开关 + 检查更新入口，纯 CSS 零脚本。
+    """标题栏右侧的更新控件：自动检查开关 + 检查更新入口 + 结果浮窗，纯 CSS 零脚本。
 
     - 开启态点一下即关；关闭态点一下弹确认层，确认后才打开。
-    - 确认层靠 `#upd-confirm` 的 :target 显隐（不用 dialog.showModal()），
-      取消链接指向 `#` 即收起；整个交互不引入任何脚本。
-    - 检查更新走 /check 在新窗口做版本比对，本机不下载、不安装。
+    - 确认层靠 `#upd-confirm`、检查结果靠 `#upd-result` 的 :target 显隐
+      （不用 dialog.showModal()），取消链接指向 `#` 即收起；全程无脚本。
+    - 检查更新走 /check，查完 303 回原页带 #upd-result；有新版本时按钮
+      直接改成「有可用更新 vX」并指向同一浮窗。本机不下载、不安装。
     """
     if UPDATE_OFF:
         sw = ('<span class="sw sw-dis" role="switch" aria-checked="false" '
@@ -258,16 +298,16 @@ def update_tools():
     # 否则三段两线把一枚小胶囊切得太碎。
     sep = '<i class="upd-sep" aria-hidden="true"></i>'
     if update_newer():
-        ver = ('<a class="upd-ver upd-new" href="%s" target="_blank" rel="noopener" '
-               'title="发现新版本 v%s，点击前往发布页查看更新说明与安装包">新版本 v%s ↗</a>'
-               % (esc(UPDATE.get("url") or RELEASES_URL), esc(UPDATE.get("latest")), esc(UPDATE.get("latest"))))
+        ver = ('<a class="upd-ver upd-new" href="#upd-result" '
+               'title="发现新版本 v%s，点击查看更新详情与发布页">有可用更新 v%s</a>'
+               % (esc(UPDATE.get("latest")), esc(UPDATE.get("latest"))))
     else:
-        ver = ('<a class="upd-ver" href="/check" target="_blank" rel="noopener" '
-               'title="主动比对版本：发现新版本时在新窗口打开 Release 界面">检查更新</a>')
+        ver = ('<a class="upd-ver" href="/check" '
+               'title="主动比对版本：检查后在本页弹出结果浮窗">检查更新</a>')
     cur = ('<span class="upd-cur" title="当前运行的版本">当前版本 '
            '<code>v%s</code></span>' % esc(APP_VERSION))
-    return ('<div class="updbox">%s%s%s%s%s</div>'
-            % (sw, sep, cur, ver, modal))
+    return ('<div class="updbox">%s%s%s%s%s%s</div>'
+            % (sw, sep, cur, ver, modal, update_result_modal()))
 
 
 def esc(s):
@@ -1259,6 +1299,10 @@ h1{grid-column:1;grid-row:2;font-size:19px;font-weight:500;margin:0;line-height:
 .upd-modal{display:none;position:fixed;inset:0;z-index:30;
  align-items:center;justify-content:center;padding:20px}
 .upd-modal:target{display:flex}
+/* 检查结果浮窗：与确认层同款 :target 显隐，共用 .upd-scrim/.upd-card 皮肤 */
+.upd-result{display:none;position:fixed;inset:0;z-index:31;
+ align-items:center;justify-content:center;padding:20px}
+.upd-result:target{display:flex}
 .upd-scrim{position:absolute;inset:0;background:#0009;
  backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);
  animation:updFade .26s ease both}
@@ -5384,32 +5428,16 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             if path == "/check":
-                # 手动检查更新：主动联网比对版本
-                # 若发现新版本，在新窗口中 303 重定向到新版本 release 页面；
-                # 若无新版本或检查受阻，在新窗口中渲染比对结果页面。
+                # 手动检查更新：查完不渲染独立结果页，303 回来源页带 #upd-result，
+                # 由页面里的结果浮窗按 UPDATE 状态显示四种结果。Referer 只接受
+                # 本机同源，外站一律回首页，不给开放跳转留口子。
                 if not UPDATE_OFF:
                     check_update(force=True)
-                if update_newer():
-                    self.send_response(303)
-                    self.send_header("Location", UPDATE.get("url") or RELEASES_URL)
-                    self.send_header("Content-Length", "0")
-                    self.end_headers()
-                    return
-                crumbs = [("索引", "/"), ("版本检查", "")]
-                if UPDATE_OFF:
-                    msg = '服务已通过 <code>--no-update-check</code> 启动，版本检查已被禁用。当前运行版本为 <b>v%s</b>。' % esc(APP_VERSION)
-                elif UPDATE.get("state") == "error":
-                    msg = '版本检查暂时无法连接到 GitHub（%s），当前运行版本为 <b>v%s</b>。<div style="margin-top:12px"><a class="btn" href="/check">重新检查</a></div>' % (
-                        esc(UPDATE.get("error", "网络连接异常")), esc(APP_VERSION))
-                else:
-                    msg = '已完成版本比对：当前运行版本 <b>v%s</b> 已是最新版本，无需更新。' % esc(APP_VERSION)
-                body = ('<div class="note" style="margin-top:20px">%s</div>'
-                        '<div class="tabs" style="margin-top:16px">'
-                        '<a class="btn" href="/">返回首页</a>'
-                        '<a class="btn" href="%s" target="_blank" rel="noopener">全部 Releases ↗</a>'
-                        '</div>' % (msg, esc(RELEASES_URL)))
-                html_doc = page("版本检查", crumbs, body)
-                self._reply(200, "text/html; charset=utf-8", html_doc.encode("utf-8"))
+                back = self._safe_referer() or "/"
+                self.send_response(303)
+                self.send_header("Location", back + "#upd-result")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
                 return
             if path == "/favicon.ico":
                 self.send_response(204)

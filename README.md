@@ -130,7 +130,7 @@ python3 trace_server.py        # http://127.0.0.1:8765/，Ctrl+C 退出
 - **纯 CSS 动效**：跨文档淡入、KPI 局部 morph、分区入场错峰、环图逐段生长、折线从左往右描出、`<details>` 高度渐变；`prefers-reduced-motion` 与打印一律关闭
 - 统一检索入口（按字符 / 按块由服务端分流）、单行工具条、悬浮「返回上一层」与页脚同名链接
 - **同机互链**：探测到 WorkBuddy 用量监视在跑，才在工具条与页脚放「实时用量 ↗」；没跑就不渲染，页面上不留死链
-- **版本与更新提示**：页眉最右上角（面包屑行右侧）放一枚胶囊，内用细竖线分隔「自动检查更新」开关与版本区（当前版本 + 可点的「检查更新」）；与标题行的平台切换分开。**新安装默认关闭**，手动开启后本次进程才查；关闭态点一下弹确认层，写明约几 KB 流量、不上传任何本地数据，确认后才开启（纯 CSS `:target`，零脚本）。`检查更新` 在新窗口走 `/check` 做版本比对，有新版本才跳转 Release。查到新版就在页面顶部出一条窄提示，直达对应 Release。只提示、不下载、不安装（装包要 root，见「已知限制」13），`--no-update-check` 可强制禁用
+- **版本与更新提示**：页眉最右上角（面包屑行右侧）放一枚胶囊，内用细竖线分隔「自动检查更新」开关与版本区（当前版本 + 可点的「检查更新」）；与标题行的平台切换分开。**新安装默认关闭**，手动开启后本次进程才查；关闭态点一下弹确认层，写明约几 KB 流量、不上传任何本地数据，确认后才开启（纯 CSS `:target`，零脚本）。`检查更新` 在本页走 `/check` 做版本比对（最长 5 秒），查完 303 回原页并弹出结果浮窗：「已是最新版本」/「有可用更新 vX」/ 失败原因 / 已禁用；有新版本时按钮本身也变成「有可用更新 vX」，浮窗里给 Release 入口。顶部另有一条常驻提示直达对应 Release。只提示、不下载、不安装（装包要 root，见「已知限制」13），`--no-update-check` 可强制禁用
 - 18 个 JSON 端点，统一 `{ok, data, meta}` 信封；跨会话分析宽表与字段字典见 [docs/API.md](docs/API.md)
 - Linux / Windows 各有一键启动与停止脚本，幂等、自动开浏览器
 
@@ -325,8 +325,9 @@ v1.4.0 及更早的变更（Antigravity 接入、月历热力图、环图闭合�
 **页内更新入口**：页眉最右上角（面包屑行右侧）是「自动检查更新」开关与版本区（当前版本 +「检查更新」），
 与标题行右侧的平台切换分在两行，不再挤在一起。**新安装默认关闭**，手动开启后本次进程才查；开关开启时
 点一下即关，关闭时点一下弹确认层，写明「约几 KB 流量、不上传任何本地数据」，确认后才开启
-（纯 CSS `:target` 显隐，取消链接 `href="#"` 即收起，全程零脚本）。点击「检查更新」在新窗口
-主动比对版本，有新版本才跳转 Releases 页面；当前版本同时显示在页眉胶囊里，页脚写的是 `token-trace vX`，后面跟 © 署名「大晋帝国之谶」与知乎 / GitHub 两个主页链接。
+（纯 CSS `:target` 显隐，取消链接 `href="#"` 即收起，全程零脚本）。点击「检查更新」在本页
+主动比对版本，查完 303 回原页弹结果浮窗；有新版本时按钮变成「有可用更新 vX」，浮窗里给 Releases 入口。
+当前版本同时显示在页眉胶囊里，页脚写的是 `token-trace vX`，后面跟 © 署名「大晋帝国之谶」与知乎 / GitHub 两个主页链接。
 开启后查到新版（5 秒超时）就在页面顶部出一条窄提示，直达对应 Release 页。零写盘，不记住上次
 选择，每次启动都回到默认关闭。
 
@@ -649,7 +650,7 @@ token（按 `providerData.model` 分组，展示名取全库得票最多的写�
 | 子代理标注 | `scan_all()` 在同一次逐行遍历里记 `isSubAgent` / `agent` / `rootRequestId` / 首条时间戳 / `Agent` 调用的时间与 `conversationRequestId`（`agent_reqs`）；`subagent_relations()` 先用 `rootRequestId` 精确匹配，匹配不到再退回 5 秒时间窗，会话列表按结果打「子代理」/「N 个子代理」标签 | 零额外全库遍历；精确匹配 O(子代理数)，只有未命中的才走时间窗；无子代理时无标签，页面不多一块高度 |
 | 首页全库画像 | `index_overview(ss, focus)` 按视图分发：`focus` 为空（全部）走 `_platform_charts()` 输出平台拼接环 + 月历热力图，非空走 `_model_charts()` 输出模型环 + 同款月历（平台色）；`_workspace_cell()` / `_donut_cell()` / `_overview_shell()` 复用外壳。只聚合 `STORE.sessions()` 的 `src / models / model / days / mtime / ws / pin`。平台环对 <1.2% 的段做弧宽保底后等比归一，图例仍给真实占比；模型环按占比 ≥1% 筛选主模型、其余并入「其他 N 个模型」。热力图走 `_by_day()` → `_cal_window()`（近 `CAL_MONTHS=3` 个自然月）→ `_cal_block()`：每月 7 列 × 6 行方格、`opacity=0.10+0.90*√(v/窗口峰值)` 做**连续**色阶，补位与未来日期只占位不显示、无记录才留 `--track` 实底；全部视图格子涂全天合计，`[data-tip]` 气泡给日期与各平台输入 token | 零额外全库遍历、零新增索引、不依赖 `workbuddy.db`；旧索引无 `days` 时回退 `mtime` 兜底；悬停零 JS |
 | 同机互链 | `monitor_url()` 用 `http.client` 直连 loopback 的 `/api/ping`（不走 `http_proxy`、150 ms 超时），成功与失败都按 `MONITOR_TTL` 缓存；`monitor_link()` 只在探测通过时输出 `<a target="_blank" rel="noopener">` | 每 15 s 最多一次本地连接；不通时输出 0 字节，页面不留死链 |
-| 版本与更新提示 | `_read_version()` 依次取 `TRACE_VERSION`（单文件 bat 注入）→ 程序目录 `VERSION`（deb 装到 `/usr/share/token-trace/VERSION`）→ `scripts/VERSION`（源码运行）→ `dev`；`UPDATE["auto"]` 默认 `False`，`check_update()` 只在开关打开后由 daemon 线程查一次 GitHub `releases/latest`（5 s 超时），结果只写模块级 `UPDATE` 字典；`update_newer()` 按数字元组比较，`update_banner()` 只读缓存渲染；页眉顶行 `update_tools()` 画开关 + 版本检查外链，开关关闭态经 `#upd-confirm` 的 `:target` 弹确认层（`.upd-scrim` 独立遮罩层可点空白关闭，`blur(4px)` 轻模糊 + `.upd-card` 圆角卡片一次 `updRise` 上浮，标题/说明/按钮三级分层；`prefers-reduced-motion` 下停动画）；`/update-toggle?on=0\|1` 切 `UPDATE["auto"]`（关闭时清结果、开启时后台查一次）后 303 跳回同源 Referer，`/check` 保留为旧手动重查入口；胶囊内只分两区一线（一道 `.upd-sep` 分开自动开关与版本区），外壳圆角 10px + 莫兰迪灰绿底（`--upd-bg` / `--upd-bd`，明暗双主题，与纯白主背景拉开），版本区是灰底细边框药丸 `.upd-ver`（`--track` 灰底 + `--upd-bd` 细边框、hover 填实色）+ `.upd-cur`「当前版本 `<code>vX</code>`」说明（版本号同走灰底 + 细边框的 markdown 行内代码风格：等宽字 + `--track` 底 + `--upd-bd` 描边 + 2px 小圆角 + 紧凑 padding，复用全局 `code` 样式并局部覆盖）；页脚去掉重复目录导航，`version_link()` 输出 `.foot-brand` 品牌签名（项目名等宽加粗 + 版本徽章，左边框与说明文字隔离）+ © 署名双链接（`ZHIHU_URL` / `GITHUB_URL`） | 零 JS、零新增依赖；页面永不等待网络；新安装默认不联网，`--no-update-check` / `TRACE_NO_UPDATE_CHECK=1` 强制禁用且开关置灰；任何失败静默 |
+| 版本与更新提示 | `_read_version()` 依次取 `TRACE_VERSION`（单文件 bat 注入）→ 程序目录 `VERSION`（deb 装到 `/usr/share/token-trace/VERSION`）→ `scripts/VERSION`（源码运行）→ `dev`；`UPDATE["auto"]` 默认 `False`，`check_update()` 只在开关打开后由 daemon 线程查一次 GitHub `releases/latest`（5 s 超时），结果只写模块级 `UPDATE` 字典；`update_newer()` 按数字元组比较，`update_banner()` 只读缓存渲染；页眉顶行 `update_tools()` 画开关 + 当前版本 + 检查更新按钮 + 结果浮窗，开关关闭态经 `#upd-confirm` 的 `:target` 弹确认层（`.upd-scrim` 独立遮罩层可点空白关闭，`blur(4px)` 轻模糊 + `.upd-card` 圆角卡片一次 `updRise` 上浮，标题/说明/按钮三级分层；`prefers-reduced-motion` 下停动画）；`/update-toggle?on=0\|1` 切 `UPDATE["auto"]`（关闭时清结果、开启时后台查一次）后 303 跳回同源 Referer，`/check` 查完同样 303 回来源页带 `#upd-result`，由 `#upd-result` 浮窗渲染已是最新 / 有可用更新 / 失败 / 禁用四种结果，不再出独立结果页；胶囊内只分两区一线（一道 `.upd-sep` 分开自动开关与版本区），外壳圆角 10px + 莫兰迪灰绿底（`--upd-bg` / `--upd-bd`，明暗双主题，与纯白主背景拉开），版本区是灰底细边框药丸 `.upd-ver`（`--track` 灰底 + `--upd-bd` 细边框、hover 填实色）+ `.upd-cur`「当前版本 `<code>vX</code>`」说明（版本号同走灰底 + 细边框的 markdown 行内代码风格：等宽字 + `--track` 底 + `--upd-bd` 描边 + 2px 小圆角 + 紧凑 padding，复用全局 `code` 样式并局部覆盖）；页脚去掉重复目录导航，`version_link()` 输出 `.foot-brand` 品牌签名（项目名等宽加粗 + 版本徽章，左边框与说明文字隔离）+ © 署名双链接（`ZHIHU_URL` / `GITHUB_URL`） | 零 JS、零新增依赖；页面永不等待网络；新安装默认不联网，`--no-update-check` / `TRACE_NO_UPDATE_CHECK=1` 强制禁用且开关置灰；任何失败静默 |
 | 统一检索 | `search_box()` 用 `radio + label` 分段开关（无 `id`、无脚本、同页可复用），固定 form action，`v_search()` 按 `mode` 分流到 `v_find()` | 零 JS、零新增路由；分页仍直连 `/find` |
 | 按需 CSS（续） | `CSS_FOLD` / `CSS_NAV` / `CSS_INDEX` 分别按 `hitfold` / `navgrid` / `ovgrid` 注入 | 只有用到的页面才带对应图表样式 |
 | 降级 | 渐变色标不被老浏览器识别时回落纯色轨道（柱高与链接不变）；`prefers-reduced-motion` 关动效；数据不足显示统一空态 | 信息不丢，静态预览仍可读 |
