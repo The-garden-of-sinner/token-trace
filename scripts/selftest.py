@@ -1312,6 +1312,10 @@ def main():
                 vals = [T.rank_metric(what, sk, r) for r in rr]
                 check(all(vals[i] >= vals[i + 1] for i in range(len(vals) - 1)),
                       "%s 按 %s 排序结果单调不增（%d 行）" % (what, sk, len(rr)))
+                ra = sorted(rows, key=T.rank_sort_key(what, sk, "asc"))
+                vals = [T.rank_metric(what, sk, r) for r in ra]
+                check(all(vals[i] <= vals[i + 1] for i in range(len(vals) - 1)),
+                      "%s 按 %s 正序结果单调不减（%d 行）" % (what, sk, len(ra)))
         # 筛选：种类 / 时间 / 任意组合
         kk = next((x for x in T.ORDER if any(r[3]["k"] == x for r in brows)),
                   brows[0][3]["k"])
@@ -1397,6 +1401,27 @@ def main():
         check("隐藏压缩摘要" in hcx and 'name="cx" value="1"' in hcx
               and hcx.count(">压缩摘要</b>") > 0,
               "cx=1 可把压缩摘要块纳入排行")
+        # 正序：标签带 ↑、翻页与筛选表单都保留 order=asc，零用量行压到末尾
+        ha = T.v_rank({"what": ["call"], "sort": ["token"], "order": ["asc"]})
+        nzero = sum(1 for r in crows if r[2]["pin"] + r[2]["pout"] <= 0)
+        check("按合计 ↑" in ha and "order=asc" in ha
+              and 'name="order" value="asc"' in ha,
+              "排行页正序：标签带 ↑，翻页与筛选表单都保留 order=asc")
+        hd = T.v_rank({"what": ["call"], "sort": ["token"]})
+        check("按合计 ↓" in hd and 'name="order"' not in hd
+              and "排到了末尾" not in hd,
+              "排行页默认仍是降序，URL 不回显 order")
+        if nzero:
+            m0 = re.search(r'<span class="num credit">([\d,]+)</span>', ha)
+            check(bool(m0) and int(m0.group(1).replace(",", "")) > 0
+                  and "排到了末尾" in ha,
+                  "正序首页首行不是 0：%d 行零用量对象已压到末尾" % nzero)
+        # 点当前排序标签翻转方向，点其他标签只换字段并保留方向
+        s_tabs = re.search(r"<b>排序</b>(.*?)</div>", ha).group(1)
+        links = re.findall(r'href="([^"]+)"', s_tabs)
+        check(any("sort=token" in x and "order=asc" not in x for x in links)
+              and all("order=asc" in x for x in links if "sort=token" not in x),
+              "正序下点当前标签翻回降序，点其他标签保留 order=asc")
         # 块类型标签按类别配色，五类各一色
         check(b".chip.bk0" in rbody and b".chip.bk4" in rbody
               and b'class="chip t bk' in rbody,

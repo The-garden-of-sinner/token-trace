@@ -4602,19 +4602,24 @@ def rank_rows(what):
         return rows
 
 
-def rank_sort_key(what, sort):
-    """降序靠取负；同值按块号 / 轮次稳定收尾，翻页时行序不会抖动。"""
+def rank_sort_key(what, sort, order="desc"):
+    """降序靠取负；同值按块号 / 轮次稳定收尾，翻页时行序不会抖动。
+
+    正序只翻转主指标的符号，兜底键仍保持升序：若整体 reverse=True，
+    同值行会在两页之间来回换位，翻页看起来像抖动。
+    """
+    sgn = 1 if order == "asc" else -1
     if what == "block":
         if sort == "count":
-            return lambda r: (-r[5], -r[4], r[0], r[2])
+            return lambda r: (sgn * r[5], -r[4], r[0], r[2])
         if sort == "product":
-            return lambda r: (-(r[4] * r[5]), -r[4], r[0], r[2])
-        return lambda r: (-r[4], -r[5], r[0], r[2])
+            return lambda r: (sgn * (r[4] * r[5]), -r[4], r[0], r[2])
+        return lambda r: (sgn * r[4], -r[5], r[0], r[2])
     if sort == "in":
-        return lambda r: (-r[2]["pin"], r[0], r[2]["seq"])
+        return lambda r: (sgn * r[2]["pin"], r[0], r[2]["seq"])
     if sort == "out":
-        return lambda r: (-r[2]["pout"], r[0], r[2]["seq"])
-    return lambda r: (-(r[2]["pin"] + r[2]["pout"]), r[0], r[2]["seq"])
+        return lambda r: (sgn * r[2]["pout"], r[0], r[2]["seq"])
+    return lambda r: (sgn * (r[2]["pin"] + r[2]["pout"]), r[0], r[2]["seq"])
 
 
 def rank_metric(what, sort, r):
@@ -4669,20 +4674,22 @@ def rank_filter(what, rows, kinds, dfrom, dto, exclude_compact=False, src=""):
 _RANK_SORTED = {}
 
 
-def rank_sorted(what, sort):
-    """按 (对象, 排序键) 缓存已排序的行，筛选只是在有序列表上过滤、不必重排。
+def rank_sorted(what, sort, order="desc"):
+    """按 (对象, 排序键, 方向) 缓存已排序的行，筛选只是在有序列表上过滤、不必重排。
 
     15 879 块按乘积排序一次约 98 ms；缓存后筛选请求只剩一次 O(n) 过滤。
     与 rank_rows() 一样用索引对象身份做失效判定。
     """
     with CALC_LOCK:
         ss = STORE.sessions()
-        key = (what, sort)
+        key = (what, sort, order)
         hit = _RANK_SORTED.get(key)
         if hit is not None and hit[0] is ss:
             return hit[1]
-        rows = sorted(rank_rows(what), key=rank_sort_key(what, sort))
-        if len(_RANK_SORTED) > 8:
+        rows = sorted(rank_rows(what), key=rank_sort_key(what, sort, order))
+        # 2 个对象 × 3 个排序键 × 2 个方向 = 12 种组合，上限放到 12 才不会
+        # 每加一个方向就整表清空、退化成每次重新排序（一次约 98 ms）。
+        if len(_RANK_SORTED) > 12:
             _RANK_SORTED.clear()
         _RANK_SORTED[key] = (ss, rows)
         return rows
@@ -4696,6 +4703,9 @@ def v_rank(q):
     sort = qstr(q, "sort", sorts[0])
     if sort not in sorts:
         sort = sorts[0]          # 白名单：非法值一律回落，不拼进 HTML / 排序键
+    # 方向白名单：只有 asc 例外，其余（含非法值）一律按降序——默认语义不变
+    order = "asc" if qstr(q, "order", "") == "asc" else "desc"
+    asc = order == "asc"
 
     src = qstr(q, "src")
 
@@ -4720,9 +4730,19 @@ def v_rank(q):
     dfrom = _norm_date(qstr(q, "from", ""))
     dto = _norm_date(qstr(q, "to", ""))
 
-    rows = rank_filter(what, rank_sorted(what, sort), kind, dfrom, dto,
+    rows = rank_filter(what, rank_sorted(what, sort, order), kind, dfrom, dto,
                        exclude_compact=(what == "block" and not show_compact), src=src)
+    # 正序时把用量为 0 的对象压到末尾：这类行多是 usage 缺失的调用或空块，
+    # 按字面排最前面会连续几十页全是 0，真正的小用量对象反而被埋掉。
+    zero_rows = 0
+    if asc:
+        pos, zero = [], []
+        for r in rows:
+            (pos if rank_metric(what, sort, r) > 0 else zero).append(r)
+        rows, zero_rows = pos + zero, len(zero)
     size = PAGE_BLOCKS
+    zero_txt = ('正序视图把 <b>%s</b> 行用量为 0 的对象排到了末尾。'
+                % nfmt(zero_rows)) if zero_rows else ""
     p = clamp_p(q, len(rows), size)
     shown = rows[p * size:(p + 1) * size]
     mx = max((rank_metric(what, sort, r) for r in rows), default=0) or 1
@@ -4739,19 +4759,41 @@ def v_rank(q):
     if show_compact and what == "block":
         filt["cx"] = "1"
 
-    def url(what_, sort_, extra=None):
+    def url(what_, sort_, extra=None, order_=None):
         d = {"what": what_, "sort": sort_}
         if extra:
             d.update(extra)
+        # 默认降序不写进 URL，旧链接与默认语义保持一字不差
+        if (order if order_ is None else order_) == "asc":
+            d["order"] = "asc"
         return esc("/rank?" + urlencode(d))
 
     def tab_obj(k2):
-        # 切换对象时丢掉对象专属的种类，保留时间范围，排序回到新对象默认键
+        # 切换对象时丢掉对象专属的种类，保留时间范围与当前方向，
+        # 排序回到新对象默认键
         d = {a: b for a, b in filt.items() if a != "k"}
         return url(k2, RANK_SORT[k2][0], d)
 
     def tab_sort(sk):
+        # 点当前字段＝翻转方向；点其他字段＝换字段并保留当前方向
+        if sk == sort:
+            return url(what, sk, filt, "desc" if asc else "asc")
         return url(what, sk, filt)
+
+    def sort_tabs(opts):
+        """排序标签：当前项带箭头，点了翻转方向；其余项只换字段。"""
+        out = []
+        for k, lab in opts:
+            cur = k == sort
+            if cur:
+                tip = "当前按" + lab + ("正序" if asc else "降序") + \
+                      "，点击切换到" + ("降序" if asc else "正序")
+            else:
+                tip = "按" + lab + "排序"
+            out.append('<a class="btn %s" href="%s" title="%s">%s%s</a>' %
+                       ("on" if cur else "", tab_sort(k), esc(tip),
+                        lab, (" ↑" if asc else " ↓") if cur else ""))
+        return "".join(out)
 
     def tabs(opts, cur, href_fn):
         return "".join('<a class="btn %s" href="%s">%s</a>' %
@@ -4888,12 +4930,15 @@ def v_rank(q):
             cx_hidden = '<input type="hidden" name="cx" value="1">'
 
     src_hidden = ('<input type="hidden" name="src" value="%s">' % esc(src)) if src else ""
+    order_hidden = '<input type="hidden" name="order" value="asc">' if asc else ""
     clear_d = {"what": what, "sort": sort}
+    if asc:
+        clear_d["order"] = "asc"
     if src:
         clear_d["src"] = src
     filt_html = ('<form class="searchbox" method="get" action="/rank">'
                  '<input type="hidden" name="what" value="%s">'
-                 '<input type="hidden" name="sort" value="%s">'
+                 '<input type="hidden" name="sort" value="%s">%s'
                  '%s'
                  '<input type="hidden" name="k" value="%s">%s'
                  '<input type="hidden" name="from" value="%s">'
@@ -4905,7 +4950,8 @@ def v_rank(q):
                  '</span>'
                  '<span class="sb-main"><button type="submit">筛选</button>'
                  '<a class="btn" href="%s">清空</a></span></form>' %
-                 (esc(what), esc(sort), src_hidden, esc(kind), cx_hidden, esc(dfrom), esc(dto),
+                 (esc(what), esc(sort), order_hidden, src_hidden,
+                  esc(kind), cx_hidden, esc(dfrom), esc(dto),
                   esc(kind_label), pick_html,
                   date_pick("from", "起始日期", dfrom),
                   date_pick("to", "结束日期", dto), cx_html,
@@ -4913,6 +4959,8 @@ def v_rank(q):
     n_label = (("筛选后块数" if filt else "块总数") if what == "block"
                else ("筛选后调用数" if filt else "调用总数"))
     pager_q = {"what": [what], "sort": [sort]}
+    if asc:
+        pager_q["order"] = ["asc"]
     for a, b in filt.items():
         pager_q[a] = [b]
 
@@ -4929,16 +4977,17 @@ def v_rank(q):
                     ("承载 token 合计", "≈ " + kh(carried)),
                     ("被携带合计", nfmt(uses)),
                     ("当前排序", {"token": "块 token", "count": "被携带次数",
-                                 "product": "token × 次数"}[sort])])
+                                 "product": "token × 次数"}[sort] +
+                                 (" ↑" if asc else " ↓"))])
         body += ('<div class="note"><b>统计说明</b>：展示各上下文块的独立明细。'
                  '<b>块 token</b> 为原文估算量；<b>被携带</b>为被后续请求带入上下文的次数；'
                  '<b>乘积</b> = 块 token × 被携带次数。支持按种类与写入时间筛选；'
-                 '默认已过滤上下文压缩摘要块，可通过开关纳入。</div>')
+                 '默认已过滤上下文压缩摘要块，可通过开关纳入。' + zero_txt + '</div>')
         body += ('<div class="tabs"><b>对象</b>%s</div>' %
                  tabs((("block", "上下文块"), ("call", "调用")), what, tab_obj))
         body += ('<div class="tabs"><b>排序</b>%s</div>' %
-                 tabs((("token", "按块 token"), ("count", "按被携带次数"),
-                       ("product", "按乘积")), sort, tab_sort))
+                 sort_tabs((("token", "按块 token"), ("count", "按被携带次数"),
+                            ("product", "按乘积"))))
         if not rows:
             body += '<div class="note">没有匹配当前筛选条件的块，换个种类或时间范围试试。</div>'
         else:
@@ -4967,7 +5016,7 @@ def v_rank(q):
                           kh(est), nfmt(u), kh(est * u),
                           rank_metric(what, sort, r) / mx * 100))
             body += pager("/rank", pager_q, p, size, len(rows), "块")
-        sub = "逐块排行 · 支持按种类与时间筛选 · 按 token、被携带次数或乘积排序"
+        sub = "逐块排行 · 支持按种类与时间筛选 · 按 token、被携带次数或乘积排序，可切换正序 / 倒序"
     else:
         total = sum(r[2]["pin"] + r[2]["pout"] for r in rows)
         tin = sum(r[2]["pin"] for r in rows)
@@ -4976,15 +5025,17 @@ def v_rank(q):
                     ("token 合计", kh(total)),
                     ("输入 / 输出", "%s / %s" % (kh(tin), kh(tout))),
                     ("当前排序", {"token": "合计 token", "in": "输入 token",
-                                 "out": "输出 token"}[sort])])
+                                 "out": "输出 token"}[sort] +
+                                 (" ↑" if asc else " ↓"))])
         body += ('<div class="note"><b>统计说明</b>：展示各次模型调用的用量明细。'
                  'token 取自接口原始用量（输入 + 输出 = 合计）。'
-                 '支持按模型与调用时间筛选，可在合计、输入、输出三个排序口径间切换。</div>')
+                 '支持按模型与调用时间筛选，可在合计、输入、输出三个排序口径间切换。'
+                 + zero_txt + '</div>')
         body += ('<div class="tabs"><b>对象</b>%s</div>' %
                  tabs((("block", "上下文块"), ("call", "调用")), what, tab_obj))
         body += ('<div class="tabs"><b>排序</b>%s</div>' %
-                 tabs((("token", "按合计"), ("in", "按输入"),
-                       ("out", "按输出")), sort, tab_sort))
+                 sort_tabs((("token", "按合计"), ("in", "按输入"),
+                            ("out", "按输出"))))
         if not rows:
             body += '<div class="note">没有匹配当前筛选条件的调用，换个模型或时间范围试试。</div>'
         else:
@@ -5011,11 +5062,12 @@ def v_rank(q):
                           nfmt(c["pin"]), nfmt(c["pout"]), nfmt(c["pin"] + c["pout"]),
                           rank_metric(what, sort, r) / mx * 100))
             body += pager("/rank", pager_q, p, size, len(rows), "次")
-        sub = "逐调用排行 · 支持按模型与时间筛选 · 按合计、输入或输出 token 排序"
+        sub = "逐调用排行 · 支持按模型与时间筛选 · 按合计、输入或输出 token 排序，可切换正序 / 倒序"
 
     body += ('<div class="tabs"><a class="btn" href="/stats">← 全局统计</a>'
              '<a class="btn" href="/">← 回索引</a></div>')
-    topbar_keep = [("what", what), ("sort", sort)] + [(k, v) for k, v in filt.items() if k != "src"]
+    topbar_keep = ([("what", what), ("sort", sort), ("order", "asc" if asc else "")] +
+                   [(k, v) for k, v in filt.items() if k != "src"])
     return page("筛选与排序", [("索引", "/"), ("筛选与排序", "")], body, sub=sub,
                 topbar=plat_switch(STORE.sessions(), src, "/rank", keep=topbar_keep))
 
