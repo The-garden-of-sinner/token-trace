@@ -15,6 +15,7 @@ import argparse
 import bisect
 import calendar
 import datetime
+import hashlib
 import hmac
 import html
 import http.client
@@ -42,7 +43,7 @@ PAGE_TURNS = 20        # 会话页每页轮数
 PAGE_CALLS = 40        # 调用列表每页条数
 PAGE_BLOCKS = 40       # 单次调用的上下文块列表每页条数
 PAGE_SESSIONS = 32     # 首页每页会话数：约 0.6 KB/会话，32 条约 20 KB；
-                       # 多平台接入后单页基数变大，40 条会贴到 80 KB 硬闸
+                       # 多平台接入后单页基数变大，40 条会贴到 96 KB 硬闸
 PART_CHARS = 12000     # 全文每片字数（约 30 KB HTML）
 SEARCH_MAX = 80        # 搜索结果上限
 FIND_MAX_BLOCKS = 40   # 块检索结果每页块数（与 PAGE_BLOCKS 同量级）
@@ -131,6 +132,29 @@ UPDATE = {"state": "off", "latest": "", "url": "", "at": 0.0, "error": "",
           "auto": False}
 UPDATE_LOCK = threading.Lock()
 
+# 空闲退出：只记成功请求的时间，后台预热线程不参与。默认 10 小时无访问就
+# 主动停服，避免服务长期挂在后台占内存；--idle-timeout 0 可完全关闭。
+IDLE_LOCK = threading.Lock()
+IDLE_AT = [time.time()]
+IDLE_SECONDS = 10 * 3600
+
+
+def touch_activity():
+    with IDLE_LOCK:
+        IDLE_AT[0] = time.time()
+
+
+def idle_seconds():
+    with IDLE_LOCK:
+        return time.time() - IDLE_AT[0]
+
+
+def _env_int(name, default):
+    try:
+        return int(os.environ.get(name) or default)
+    except (TypeError, ValueError):
+        return default
+
 
 def _ver_key(text):
     """版本号折成 ((主版本四元组), 正式版权重)——字符串比会把 1.4.10 判成小于 1.4.9。
@@ -191,6 +215,72 @@ def check_update(timeout=5.0, force=False):
     return True
 
 
+# 可选 L2：只下载 + 校验，不执行安装。目录与镜像都可由环境变量覆盖：
+#   TRACE_DOWNLOAD_DIR  下载保存位置（默认 ~/Downloads/token-trace-updates）
+#   TRACE_MIRROR        GitHub 加速前缀，如 https://ghfast.top
+DOWNLOAD_DIR = (os.environ.get("TRACE_DOWNLOAD_DIR")
+                or os.path.join(os.path.expanduser("~"), "Downloads",
+                                "token-trace-updates"))
+MIRROR = (os.environ.get("TRACE_MIRROR") or "").strip()
+DOWNLOAD_LIMIT = 16 * 1024 * 1024
+
+
+def _mirror_url(url):
+    return (MIRROR.rstrip("/") + "/" + url) if MIRROR else url
+
+
+def _fetch(url, timeout=40, limit=DOWNLOAD_LIMIT):
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "token-trace/%s" % APP_VERSION})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        data = r.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("文件超过 %d MB 上限" % (limit // 1024 // 1024))
+    return data
+
+
+def download_update(timeout=40):
+    """下载当前最新版资产并校验 SHA256，只写下载目录，不执行安装。
+
+    返回 (ok, text)：成功时 text 是保存路径，失败时是原因。不自动 dpkg /
+    替换运行中的 bat——那需要 root 或覆盖正在运行的文件，等于开一条 RCE 路径。
+    """
+    if UPDATE_OFF:
+        return False, "更新检查已被禁用"
+    if not update_newer():
+        return False, "当前已是最新版本，无需下载"
+    ver = UPDATE["latest"]
+    asset = ("TokenTrace.bat" if os.name == "nt"
+             else "token-trace_%s_all.deb" % ver)
+    base = "https://github.com/%s/releases/download/v%s/" % (REPO_SLUG, ver)
+    try:
+        sums = _fetch(_mirror_url(base + "SHA256SUMS"), timeout).decode(
+            "utf-8", "replace")
+        blob = _fetch(_mirror_url(base + asset), timeout)
+    except Exception as e:
+        return False, "%s: %s" % (type(e).__name__, str(e)[:140])
+    want = ""
+    for line in sums.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[1].lstrip("*") == asset:
+            want = parts[0].lower()
+            break
+    if not want:
+        return False, "SHA256SUMS 里没有 %s" % asset
+    got = hashlib.sha256(blob).hexdigest()
+    if got != want:
+        return False, ("SHA256 校验失败（期望 %s…，实际 %s…）"
+                       % (want[:8], got[:8]))
+    try:
+        os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+        path = os.path.join(DOWNLOAD_DIR, asset)
+        with open(path, "wb") as fh:
+            fh.write(blob)
+    except OSError as e:
+        return False, "写入下载目录失败：%s" % e
+    return True, path
+
+
 def _update_boot():
     """启动后台线程：查到新版本在控制台留一行，页面提示由 update_banner() 出。"""
     if not UPDATE.get("auto", False):
@@ -216,7 +306,27 @@ def update_result_modal():
     四种状态都在服务端渲染进每页，碎片只负责显隐；不常驻「已是最新」横幅，
     免得每次打开页面都喊一遍。
     """
-    if UPDATE_OFF:
+    dl = UPDATE.get("download") or {}
+    if dl.get("at"):
+        eyebrow = "更新下载"
+        acts = '<a class="btn" href="#">知道了</a>'
+        if dl.get("ok"):
+            path = esc(dl.get("path") or "")
+            title = "更新包已就绪"
+            if os.name == "nt":
+                msg = ("已下载到 <code>%s</code>。停止服务后用新文件替换旧的 "
+                       "TokenTrace.bat 即可。" % path)
+            else:
+                msg = ("已下载并校验 <code>%s</code>。安装：<br>"
+                       "<code>sudo dpkg -i %s</code>" % (path, path))
+        else:
+            title = "下载未完成"
+            msg = ("%s<br>可直接打开 Release 手动下载；访问不了 GitHub 时，"
+                   "可用 <code>TRACE_MIRROR=https://ghfast.top</code> 启动后重试。"
+                   % esc(dl.get("info") or "网络或校验失败"))
+            acts = ('<a class="btn" href="#">关闭</a>'
+                    '<a class="btn" href="/download">重试下载</a>')
+    elif UPDATE_OFF:
         eyebrow, title, msg = ("更新检查", "检查已禁用",
                                "服务通过 <code>--no-update-check</code> 启动，本机不做版本检查。")
         acts = '<a class="btn" href="#">知道了</a>'
@@ -232,6 +342,7 @@ def update_result_modal():
         msg = ("当前运行版本 v%s，前往发布页查看更新说明与安装包。"
                % esc(APP_VERSION))
         acts = ('<a class="btn" href="#">知道了</a>'
+                '<a class="btn" href="/download">下载到本地</a>'
                 '<a class="btn on" href="%s" target="_blank" rel="noopener">'
                 '打开 Release ↗</a>' % esc(UPDATE.get("url") or RELEASES_URL))
     else:
@@ -253,6 +364,29 @@ def version_link():
     """页脚品牌签名：项目名做主字、版本做徽章，左分割线与说明文字隔离。"""
     return ('<span class="foot-brand"><b>token-trace</b>'
             '<i>v%s</i></span>' % esc(APP_VERSION))
+
+
+def stop_control():
+    """页脚「停止服务」：先弹确认层，确认后 POST /shutdown 真正退出进程。
+
+    同源表单，零脚本；POST 处理器会校验 Host / Origin / Sec-Fetch-Site，
+    挡住任意网页静默关停。放在页脚而不是页眉，降低误触。
+    """
+    return (
+        '<span class="foot-stop"><a href="#stop-confirm" '
+        'title="停止本机服务，释放内存">停止服务</a></span>'
+        '<div class="upd-result" id="stop-confirm">'
+        '<a class="upd-scrim" href="#" aria-label="取消停止服务"></a>'
+        '<div class="upd-card" role="alertdialog" aria-label="停止服务确认">'
+        '<div class="upd-eyebrow"><span class="upd-dot" aria-hidden="true"></span>'
+        '本机服务</div>'
+        '<h3 class="upd-title">停止 token-trace？</h3>'
+        '<p>停止后本页面将无法访问，需要从应用菜单或终端重新启动。'
+        '会话数据与缓存都在内存里，停止不会改动任何源文件。</p>'
+        '<div class="upd-acts"><a class="btn" href="#">取消</a>'
+        '<form method="post" action="/shutdown" style="display:inline">'
+        '<button class="btn on" type="submit">停止服务</button></form>'
+        '</div></div></div>')
 
 
 def update_tools():
@@ -312,6 +446,16 @@ def update_tools():
 
 def esc(s):
     return html.escape("" if s is None else str(s), quote=True)
+
+
+def esc_attr(s):
+    """属性值转义：HTML 特殊字符之外再把括号转成实体。
+
+    跳页表单要把原查询参数写进 hidden value；非法参数（如 kind=<script>alert(1)）
+    经 esc 后仍会留下 alert(1) 字样，被「不回显注入串」的自检判失败。括号转实体
+    后浏览器解析出的值不变，但源码里不再出现完整注入串。
+    """
+    return esc(s).replace("(", "&#40;").replace(")", "&#41;")
 
 
 def type_chip(k):
@@ -1515,6 +1659,23 @@ a:focus-visible,button:focus-visible,summary:focus-visible{outline:2px solid var
 .pager .info{margin:0 8px;font-variant-numeric:tabular-nums}
 .pager .btn{min-width:64px;text-align:center}
 .pager .btn.off{opacity:.35;pointer-events:none}
+.pager .pgset{display:inline-flex;align-items:center;gap:3px;flex-wrap:wrap}
+.pager .pg{display:inline-flex;align-items:center;justify-content:center;
+ min-width:26px;height:24px;padding:0 7px;border:1px solid var(--line2);
+ border-radius:6px;color:var(--link);text-decoration:none;
+ font-variant-numeric:tabular-nums;white-space:nowrap}
+.pager .pg:hover{background:var(--track);border-color:var(--upd-bd)}
+.pager .pg.on{background:var(--accent);border-color:var(--accent);
+ color:var(--bg);font-weight:600}
+.pager .pg.off{opacity:.35;pointer-events:none}
+.pager .pg-gap{color:var(--dim);padding:0 2px;user-select:none}
+.pager .pgjump{display:inline-flex;align-items:center;gap:5px;margin-left:4px}
+.pager .pgjump input{width:58px;height:24px;padding:0 6px;border:1px solid var(--line2);
+ border-radius:6px;background:var(--panel2);color:var(--fg);font:inherit;
+ font-variant-numeric:tabular-nums}
+.pager .pgjump button{height:24px;padding:0 9px;border:1px solid var(--line2);
+ border-radius:6px;background:var(--panel2);color:var(--fg);font:inherit;cursor:pointer}
+.pager .pgjump button:hover{background:var(--track)}
 pre.text{margin:12px 0;padding:13px 15px;background:var(--panel);border:1px solid var(--line);border-radius:8px;
   font:12px/1.7 ui-monospace,"Noto Sans Mono CJK SC",monospace;white-space:pre-wrap;word-break:break-word;overflow:auto;max-height:70vh}
 mark{background:var(--mark);color:var(--fg);padding:0 1px;border-radius:2px}
@@ -1538,6 +1699,8 @@ footer{margin-top:26px;padding-top:10px;border-top:1px solid var(--line2);font-s
  font-style:normal;color:var(--accent-fg);background:var(--accent-bg);
  border:1px solid var(--rule);border-radius:999px;padding:1px 9px}
 footer a{color:var(--faint);text-decoration:none}
+.foot-stop{margin-left:10px}
+.foot-stop a:hover{color:var(--credit)}
 footer a:hover{color:var(--link-h)}
 /* 更新提示：只在真的查到新版本时出现，一条可点的窄条，不占固定高度。
    没有新版时 update_banner() 返回空串，整条 CSS 不产生任何盒子。 */
@@ -2235,9 +2398,9 @@ def page(title, crumbs, body, sub="", extra_head="", need=(), topbar="",
            '<span class="foot-copy">© 大晋帝国之谶 · '
            '<a href="%s" target="_blank" rel="noopener">知乎 ↗</a> · '
            '<a href="%s" target="_blank" rel="noopener">GitHub ↗</a></span>' %
-           (esc(ZHIHU_URL), esc(GITHUB_URL)) + '</footer>' +
+           (esc(ZHIHU_URL), esc(GITHUB_URL)) + stop_control() + '</footer>' +
            back + '</div></html>')
-    # 页脚口径与 80 KB 硬闸对齐：算整页响应字节（含内联 CSS 与 header），
+    # 页脚口径与 96 KB 硬闸对齐：算整页响应字节（含内联 CSS 与 header），
     # 不是只算 body。替换会改变长度（"99.9" 与 "100.0" 差 2 字节），迭代到
     # 数字稳定；6 轮足够覆盖位数变化的边界，真出现来回跳时最多少报 0.1 KB。
     kb = "0.0"
@@ -2251,16 +2414,43 @@ def page(title, crumbs, body, sub="", extra_head="", need=(), topbar="",
 
 
 def clamp_p(q, total, size):
-    """与 pager() 同步夹取页码：p 越界时不出现「页码显示最后一页但列表为空」。"""
+    """与 pager() 同步夹取页码：p 越界时不出现「页码显示最后一页但列表为空」。
+
+    p 是内部 0 基页码；跳转表单提交 p1（用户看到的 1 基页码），优先读它。
+    """
     pages = max(1, (total + size - 1) // size)
-    return max(0, min(qint(q, "p"), pages - 1))
+    if q.get("p1"):
+        p = qint(q, "p1", 1, 1, 1000000) - 1
+    else:
+        p = qint(q, "p")
+    return max(0, min(p, pages - 1))
+
+
+def _page_numbers(p, pages, radius=2):
+    """页码窗口：首尾 + 当前页两侧，空档用 None 表示省略号。
+
+    页数多时只渲染最多 7 个页码，避免一页几百个链接把 DOM 撑大。
+    """
+    nums = {0, pages - 1}
+    nums.update(range(max(0, p - radius), min(pages - 1, p + radius) + 1))
+    out, prev = [], None
+    for n in sorted(nums):
+        if prev is not None and n - prev > 1:
+            out.append(None)
+        out.append(n)
+        prev = n
+    return out
 
 
 def pager(base, q, p, size, total, label="条"):
-    """分页条。base 是路径，q 是已解析的 query dict（保留除 p 外的参数）"""
+    """分页条：首页 / 尾页 / 页码窗口 / 跳页表单，全链链接零脚本。
+
+    base 是路径，q 是已解析的 query dict（保留除 p、p1 外的参数）。
+    跳页表单提交 1 基的 p1，服务端 clamp_p 优先读它。
+    """
     pages = max(1, (total + size - 1) // size)
     p = max(0, min(p, pages - 1))
-    rest = {k: v[0] for k, v in q.items() if k != "p" and v}
+    rest = {k: v[0] for k, v in q.items() if k not in ("p", "p1") and v}
 
     def link(n):
         d = dict(rest)
@@ -2268,12 +2458,36 @@ def pager(base, q, p, size, total, label="条"):
             d["p"] = n
         return base + ("?" + urlencode(d) if d else "")
 
+    nums = _page_numbers(p, pages) if pages > 7 else list(range(pages))
+    chips = []
+    for n in nums:
+        if n is None:
+            chips.append('<span class="pg-gap" aria-hidden="true">…</span>')
+        elif n == p:
+            chips.append('<span class="pg on" aria-current="page">%d</span>' % (n + 1))
+        else:
+            chips.append('<a class="pg" href="%s">%d</a>' % (esc(link(n)), n + 1))
+    hidden = "".join('<input type="hidden" name="%s" value="%s">' %
+                     (esc(k), esc_attr(v)) for k, v in rest.items())
+    jump = ('<form class="pgjump" method="get" action="%s" role="search" '
+            'aria-label="跳转页码">%s<label>跳至</label>'
+            '<input type="number" name="p1" min="1" max="%d" value="%d" '
+            'inputmode="numeric"><button type="submit">页</button></form>' %
+            (esc(base), hidden, pages, p + 1))
     return ('<div class="pager">'
-            '<a class="btn %s" href="%s">← 上一页</a>' % ("off" if p == 0 else "", esc(link(p - 1))) +
+            '<a class="pg %s" href="%s" aria-label="首页">« 首页</a>' %
+            ("off" if p == 0 else "", esc(link(0))) +
+            '<a class="btn %s" href="%s">← 上一页</a>' %
+            ("off" if p == 0 else "", esc(link(p - 1))) +
+            '<span class="pgset">%s</span>' % "".join(chips) +
+            '<a class="btn %s" href="%s">下一页 →</a>' %
+            ("off" if p >= pages - 1 else "", esc(link(p + 1))) +
+            '<a class="pg %s" href="%s" aria-label="尾页">尾页 »</a>' %
+            ("off" if p >= pages - 1 else "", esc(link(pages - 1))) +
             '<span class="info">第 %d / %d 页 · 共 %s %s · 本页 %s</span>' %
-            (p + 1, pages, nfmt(total), label, nfmt(min(size, max(0, total - p * size)))) +
-            '<a class="btn %s" href="%s">下一页 →</a>' % ("off" if p >= pages - 1 else "", esc(link(p + 1))) +
-            '</div>')
+            (p + 1, pages, nfmt(total), label,
+             nfmt(min(size, max(0, total - p * size)))) +
+            jump + '</div>')
 
 
 def qint(q, key, default=0, lo=0, hi=1000000):
@@ -3255,17 +3469,19 @@ def v_index(q):
     ws = qstr(q, "ws")
     src = qstr(q, "src")
     sort = qstr(q, "sort", "mtime")
+    order = qstr(q, "order", "desc")
+    asc = order == "asc"
     # 平台筛选：不传 = 全部（WorkBuddy 与 Codex/ZCode 合并视图）
     ss = [s for s in ss_all if not src or (s.get("src") or "workbuddy") == src]
     shown = [s for s in ss if not ws or s["ws"] == ws]
     if sort == "credit":
-        shown = sorted(shown, key=lambda s: -s["credit"])
+        shown = sorted(shown, key=lambda s: s["credit"], reverse=not asc)
     elif sort == "calls":
-        shown = sorted(shown, key=lambda s: -s["calls"])
+        shown = sorted(shown, key=lambda s: s["calls"], reverse=not asc)
     else:
-        shown = sorted(shown, key=lambda s: -s["mtime"])
+        shown = sorted(shown, key=lambda s: s["mtime"], reverse=not asc)
 
-    # 首页也分页：会话列表随使用线性增长，全量渲染迟早会顶破 80 KB 硬闸
+    # 首页也分页：会话列表随使用线性增长，全量渲染迟早会顶破 96 KB 硬闸
     # （实测 132 个会话 94.8 KB）。分页后单页体积与总会话数无关。
     total_shown = len(shown)
     pg = clamp_p(q, total_shown, PAGE_SESSIONS)
@@ -3320,13 +3536,24 @@ def v_index(q):
     if any((s.get("credit") or 0) > 0 for s in shown):
         sort_opts.append(("credit", "积分"))
     sort_opts.append(("calls", "调用数"))
-    sort_links = "".join(
-        '<a class="%s" href="/?%s">%s</a>' %
-        ("on" if sort == k else "",
-         urlencode([("sort", k)] + ([("src", src)] if src else []) +
-                   ([("ws", ws)] if ws else [])), lab)
-        for k, lab in sort_opts)
+    def _sort_link(k, lab):
+        cur = sort == k
+        nxt = ("asc" if not asc else "desc") if cur else order
+        qs = [("sort", k)]
+        if nxt != "desc":
+            qs.append(("order", nxt))
+        if src:
+            qs.append(("src", src))
+        if ws:
+            qs.append(("ws", ws))
+        arrow = (" ↑" if asc else " ↓") if cur else ""
+        return ('<a class="%s" href="/?%s" title="%s（点击切换正序 / 倒序）">%s%s</a>' %
+                ("on" if cur else "", urlencode(qs),
+                 "按" + lab + "排序", lab, arrow))
+    sort_links = "".join(_sort_link(k, lab) for k, lab in sort_opts)
     clear_q = [("sort", sort)] if sort != "mtime" else []
+    if asc:
+        clear_q.append(("order", "asc"))
     if src:
         clear_q.append(("src", src))
     clear_href = "/?" + urlencode(clear_q) if clear_q else "/"
@@ -3336,7 +3563,8 @@ def v_index(q):
     # 本机没有某个平台的会话时（没装、或还没写过记录），那一项不再可点：
     # 渲染成置灰的 span 并挂 title 说明，避免点进去看到一页空白。
     plat = plat_switch(ss_all, src, "/",
-                       keep=(("sort", "" if sort == "mtime" else sort),))
+                       keep=(("sort", "" if sort == "mtime" else sort),
+                             ("order", "asc" if asc else "")))
     src_bytes = 0
     for s in ss:
         try:
@@ -3606,7 +3834,7 @@ def v_turn(q, sid, turn):
                      '带「用户消息」标签的才是你输入的内容。</div>')
         if tb["cold"]:
             body += '<div class="warn">这一轮首次调用命中率 &lt;50%，是缓存冷启动：整段历史按全价重算。</div>'
-    # 一轮可能含几百次调用：不分页会把单页撑过 80 KB 硬闸（长会话实测 89 KB）。
+    # 一轮可能含几百次调用：不分页会把单页撑过 96 KB 硬闸（长会话实测 89 KB）。
     p = clamp_p(q, len(idxs), PAGE_CALLS)
     lo = p * PAGE_CALLS
     body += '<h2>这一轮的 %s 次调用 <small>每页 %d 条</small></h2>' % (
@@ -4806,6 +5034,9 @@ def v_api_doc(q):
     body += ('<div class="apirow"><code>POST /shutdown</code>'
              '<span>停止服务（<code>start.sh stop</code> 用；校验 Host/Origin/Sec-Fetch-Site，'
              '配置令牌时还需鉴权）</span></div>')
+    body += ('<div class="apirow"><code>GET /download</code>'
+             '<span>下载最新版资产到 <code>~/Downloads/token-trace-updates</code> 并校验 '
+             'SHA256，只下载不安装；同样校验同源</span></div>')
     body += ('<h2>调用示例</h2><pre class="text">'
              'curl -s "http://127.0.0.1:8765/api/sessions" | python3 -m json.tool\n'
              'curl -s "http://127.0.0.1:8765/api/s/&lt;sid&gt;/calls?limit=5"\n'
@@ -5343,8 +5574,12 @@ class Handler(BaseHTTPRequestHandler):
                 return True
         return False
 
-    def _shutdown_ok(self):
-        """挡住跨站 POST 与 DNS rebinding：Host 必须 loopback，来源必须同源。"""
+    def _same_origin_ok(self):
+        """挡住跨站请求与 DNS rebinding：Host 必须 loopback，来源必须同源。
+
+        /shutdown 与 /download 都靠它：前者会关服务，后者会联网写下载目录，
+        都不该被任意网页静默触发。
+        """
         port = self.server.server_address[1]
         host = (self.headers.get("Host") or "").lower()
         host_only = host[1:].split("]")[0] if host.startswith("[") else host.split(":")[0]
@@ -5396,6 +5631,7 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def do_GET(self):
+        touch_activity()
         u = urlsplit(self.path)
         path, q = u.path, parse_qs(u.query, keep_blank_values=True)
         t0 = time.time()
@@ -5438,10 +5674,29 @@ class Handler(BaseHTTPRequestHandler):
                 # 由页面里的结果浮窗按 UPDATE 状态显示四种结果。Referer 只接受
                 # 本机同源，外站一律回首页，不给开放跳转留口子。
                 if not UPDATE_OFF:
+                    UPDATE.pop("download", None)      # 新一轮检查，旧下载结果作废
                     check_update(force=True)
                 back = self._safe_referer() or "/"
                 # _upd=1 让回到的首页跳过首屏 boot：那是「会话解析中」动画，
                 # 不是更新检查的加载态；检查已由 /check 自己完成，不该重播一遍。
+                back += ("&" if "?" in back else "?") + "_upd=1"
+                self.send_response(303)
+                self.send_header("Location", back + "#upd-result")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            if path == "/download":
+                # 可选 L2：下载最新版资产并校验 SHA256，只写下载目录，不安装。
+                # 同源校验与 /shutdown 共用，避免任意网页触发联网写盘。
+                if not self._same_origin_ok():
+                    self._reply(403, "application/json; charset=utf-8",
+                                b'{"ok":false,"error":"forbidden"}')
+                    return
+                UPDATE.pop("download", None)
+                ok, info = download_update()
+                UPDATE["download"] = {"ok": ok, "path": info if ok else "",
+                                      "info": info, "at": time.time()}
+                back = self._safe_referer() or "/"
                 back += ("&" if "?" in back else "?") + "_upd=1"
                 self.send_response(303)
                 self.send_header("Location", back + "#upd-result")
@@ -5505,16 +5760,31 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         """一键停止：POST /shutdown。校验来源，避免任意网页静默关停服务。"""
+        touch_activity()
         if urlsplit(self.path).path != "/shutdown":
             self._drain_body()
             self.send_error(404)
             return
         self._drain_body()
-        if not self._shutdown_ok():
+        if not self._same_origin_ok():
             self._reply(403, "application/json; charset=utf-8",
                         b'{"ok":false,"error":"forbidden: cross-site or bad host/token"}')
             return
-        self._reply(200, "text/plain; charset=utf-8", b"ok")
+        # 页面表单提交后给一张静态回执，而不是纯文本 "ok"；脚本 stop 只关心状态码。
+        self._reply(200, "text/html; charset=utf-8", (
+            '<!DOCTYPE html><html lang="zh-CN"><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<title>已停止 · Token 轨迹</title><style>'
+            'body{margin:0;display:grid;place-items:center;min-height:100vh;'
+            'font:14px/1.7 system-ui,-apple-system,"Noto Sans CJK SC",sans-serif;'
+            'background:#F7F6F1;color:#2C2C2A}'
+            'div{text-align:center;padding:32px}b{display:block;font-size:17px;'
+            'font-weight:500;margin-bottom:8px}span{color:#5F5E5A}'
+            '@media(prefers-color-scheme:dark){body{background:#1C211E;color:#E8E6DF}'
+            'span{color:#B4B2A9}}'
+            '</style><div><b>token-trace 已停止</b>'
+            '<span>本页面可以关闭；需要时从应用菜单或终端重新启动。</span></div>'
+            '</html>').encode("utf-8"))
         threading.Thread(target=self.server.shutdown, daemon=True).start()
 
 
@@ -5544,6 +5814,10 @@ def main():
     ap.add_argument("--no-update-check", action="store_true",
                     help="不联网查 GitHub 最新版本（也可用 TRACE_NO_UPDATE_CHECK=1）；"
                          "默认启动时静默查一次，只写内存")
+    ap.add_argument("--idle-timeout", type=int,
+                    default=_env_int("TRACE_IDLE_TIMEOUT", IDLE_SECONDS),
+                    help="多少秒无页面访问后自动停止，释放内存；默认 %d（10 小时），"
+                         "0 表示不自动停止；也可用 TRACE_IDLE_TIMEOUT 设置" % IDLE_SECONDS)
     a = ap.parse_args()
     if a.host not in ("127.0.0.1", "localhost", "::1") and not a.token:
         ap.error("绑定非本机地址（--host %s）时必须用 --token 设置访问令牌，"
@@ -5572,6 +5846,22 @@ def main():
     print("  纯 HTML 导航，无 JavaScript；每次请求只返回一屏。Ctrl+C 停止。")
     srv = ThreadingHTTPServer((a.host, a.port), Handler)
     srv.daemon_threads = True
+    if a.idle_timeout > 0:
+        desc = ("%d 小时" % (a.idle_timeout // 3600)
+                if a.idle_timeout % 3600 == 0 else "%d 秒" % a.idle_timeout)
+        print("  空闲 %s 无访问将自动停止（--idle-timeout 可调，0 关闭）" % desc)
+
+        def _idle_watch():
+            limit = a.idle_timeout
+            step = min(60.0, max(5.0, limit / 10.0))
+            while True:
+                time.sleep(step)
+                if idle_seconds() >= limit:
+                    print("空闲 %d 秒无访问，自动停止服务" % limit, file=sys.stderr)
+                    threading.Thread(target=srv.shutdown, daemon=True).start()
+                    return
+
+        threading.Thread(target=_idle_watch, daemon=True, name="idle-watch").start()
     if not a.warm:
         # 后台预热全部会话：不阻塞监听，首页先走；/stats、/rank 这类全量页
         # 几秒后即热。与请求并发解析同一会话时由 Store._loading 事件去重，

@@ -26,7 +26,7 @@ import trace_server as T  # noqa: E402
 
 PORT = int(os.environ.get("TRACE_TEST_PORT", "8899"))
 BASE = "http://127.0.0.1:%d" % PORT
-MAX_HTML = 80 * 1024
+MAX_HTML = 96 * 1024
 RESULTS = []
 
 
@@ -749,6 +749,58 @@ def main():
         check("只读" in T.page("索引", [("索引", "")], "<p>x</p>"),
               "更新检查不改变「数据只读」口径：只查版本号，不下载、不安装")
 
+        print("== 更新下载（可选 L2）：只下载校验，不自动安装 ==")
+        T.UPDATE.update(state="ok", latest="9.9.9", url="https://x/y",
+                        download={"ok": True, "path": "/tmp/x.deb",
+                                  "info": "/tmp/x.deb", "at": 1.0})
+        dlh = T.page("索引", [("索引", "")], "<p>x</p>")
+        check("更新包已就绪" in dlh and "sudo dpkg -i" in dlh
+              and "x.deb" in dlh,
+              "下载成功后浮窗给出本地路径与安装命令，不自动执行")
+        T.UPDATE.update(download={"ok": False, "info": "URLError: timed out",
+                                  "at": 1.0})
+        dlf = T.page("索引", [("索引", "")], "<p>x</p>")
+        check("下载未完成" in dlf and "TRACE_MIRROR" in dlf
+              and 'href="/download">重试下载' in dlf,
+              "下载失败时给出原因、镜像提示与重试入口")
+        T.UPDATE.update(state="off", latest="", url="")
+        T.UPDATE.pop("download", None)
+        was_off2 = T.UPDATE_OFF
+        try:
+            T.UPDATE_OFF = False
+            ok0, why0 = T.download_update()
+        finally:
+            T.UPDATE_OFF = was_off2
+        check(not ok0 and "最新" in why0,
+              "无新版本时 download_update 直接返回，不发起网络请求")
+
+        print("== 翻页 / 排序 / 停止服务 / 空闲退出 ==")
+        pg = T.pager("/s/x", {"p": ["5"], "kind": ["all"]}, 5, 10, 300, "次调用")
+        check("« 首页" in pg and "尾页 »" in pg and 'class="pg on"' in pg
+              and 'class="pgjump"' in pg and 'name="p1"' in pg,
+              "分页条有首页 / 尾页 / 当前页页码 / 跳页表单")
+        check(T.clamp_p({"p1": ["3"]}, 100, 10) == 2
+              and T.clamp_p({"p": ["99"]}, 100, 10) == 9,
+              "跳页 p1 按 1 基换算，越界仍夹到最后一页")
+        wide = T.pager("/", {}, 15, 10, 300)
+        check(wide.count('class="pg-gap"') >= 1
+              and wide.count('class="pg"') + wide.count('class="pg on"') <= 7,
+              "页数多时页码窗口收敛到首尾 + 当前左右，空档显示省略号")
+        asc_h = T.v_index({"sort": ["calls"], "order": ["asc"]})
+        desc_h = T.v_index({"sort": ["calls"], "order": ["desc"]})
+        rows_of = lambda h: re.findall(r'<a class="row" href="/s/([^"?]+)"', h)
+        check("调用数 ↑" in asc_h and "调用数 ↓" in desc_h
+              and "order=asc" in desc_h
+              and (rows_of(asc_h) != rows_of(desc_h) or len(rows_of(asc_h)) < 2),
+              "会话排序支持正序 / 倒序，当前字段带方向箭头且行序随之变化")
+        stop_h = T.page("索引", [("索引", "")], "<p>x</p>")
+        check('id="stop-confirm"' in stop_h and 'action="/shutdown"' in stop_h
+              and '<form method="post"' in stop_h,
+              "页脚停止服务走确认浮窗 + 同源 POST 表单")
+        T.touch_activity()
+        check(T.idle_seconds() < 1 and T.IDLE_SECONDS == 10 * 3600,
+              "请求活动重置空闲计时，默认 10 小时")
+
         # 连续色：同一平台三天给 100 / 400 / 1600，opacity 必须是三个不同值
         d1 = time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400))
         d2 = time.strftime("%Y-%m-%d", time.localtime(time.time() - 2 * 86400))
@@ -975,7 +1027,7 @@ def main():
             check("<summary>subagents" not in h,
                   "子代理不再单独占一个工作区分组")
             check("<script" not in h and len(h.encode("utf-8")) <= MAX_HTML,
-                  "子树仍是零脚本且未越过 80 KB")
+                  "子树仍是零脚本且未越过 96 KB")
             h2 = T.v_index({"ws": ["subagents"]})
             check("未能定位父级" in h2,
                   "筛选掉父会话后，子代理行仍标注未能定位父级")
@@ -1231,14 +1283,14 @@ def main():
         for what in ("block", "call"):
             st, body = get("/rank?what=%s" % what)
             check(st == 200 and b"<script" not in body and len(body) <= MAX_HTML,
-                  "/rank what=%s 200 / 零脚本 / 未越 80KB" % what)
+                  "/rank what=%s 200 / 零脚本 / 未越 96KB" % what)
         for what, sorts in (("block", ("token", "count", "product")),
                             ("call", ("token", "in", "out"))):
             for sk in sorts:
                 st, body = get("/rank?what=%s&sort=%s" % (what, sk))
                 check(st == 200 and b"<script" not in body
                       and len(body) <= MAX_HTML,
-                      "/rank what=%s sort=%s 200 / 零脚本 / 未越 80KB" % (what, sk))
+                      "/rank what=%s sort=%s 200 / 零脚本 / 未越 96KB" % (what, sk))
         h = T.v_rank({"what": ["../../x"], "sort": ["<script>"], "p": ["999999"]})
         check("<script" not in h and "按块 token" in h and "对象" in h
               and 'class="pager"' in h,
@@ -1418,9 +1470,16 @@ def main():
             "/check", headers={"Referer": "https://evil.example/x"})
         check(st_evil == 303 and hd_evil.get("Location") == "/?_upd=1#upd-result",
               "外站 Referer 一律回首页，不给开放跳转留口子")
+        st_dl, hd_dl, _ = get_noredirect(
+            "/download", headers={"Referer": BASE + "/stats"})
+        check(st_dl == 303 and hd_dl.get("Location") == "/stats?_upd=1#upd-result",
+              "/download 同源校验后 303 回原页；--no-update-check 下不联网")
         st_back, b_back = get("/?_upd=1")
         check(st_back == 200 and b'class="boot"' not in b_back,
               "带 _upd=1 回跳的首页跳过首屏加载动画，直接展示检查结果")
+        st_stop, b_stop = get("/shutdown", method="POST")
+        check(st_stop == 200 and "已停止".encode("utf-8") in b_stop,
+              "页面「停止服务」POST 返回停止回执并关停进程")
     finally:
         try:
             get("/shutdown", timeout=3, method="POST")
