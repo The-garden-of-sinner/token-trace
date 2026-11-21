@@ -37,11 +37,16 @@
 **Linux**（Debian / Ubuntu / 银河麒麟 / 统信 UOS / Deepin，装完有应用菜单项）
 
 ```bash
-V=1.3.1   # 换成 Release 页上的最新版本号
+V=2.1.1   # 换成 Release 页上的最新版本号
 curl -fLO "https://github.com/The-garden-of-sinner/token-trace/releases/download/v$V/token-trace_${V}_all.deb"
 sudo dpkg -i "token-trace_${V}_all.deb"
 token-trace
 ```
+
+> **访问不了 GitHub** 时，给下载 URL 加一个镜像前缀即可，例如
+> `https://ghfast.top/https://github.com/.../token-trace_${V}_all.deb`；装好后若想在页面里
+> 直接检查 / 下载更新，用 `TRACE_MIRROR=https://ghfast.top token-trace` 启动，检查与下载
+> 都走镜像。镜像由第三方提供，只改变下载来源，`SHA256SUMS` 校验照做。
 
 **Windows**（单文件、自包含，不需要管理员权限）
 
