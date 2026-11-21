@@ -1122,12 +1122,17 @@ def main():
         singles = [s0 for s0 in T.STORE.sessions() if len(_real_models(s0)) <= 1]
         if multis:
             hm = T.v_session({}, multis[0]["id"])
-            check("个模型</b>之间切换过" in hm and "缓存命中率" in hm,
-                  "用过多个模型的会话提示「换模型要重建缓存」并给当前命中率（%d 个会话）"
+            check("本会话切换过 <b>%d 个模型</b>" % len(_real_models(multis[0])) in hm
+                  and "换模型会重建提示缓存" in hm,
+                  "多模型会话一行提示「切换过 N 个模型 + 换模型重建缓存 + 命中率」（%d 个会话）"
                   % len(multis))
+            # 提示要短：一条 warn 不该再写三句解释，超出即视为文案回涨
+            seg = hm[hm.find("本会话切换过"):]
+            seg = seg[:seg.find("</div>")] if "</div>" in seg else seg
+            check(len(seg) < 220, "模型切换提示保持一行（%d 字符，阈值 220）" % len(seg))
         if singles:
             hs = T.v_session({}, singles[0]["id"])
-            check("个模型</b>之间切换过" not in hs,
+            check("本会话切换过" not in hs,
                   "单模型会话不出现模型切换提示，不制造噪音")
 
         print("== 命中块折叠不丢块行 ==")
@@ -1313,6 +1318,17 @@ def main():
               % gs["cost"])
         check("成本构成" in T.v_stats({}),
               "统计页 KPI 显示成本构成占比，而不只给一个总额")
+        tl = gs["tools"]
+        check(tl and abs(sum(v["fresh"] for v in tl.values()) - gs["miss"])
+              <= max(1.0, gs["miss"] * 0.001)
+              and abs(sum(v["cost"] for v in tl.values()) - gs["cost"]) < 1e-6,
+              "按工具归因的未命中 / 估算之和与全局一致（%d 个工具）" % len(tl))
+        check("最终回答" in tl and not any("×" in k for k in tl),
+              "工具名归一：并行调用 Bash×2 并入 Bash，空工具并入「最终回答」")
+        vs = T.v_stats({})
+        check('<details class="attrib"' in vs and "未命中 token 归因" in vs
+              and 'class="row hd"' in vs and "占未命中" in vs,
+              "统计页把归因折叠成一行摘要（details），展开才是逐工具表格")
 
         print("== 逐块 / 逐调用排行 /rank ==")
         for what in ("block", "call"):

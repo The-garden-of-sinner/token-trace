@@ -823,6 +823,19 @@ def display_model(name):
     return out
 
 
+def tool_bucket(name):
+    """工具名归一到主工具：并行调用记成 `Bash×2`，空值等同「最终回答」。
+
+    不归一会把 Bash 拆成 Bash / Bash×2 / Bash×3 三行，归因表就散成十几行、
+    最大来源被稀释；`最终回答` 与空串是同一件事（该轮没有下一次工具调用）。
+    """
+    t = (name or "").strip()
+    if not t:
+        return "最终回答"
+    i = t.find("×")
+    return t[:i] if i > 0 else t
+
+
 def call_brief(c):
     """调用列表用的轻量字典，不含上下文与输出正文"""
     r = (c["hit"] / c["pin"]) if c["pin"] else None
@@ -898,6 +911,7 @@ def global_stats(ss=None, tag=""):
            "wb_miss": 0,
            "cost": 0.0, "unpriced": 0,
            "cost_fresh": 0.0, "cost_cache": 0.0, "cost_out": 0.0,
+           "tools": {},
            "cold": [], "top_calls": [], "top_blocks": [], "costly_blocks": []}
     for s in ss:
         d = STORE.get(s["id"])
@@ -929,6 +943,19 @@ def global_stats(ss=None, tag=""):
                 out["cost_fresh"] += parts[0]
                 out["cost_cache"] += parts[1]
                 out["cost_out"] += parts[2]
+            # 按工具归因：一次遍历顺带累加，不额外扫库。fresh 是这次调用真正
+            # 按未命中价付钱的输入量，比 pin 更能指出「谁在往上下文里灌东西」。
+            tb = out["tools"].get(tool_bucket(c["tool"]))
+            if tb is None:
+                tb = out["tools"][tool_bucket(c["tool"])] = {
+                    "calls": 0, "pin": 0, "hit": 0, "pout": 0,
+                    "fresh": 0, "cost": 0.0}
+            tb["calls"] += 1
+            tb["pin"] += c["pin"]
+            tb["hit"] += c["hit"]
+            tb["pout"] += c["pout"]
+            tb["fresh"] += max(0, c["pin"] - c["hit"])
+            tb["cost"] += cost or 0.0
             ranked.append((cost or 0.0, c))
         for cost, c in sorted(ranked, key=lambda x: -x[0])[:5]:
             out["top_calls"].append({"sid": s["id"], "ws": s["ws"], "seq": c["seq"],
@@ -1648,6 +1675,21 @@ button:hover,.btn:hover{border-color:var(--accent);color:var(--link-h);backgroun
 .row .num.credit{color:var(--credit);font-weight:500}
 .row.bad{border-left:3px solid var(--neg2)}
 .row.warn2{border-left:3px solid var(--warn)}
+.attrib{margin:0 0 16px;border:1px solid var(--line);border-radius:9px;
+ background:var(--panel2);overflow:hidden}
+.attrib>summary{list-style:none;cursor:pointer;display:flex;flex-wrap:wrap;
+ align-items:center;gap:5px;padding:8px 12px;font-size:12px;color:var(--muted)}
+.attrib>summary::-webkit-details-marker{display:none}
+.attrib>summary::before{content:"▸";color:var(--faint);font-size:10px}
+.attrib[open]>summary::before{content:"▾"}
+.attrib>summary b{color:var(--fg);font-weight:600}
+.attrib>summary small{margin-left:auto;color:var(--faint);font-size:11px}
+.attrib-in{padding:0 12px 10px}
+.attrib .row{background:var(--bg);border-color:var(--line2)}
+.attrib .row:hover{border-color:var(--line2);background:var(--bg)}
+.attrib .row.hd{background:none;border-color:transparent;padding:1px 11px;
+ margin-bottom:2px;font-size:10.5px;color:var(--faint)}
+.attrib .row.hd .num{font-size:10.5px;color:var(--faint)}
 .idx{color:var(--faint);font-size:11.5px;min-width:38px;font-variant-numeric:tabular-nums}
 .bar{height:9px;background:var(--track);border-radius:3px;overflow:hidden;display:flex;min-width:60px}
 .bar i{display:block;height:100%}
@@ -2720,6 +2762,45 @@ def compose_bar(comp):
             (svg, kh(total), "".join(rows)))
 
 
+def tool_attrib(tools):
+    """按工具归因未命中 token。默认折叠成一行摘要，点开才展开表格。
+
+    不新开卡片：/stats 已经很长，这里只在「最贵的调用」之前占一行，
+    摘要直接给出最大来源与占比，扫一眼即可，不展开也不丢结论。
+    """
+    if not tools:
+        return ""
+    total = sum(v["fresh"] for v in tools.values()) or 1
+    ranked = sorted(tools.items(), key=lambda kv: (-kv[1]["fresh"], kv[0]))
+    top, rest = ranked[:8], ranked[8:]
+    if rest:
+        agg = {"calls": 0, "pin": 0, "hit": 0, "pout": 0, "fresh": 0, "cost": 0.0}
+        for _, v in rest:
+            for k in agg:
+                agg[k] += v[k]
+        top = top + [("其他 %d 个工具" % len(rest), agg)]
+    cols = "--cols:1fr 58px 86px 92px 74px 64px 76px"
+    cells = "".join(
+        '<div class="row" style="%s"><span class="grow">%s</span>'
+        '<span class="num">%s</span><span class="num">%s</span>'
+        '<span class="num">%s</span><span class="num">%.1f%%</span>'
+        '<span class="num">%.1f%%</span><span class="num credit">¥%.2f</span></div>'
+        % (cols, esc(name), nfmt(v["calls"]), nfmt(v["pin"]), nfmt(v["fresh"]),
+           v["fresh"] / total * 100,
+           (v["hit"] / v["pin"] * 100) if v["pin"] else 0.0, v["cost"])
+        for name, v in top)
+    head, hv = ranked[0]
+    return ('<details class="attrib"><summary>未命中 token 归因 · '
+            '<b>%s</b> 占 <b>%.1f%%</b>'
+            '<small>按工具累计，只统计未命中部分</small></summary>'
+            '<div class="attrib-in">'
+            '<div class="row hd" style="%s"><span>工具</span>'
+            '<span class="num">调用</span><span class="num">输入</span>'
+            '<span class="num">未命中</span><span class="num">占未命中</span>'
+            '<span class="num">命中率</span><span class="num">估算</span></div>'
+            '%s</div></details>' % (esc(head), hv["fresh"] / total * 100, cols, cells))
+
+
 def reserve_bar(st):
     """归档原文里「仍可能被带上」与「压缩后已退役」的比例，斜纹表示已退役。"""
     total = st["chars"] or 1
@@ -3781,9 +3862,8 @@ def v_session(q, sid):
         shown = "、".join(esc(x) for x in mnames[:4])
         if len(mnames) > 4:
             shown += " 等"
-        body += ('<div class="warn">本会话在 <b>%d 个模型</b>之间切换过（%s）：'
-                 '每次换模型都会重建提示缓存，之前已缓存的上下文要按未命中的价格重读一次。'
-                 '当前整体缓存命中率 <b>%.1f%%</b>，同一模型跑完通常会更高。</div>' %
+        body += ('<div class="warn">本会话切换过 <b>%d 个模型</b>（%s），'
+                 '换模型会重建提示缓存，命中率 <b>%.1f%%</b>。</div>' %
                  (len(mnames), shown, st["rate"] * 100))
     if st["compactions"]:
         body += ('<div class="warn">本会话发生过 <b>%d 次上下文压缩</b>：'
@@ -4593,6 +4673,7 @@ def v_stats(q):
              (ms, st["sessions"],
               ('，<a href="/s/%s/compact">可在压缩事件页查看明细</a>' % esc(compact_sid))
               if compact_sid else ''))
+    body += tool_attrib(st["tools"])
     body += '<h2>最贵的 20 次调用 <small>按刊例价估算 · 非账单</small></h2>'
     for x in st["top_calls"]:
         body += ('<a class="row bad" href="/s/%s/c/%d" style="--cols:64px 1fr 104px 84px 84px">'
