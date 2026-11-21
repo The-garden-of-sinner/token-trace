@@ -782,6 +782,8 @@ def main():
         check(T.clamp_p({"p1": ["3"]}, 100, 10) == 2
               and T.clamp_p({"p": ["99"]}, 100, 10) == 9,
               "跳页 p1 按 1 基换算，越界仍夹到最后一页")
+        check(T.pager("/x", {}, 0, 40, 40) == "" and T.pager("/x", {}, 0, 40, 41),
+              "只有一页时不渲染分页条：会话页最多挂五个，不留禁用按钮与跳页表单")
         wide = T.pager("/", {}, 15, 10, 300)
         check(wide.count('class="pg-gap"') >= 1
               and wide.count('class="pg"') + wide.count('class="pg on"') <= 7,

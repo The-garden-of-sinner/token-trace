@@ -2450,6 +2450,10 @@ def pager(base, q, p, size, total, label="条"):
     """
     pages = max(1, (total + size - 1) // size)
     p = max(0, min(p, pages - 1))
+    if pages <= 1:
+        # 只有一页时不渲染分页条：四个禁用按钮 + 单页码 + 跳页表单全是死控件，
+        # 而会话页一次能挂五个分页条（调用 / 轮次 / 块 / 上下文趋势），纯噪音。
+        return ""
     rest = {k: v[0] for k, v in q.items() if k not in ("p", "p1") and v}
 
     def link(n):
