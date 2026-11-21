@@ -2055,16 +2055,20 @@ CSS_INDEX = """
    双保险，绝不会永久盖住内容。只在首页注入。 */
 .boot{position:fixed;inset:0;z-index:60;display:flex;flex-direction:column;
  align-items:center;justify-content:center;background:var(--bg);
- opacity:0;visibility:hidden;pointer-events:none;
+ visibility:hidden;pointer-events:none;
  animation:boot-hold .85s var(--ease-in) both}
+/* 遮罩本身不做 opacity 动画：整屏 65 万像素的不透明度动画在这台集显机器上
+   实测把首页从 47 fps 拖到 33 fps（FCP 也从 460ms 推到 780ms）。遮罩底色与
+   页面底色同为 var(--bg)，到点直接 visibility:hidden 看不出跳变，淡出交给
+   中间那撮文字 / logo 自己（它们只占 44px，合成代价可忽略）。 */
 @keyframes boot-hold{
- 0%,76%{opacity:1;visibility:visible}
- 100%{opacity:0;visibility:hidden}}
+ 0%,76%{visibility:visible}
+ 100%{visibility:hidden}}
 .boot-in{display:flex;flex-direction:column;align-items:center;
  animation:boot-out .85s var(--ease-in) both}
 @keyframes boot-out{
- 0%,76%{transform:none}
- 100%{transform:translateY(-7px) scale(.985)}}
+ 0%,76%{transform:none;opacity:1}
+ 100%{transform:translateY(-7px) scale(.985);opacity:0}}
 /* 灰边 + 彩循环：灰环静态，彩环是 conic-gradient 经 mask 挖空的圆环，整体只
    做 rotate。只提升这一个 44px 小层，不给全屏层 will-change（那会多一层
    全屏纹理）。中心一枚小方块呼应月历格子。 */
@@ -3758,6 +3762,29 @@ def v_session(q, sid):
         items.append(("累计积分", "%.2f" % st["credit"]))
     items.append(("冷启动断点", nfmt(st["cold"])))
     body = kpi(items)
+    # 模型切换提示：换模型等于换缓存池，之前缓存的上下文要按未命中价重读一遍。
+    # 实测 132 个会话里 38 个切过模型（最多 5 个），这些会话命中率明显偏低
+    # （Ling 71.5% / gemini-3.8-flash 80.7%），值得在会话页直接点出来。
+    mnames, mseen = [], set()
+    for c in d["calls"]:
+        raw = c.get("model") or ""
+        key = G.canon_model(raw)
+        if not key or key in mseen:
+            continue
+        nm = display_model(raw) or raw
+        # 占位名不算一个模型：unknown / ? 是解析兜底值，不是用户真的切过
+        if nm.strip().lower() in ("unknown", "?", "none", "default", "n/a"):
+            continue
+        mseen.add(key)
+        mnames.append(nm)
+    if len(mnames) > 1:
+        shown = "、".join(esc(x) for x in mnames[:4])
+        if len(mnames) > 4:
+            shown += " 等"
+        body += ('<div class="warn">本会话在 <b>%d 个模型</b>之间切换过（%s）：'
+                 '每次换模型都会重建提示缓存，之前已缓存的上下文要按未命中的价格重读一次。'
+                 '当前整体缓存命中率 <b>%.1f%%</b>，同一模型跑完通常会更高。</div>' %
+                 (len(mnames), shown, st["rate"] * 100))
     if st["compactions"]:
         body += ('<div class="warn">本会话发生过 <b>%d 次上下文压缩</b>：'
                  '历史被摘要替换，%s 字旧块已退役（仍可查全文，但不再计入后续调用）。'

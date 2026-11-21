@@ -585,7 +585,7 @@ def main():
         check('<script' not in boot and '服务端渲染' in boot,
               "启动层零 JS：撤除交给 CSS 文档时间线与绘制节奏，页脚口径不变")
         check('.boot{position:fixed' in T.CSS_INDEX
-              and 'opacity:0;visibility:hidden;pointer-events:none' in T.CSS_INDEX
+              and 'visibility:hidden;pointer-events:none' in T.CSS_INDEX
               and 'animation:boot-hold .85s' in T.CSS_INDEX
               and '@media(prefers-reduced-motion:reduce){.boot{display:none}}' in T.CSS_INDEX
               and '@media print{.boot{display:none}}' in T.CSS_INDEX,
@@ -1107,6 +1107,28 @@ def main():
         check(st == 200 and body.count(b'class="row') > 0,
               "?kind=user 越界分页仍有数据行（%d / %d 行）"
               % (st, body.count(b'class="row')))
+
+        print("== 会话页：模型切换提示 ==")
+
+        def _real_models(s0):
+            out = set()
+            for c in T.STORE.get(s0["id"])["calls"]:
+                nm = T.display_model(c.get("model") or "").strip()
+                if nm and nm.lower() not in ("unknown", "?", "none", "default", "n/a"):
+                    out.add(nm.lower())
+            return out
+
+        multis = [s0 for s0 in T.STORE.sessions() if len(_real_models(s0)) > 1]
+        singles = [s0 for s0 in T.STORE.sessions() if len(_real_models(s0)) <= 1]
+        if multis:
+            hm = T.v_session({}, multis[0]["id"])
+            check("个模型</b>之间切换过" in hm and "缓存命中率" in hm,
+                  "用过多个模型的会话提示「换模型要重建缓存」并给当前命中率（%d 个会话）"
+                  % len(multis))
+        if singles:
+            hs = T.v_session({}, singles[0]["id"])
+            check("个模型</b>之间切换过" not in hs,
+                  "单模型会话不出现模型切换提示，不制造噪音")
 
         print("== 命中块折叠不丢块行 ==")
         cd0 = T.STORE.get(sid)

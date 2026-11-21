@@ -27,6 +27,10 @@ T0 = int(BASE.timestamp() * 1000)
 
 MODEL = "deepseek-v4.1-flash"          # 平台公开的模型 ID
 MODEL_NAME = "DeepSeek V4.1 Flash"
+# 演示「会话中途换模型」：换模型等于换提示缓存池，会话页会据此给出提示。
+# 只给主会话后几轮换，token 口径不变（usage 仍按同一序列算）。
+ALT_MODEL = "glm-5.3"
+ALT_NAME = "GLM-5.3"
 # 同一底层模型的展示名写法变体：真库里随客户端版本出现过这三种，演示数据也要
 # 覆盖，才能验证 call_brief / model_display_map 把它们收敛成同一个展示名。
 MODEL_NAME_VARIANTS = (
@@ -393,6 +397,7 @@ def Rf(path, out, think, say):
 MAIN = dict(
     sid=sid_of("order-service-p99"),
     day_off=0,
+    alt_after=4,                           # 第 4 轮起换成 GLM-5.3，演示模型切换提示
     title="订单服务 /checkout P99 延迟排查：慢查询与连接池",
     turns=[
         dict(q="线上 /v1/checkout 的 P99 从 180ms 涨到 1.2s，昨晚 22:10 左右开始，先帮我看下慢在哪",
@@ -684,12 +689,15 @@ def usage(n):
                 total_tokens=pin + out, credit=round(credit, 4)), n + 1
 
 
-def prov(n, final=False):
+def prov(n, final=False, alt=False):
     u, nxt = usage(n)
     # 2/3 用标准展示名、1/3 轮换写法变体：真库同一 deepseek-v4.1-flash 就有
     # 这几种写法，用于验证 call_brief / model_display_map 收敛到同一个展示名。
     name = MODEL_NAME if n % 3 else MODEL_NAME_VARIANTS[1 + (n // 3) % 3]
-    return ({"model": MODEL, "requestModelId": MODEL, "requestModelName": name,
+    mid = MODEL
+    if alt:
+        mid, name = ALT_MODEL, ALT_NAME
+    return ({"model": mid, "requestModelId": mid, "requestModelName": name,
              "agent": "cli", "conversationRequestId": "req-" + hid(12),
              "rawUsage": u}, nxt)
 
@@ -702,7 +710,9 @@ def write_session(s, idx, counter):
     rows = [{"type": "session-meta", "sessionId": s["sid"], "timestamp": ts,
              "cwd": CWD, "aiTitle": s["title"]}]
     n = counter
+    alt_from = s.get("alt_after")          # 第几轮起改用另一个模型（演示跨模型会话）
     for ti, turn in enumerate(s["turns"], 1):
+        alt = alt_from is not None and ti >= alt_from
         ts += 900
         # 让部分演示会话跨自然日：在指定轮前跳 26 小时（无论本地时区是哪一档，
         # 都足以落到下一天），这样 scan_all 的 days 会分成两个日期分桶，
@@ -723,7 +733,7 @@ def write_session(s, idx, counter):
         rows.append(up)
         ts += 1100
         for ci, c in enumerate(turn["calls"], 1):
-            pprov, n = prov(n)
+            pprov, n = prov(n, alt=alt)
             call_id = "call_%s_%d_%d" % (hid(8), ti, ci)
             rows.append({"type": "function_call", "name": c["tool"], "callId": call_id,
                          "arguments": json.dumps(c["args"], ensure_ascii=False),
@@ -737,7 +747,7 @@ def write_session(s, idx, counter):
                          "callId": call_id, "timestamp": ts,
                          "output": {"text": c["out"]}})
             ts += 760
-            aprov, n = prov(n)
+            aprov, n = prov(n, alt=alt)
             rows.append({"type": "message", "role": "assistant", "timestamp": ts,
                          "content": [{"type": "text", "text": c["say"]}],
                          "providerData": aprov})
