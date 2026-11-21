@@ -1064,10 +1064,11 @@ def main():
 
         T.G.build = _count_build
         try:
-            # 清空会话缓存：第一次渲染必须把全部会话各解析一遍（且只一遍），
+            # 清空会话缓存与汇总缓存：第一次渲染必须把全部会话各解析一遍（且只一遍），
             # 第二次应当全部命中缓存 —— 只断言 cap 大小不足以证明这一点。
             with T.STORE.lock:
                 T.STORE._cache.clear()
+            T._GS_CACHE.clear()
             T.v_stats({})
             first = n_build["n"]
             T.v_stats({})
@@ -1278,8 +1279,18 @@ def main():
         # 真实库携带块通常远超 20，演示库不足 20；只要求非空、至多 20、降序且口径自洽。
         check(0 < len(cb) <= 20
               and all(cb[i]["cost"] >= cb[i + 1]["cost"] for i in range(len(cb) - 1))
-              and all(x["cost"] == x["est"] * x["users"] for x in cb),
-              "最贵的块按「估算 token × 被携带次数」降序（%d 条）" % len(cb))
+              and all(x["cost"] == x["est"] * x["users"] for x in cb)
+              and all(x["carry_tokens"] == x["cost"] for x in cb),
+              "最贵的块按「估算 token × 被携带次数」降序（%d 条），并给自解释别名 carry_tokens"
+              % len(cb))
+        gs = T.global_stats()
+        check(abs(gs["cost"] - (gs["cost_fresh"] + gs["cost_cache"]
+                                + gs["cost_out"])) < 1e-6
+              and all(gs[k] >= 0 for k in ("cost_fresh", "cost_cache", "cost_out")),
+              "成本拆成未命中 / 缓存读 / 输出三段，三段之和等于总估算（¥%.2f）"
+              % gs["cost"])
+        check("成本构成" in T.v_stats({}),
+              "统计页 KPI 显示成本构成占比，而不只给一个总额")
 
         print("== 逐块 / 逐调用排行 /rank ==")
         for what in ("block", "call"):

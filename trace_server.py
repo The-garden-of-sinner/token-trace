@@ -793,15 +793,34 @@ def model_display_map():
     return _MODEL_MAP["val"]
 
 
+_DISP_CACHE = {"gen": None, "val": {}}
+
+
 def display_model(name):
     """把逐调用的原始模型名换成全库统一展示名；查不到就原样返回。
 
     gen_trace 对没有 providerData 模型名的调用兜底成字面量 "?"，网页里显示
     无妨，但给分析程序会变成一个假类别；API 层统一收敛成空串（见 docs/API.md）。
+
+    逐调用记录里原始写法只有十来种，但 /api/analytics/calls 一次要过一万多条，
+    每条都跑一次 _MODEL_MAP 查表 + 正则归一（外加取一次 STORE 锁）实测吃掉
+    四成耗时。这里按「原始名 → (索引代际, 展示名)」做记忆化：命中路径只有一次
+    dict 读取，不碰 STORE 锁；代际（_MODEL_MAP 的 key）变了就自动不命中，
+    不会拿旧映射套新数据。
     """
     if not name or name == "?":
         return ""
-    return model_display_map().get(G.canon_model(name), name or "")
+    ent = _DISP_CACHE["val"].get(name)
+    gen = _MODEL_MAP["key"]
+    if ent is not None and ent[0] is gen:
+        return ent[1]
+    m = model_display_map()
+    gen = _MODEL_MAP["key"]
+    c = _DISP_CACHE["val"]
+    out = m.get(G.canon_model(name), name)
+    if len(c) < 4096:
+        c[name] = (gen, out)
+    return out
 
 
 def call_brief(c):
@@ -856,14 +875,29 @@ def _pick_src(src):
     return [s for s in ss if (s.get("src") or "workbuddy") == src]
 
 
-def global_stats(ss=None):
-    ss = STORE.sessions() if ss is None else ss
+_GS_CACHE = {}
+
+
+def global_stats(ss=None, tag=""):
+    """全库汇总。按「索引对象身份 + 平台 tag」缓存：索引没变就直接复用。
+
+    一次全量要遍历 1.7 万次调用并逐次算价，≈280 ms；/stats 与 /api/stats
+    是同一次计算的两个出口，不缓存等于每次打开都重算一遍。STORE.sessions()
+    在数据未变时返回同一个列表对象（显式 refresh 才换新），所以身份比较就是
+    失效信号，与 rank_rows / rank_sorted 的缓存口径一致。
+    """
+    base = STORE.sessions()
+    ss = base if ss is None else ss
+    hit = _GS_CACHE.get(tag)
+    if hit is not None and hit[0] is base:
+        return hit[1]
     out = {"sessions": len(ss), "workspaces": len(set(s["ws"] for s in ss)),
            "calls": 0, "turns": 0, "blocks": 0, "chars": 0,
            "visible_peak_sum": 0, "compactions": 0,
            "pin": 0, "hit": 0, "pout": 0, "credit": 0, "compose": Counter(),
            "wb_miss": 0,
            "cost": 0.0, "unpriced": 0,
+           "cost_fresh": 0.0, "cost_cache": 0.0, "cost_out": 0.0,
            "cold": [], "top_calls": [], "top_blocks": [], "costly_blocks": []}
     for s in ss:
         d = STORE.get(s["id"])
@@ -887,9 +921,14 @@ def global_stats(ss=None):
         # 接多平台后 Codex/ZCode 没有积分字段，继续按 credit 排会让它们永远沉底。
         ranked = []
         for c in d["calls"]:
-            cost = pricing.cost_cny(c["model"], c["pin"], c["hit"], c["pout"])
+            parts = pricing.cost_split(c["model"], c["pin"], c["hit"], c["pout"])
+            cost = None if parts is None else parts[0] + parts[1] + parts[2]
             out["cost"] += cost or 0.0
             out["unpriced"] += 1 if cost is None else 0
+            if parts:
+                out["cost_fresh"] += parts[0]
+                out["cost_cache"] += parts[1]
+                out["cost_out"] += parts[2]
             ranked.append((cost or 0.0, c))
         for cost, c in sorted(ranked, key=lambda x: -x[0])[:5]:
             out["top_calls"].append({"sid": s["id"], "ws": s["ws"], "seq": c["seq"],
@@ -912,7 +951,10 @@ def global_stats(ss=None):
         for cost, i, est, u, b in sorted(costs, reverse=True)[:3]:
             out["costly_blocks"].append({"sid": s["id"], "idx": i,
                                          "kind": b["k"], "label": b["l"],
-                                         "est": est, "users": u, "cost": cost})
+                                         "est": est, "users": u, "cost": cost,
+                                         # 与全局 cost（元）同名但含义不同，
+                                         # 给个自解释的别名，避免取数方按货币读
+                                         "carry_tokens": cost})
     out["rate"] = (out["hit"] / out["pin"]) if out["pin"] else 0
     out["miss"] = out["pin"] - out["hit"]
     # 实测单价：积分 / 未命中输入（分母只含真正有积分的平台）
@@ -927,6 +969,9 @@ def global_stats(ss=None):
     out["costly_blocks"].sort(key=lambda x: -x["cost"])
     out["costly_blocks"] = out["costly_blocks"][:20]
     out["compose"] = dict(out["compose"])
+    if len(_GS_CACHE) > 8:
+        _GS_CACHE.clear()
+    _GS_CACHE[tag] = (base, out)
     return out
 
 
@@ -4490,10 +4535,16 @@ def v_stats(q):
     ss = ss_all if not src else [s for s in ss_all
                                  if (s.get("src") or "workbuddy") == src]
     with CALC_LOCK:
-        st = global_stats(ss)
+        st = global_stats(ss, tag=src or "")
         compact_sid = next((s["id"] for s in ss
                             if STORE.get(s["id"])["compacts"]), "")
     ms = int((time.time() - t0) * 1000)
+    # 成本构成：命中率 96% 看着很健康，但缓存读便宜×量极大时仍是主要开销，
+    # 只给一个总数会误导「没什么可优化」。三段各占百分比直接摆出来。
+    _c = st["cost"] or 1.0
+    split_txt = "缓存 %.0f%% · 未命中 %.0f%% · 输出 %.0f%%" % (
+        st["cost_cache"] / _c * 100, st["cost_fresh"] / _c * 100,
+        st["cost_out"] / _c * 100)
     body = kpi([("会话", nfmt(st["sessions"])), ("工作区", nfmt(st["workspaces"])),
                 ("模型调用", nfmt(st["calls"])), ("对话轮次", nfmt(st["turns"])),
                 ("上下文块", nfmt(st["blocks"])), ("归档原文", nfmt(st["chars"]) + " 字"),
@@ -4504,6 +4555,7 @@ def v_stats(q):
                ([("累计积分", "%.2f" % st["credit"]),
                  ("积分/万未命中", "%.3f" % st["unit_miss"])] if st["credit"] > 0 else []) +
                [("按刊例估算", "¥%.2f" % st["cost"]),
+                ("成本构成", split_txt),
                 ("估算/万未命中", "¥%.3f" % st["unit_cost_miss"])])
     # 两张卡片内容都偏窄，各占整行时右边大片留白；并排成左右两栏（窄屏回落单列）。
     body += ('<div class="viz2">' + compose_bar(st["compose"]) +
@@ -4675,6 +4727,48 @@ def rank_filter(what, rows, kinds, dfrom, dto, exclude_compact=False, src=""):
     return rows
 
 
+_RANK_FILT = {}
+
+
+def rank_view(what, sort, order, kind, dfrom, dto, exclude_compact, src):
+    """筛选 + 正序零值后移的成品行，按（有序基表身份, 全部筛选参数）缓存。
+
+    42 140 个块、22 516 次调用，过滤一次是 80–100 ms；翻页、点「下一页」、
+    切回上一组筛选条件时参数完全一样，不缓存等于每翻一页重扫全库。
+    返回 (rows, zero_rows, agg)：zero_rows 是正序时被压到末尾的用量为 0 行数，
+    agg 是 KPI 用的全量合计（三档 token 之和 + 占比分母 mx）——这些原本每页
+    都在重算一遍 4 万行，比过滤本身还贵。
+    """
+    base = rank_sorted(what, sort, order)
+    key = (what, sort, order, kind, dfrom, dto, exclude_compact, src)
+    hit = _RANK_FILT.get(key)
+    if hit is not None and hit[0] is base:
+        return hit[1]
+    rows = rank_filter(what, base, kind, dfrom, dto,
+                       exclude_compact=exclude_compact, src=src)
+    zero_rows = 0
+    if order == "asc":
+        # 正序时把用量为 0 的对象压到末尾：这类行多是 usage 缺失的调用或空块，
+        # 按字面排最前面会连续几十页全是 0，真正的小用量对象反而被埋掉。
+        pos, zero = [], []
+        for r in rows:
+            (pos if rank_metric(what, sort, r) > 0 else zero).append(r)
+        rows, zero_rows = pos + zero, len(zero)
+    if what == "block":
+        agg = {"a": sum(r[4] for r in rows),
+               "b": sum(r[4] * r[5] for r in rows),
+               "c": sum(r[5] for r in rows)}
+    else:
+        agg = {"a": sum(r[2]["pin"] + r[2]["pout"] for r in rows),
+               "b": sum(r[2]["pin"] for r in rows),
+               "c": sum(r[2]["pout"] for r in rows)}
+    agg["mx"] = max((rank_metric(what, sort, r) for r in rows), default=0) or 1
+    if len(_RANK_FILT) > 24:
+        _RANK_FILT.clear()
+    _RANK_FILT[key] = (base, (rows, zero_rows, agg))
+    return rows, zero_rows, agg
+
+
 _RANK_SORTED = {}
 
 
@@ -4734,22 +4828,14 @@ def v_rank(q):
     dfrom = _norm_date(qstr(q, "from", ""))
     dto = _norm_date(qstr(q, "to", ""))
 
-    rows = rank_filter(what, rank_sorted(what, sort, order), kind, dfrom, dto,
-                       exclude_compact=(what == "block" and not show_compact), src=src)
-    # 正序时把用量为 0 的对象压到末尾：这类行多是 usage 缺失的调用或空块，
-    # 按字面排最前面会连续几十页全是 0，真正的小用量对象反而被埋掉。
-    zero_rows = 0
-    if asc:
-        pos, zero = [], []
-        for r in rows:
-            (pos if rank_metric(what, sort, r) > 0 else zero).append(r)
-        rows, zero_rows = pos + zero, len(zero)
+    rows, zero_rows, agg = rank_view(what, sort, order, kind, dfrom, dto,
+                                     (what == "block" and not show_compact), src)
     size = PAGE_BLOCKS
     zero_txt = ('正序视图把 <b>%s</b> 行用量为 0 的对象排到了末尾。'
                 % nfmt(zero_rows)) if zero_rows else ""
     p = clamp_p(q, len(rows), size)
     shown = rows[p * size:(p + 1) * size]
-    mx = max((rank_metric(what, sort, r) for r in rows), default=0) or 1
+    mx = agg["mx"]
 
     filt = {}
     if src:
@@ -4973,9 +5059,7 @@ def v_rank(q):
     body = filt_html
 
     if what == "block":
-        arch = sum(r[4] for r in rows)
-        carried = sum(r[4] * r[5] for r in rows)
-        uses = sum(r[5] for r in rows)
+        arch, carried, uses = agg["a"], agg["b"], agg["c"]
         body += kpi([(n_label, nfmt(len(rows))),
                     ("归档 token 合计", "≈ " + kh(arch)),
                     ("承载 token 合计", "≈ " + kh(carried)),
@@ -5022,9 +5106,7 @@ def v_rank(q):
             body += pager("/rank", pager_q, p, size, len(rows), "块")
         sub = "逐块排行 · 支持按种类与时间筛选 · 按 token、被携带次数或乘积排序，可切换正序 / 倒序"
     else:
-        total = sum(r[2]["pin"] + r[2]["pout"] for r in rows)
-        tin = sum(r[2]["pin"] for r in rows)
-        tout = sum(r[2]["pout"] for r in rows)
+        total, tin, tout = agg["a"], agg["b"], agg["c"]
         body += kpi([(n_label, nfmt(len(rows))),
                     ("token 合计", kh(total)),
                     ("输入 / 输出", "%s / %s" % (kh(tin), kh(tout))),

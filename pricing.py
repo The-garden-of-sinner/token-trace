@@ -73,29 +73,61 @@ def canon(name):
     return s.strip("-")
 
 
+# 长 key 优先，避免 glm-5.3 抢 glm-5.3-flash。原先每次调用 rates_for 都要
+# 现排一次 17 个 key——/stats 一次要算 1.7 万次调用，光排序就占几十毫秒。
+_KEYS_BY_LEN = sorted(RATES, key=len, reverse=True)
+_RATE_CACHE = {}       # 归一后的模型名 -> 档位元组，条目数等于模型种类数
+_CANON_CACHE = {}
+
+
+def _canon_cached(name):
+    k = _CANON_CACHE.get(name)
+    if k is None:
+        k = canon(name)
+        if len(_CANON_CACHE) < 512:
+            _CANON_CACHE[name] = k
+    return k
+
+
 def rates_for(model):
     """返回 (输入, 缓存命中, 输出, 来源)；未收录返回 FALLBACK。"""
-    k = canon(model)
+    k = _canon_cached(model)
     if not k:
         return None
-    hit = RATES.get(k)
-    if hit:
+    hit = _RATE_CACHE.get(k)
+    if hit is not None:
         return hit
-    for key in sorted(RATES, key=len, reverse=True):  # 长 key 优先，避免 glm-5.3 抢 glm-5.3-flash
-        if k.startswith(key):
-            return RATES[key]
-    return FALLBACK
+    r = RATES.get(k)
+    if not r:
+        r = FALLBACK
+        for key in _KEYS_BY_LEN:
+            if k.startswith(key):
+                r = RATES[key]
+                break
+    if len(_RATE_CACHE) < 512:
+        _RATE_CACHE[k] = r
+    return r
 
 
-def cost_cny(model, pin, hit, pout):
-    """一次调用的估算成本（元）。model 为空返回 None，其余一律给数（含 fallback）。"""
+def cost_split(model, pin, hit, pout):
+    """把一次调用的成本拆成三段：(未命中输入, 缓存命中, 输出)，单位元。
+
+    分开算是为了回答「钱花在哪儿」：缓存读便宜但量极大时照样是主要成本，
+    只给一个总数会让人误以为「命中率 96%，没什么可优化的」。
+    """
     r = rates_for(model)
     if not r:
         return None
     pin, hit, pout = int(pin or 0), int(hit or 0), int(pout or 0)
     hit = max(0, min(hit, pin))
     fresh = pin - hit
-    return (fresh * r[0] + hit * r[1] + pout * r[2]) / 1_000_000.0
+    return (fresh * r[0] / 1e6, hit * r[1] / 1e6, pout * r[2] / 1e6)
+
+
+def cost_cny(model, pin, hit, pout):
+    """一次调用的估算成本（元）。model 为空返回 None，其余一律给数（含 fallback）。"""
+    parts = cost_split(model, pin, hit, pout)
+    return None if parts is None else parts[0] + parts[1] + parts[2]
 
 
 def price_src(model):

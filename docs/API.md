@@ -216,11 +216,17 @@ by_model = df.groupby("model").agg(
 没有模型名的调用由字面量 `"?"` 收敛为空串。按 `model` 分组不会再裂成多份。
 
 另外 `/api/stats` 多一个 `costly_blocks` 数组（最多 20 条，元素含 `sid` / `idx` /
-`kind` / `label` / `est` / `users` / `cost`）：`est` 是**估算** token，`users` 是携带过
-该块的调用数，`cost = est * users`。它排的是「重复携带的累计量」，不是账单；
+`kind` / `label` / `est` / `users` / `cost` / `carry_tokens`）：`est` 是**估算** token，
+`users` 是携带过该块的调用数，`cost = est * users`，`carry_tokens` 是同一数值的
+自解释别名（`cost` 在这里是 token·次，**不是**元，别和顶层的 `cost` 混淆）。
+它排的是「重复携带的累计量」，不是账单；
 口径见 README「已知限制」23。块级 `ts` / `e` 目前只供 HTML 展示，
 `.../calls/<seq>/context` 与 `.../blocks/<idx>` 的返回结构并未改变，
 分析程序不必为此改解析代码。`/rank` 是纯 HTML 页面，没有对应的 JSON 端点。
+
+`/api/stats` 另给出成本三段拆分：`cost_fresh`（未命中输入）/ `cost_cache`（缓存命中读取）/
+`cost_out`（输出），三者之和等于 `cost`。分开看才知道钱花在哪——命中率再高，
+缓存读的绝对量也可能压过未命中。
 
 ---
 
