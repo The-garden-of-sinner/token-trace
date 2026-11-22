@@ -754,7 +754,10 @@ def main():
                         download={"ok": True, "path": "/tmp/x.deb",
                                   "info": "/tmp/x.deb", "at": 1.0})
         dlh = T.page("索引", [("索引", "")], "<p>x</p>")
-        check("更新包已就绪" in dlh and "sudo dpkg -i" in dlh
+        # Windows 上提示替换 TokenTrace.bat，Linux 上提示 dpkg 安装；
+        # 断言按当前平台取对应的安装指引，两边都要求给出路径与操作命令。
+        hint = "TokenTrace.bat" if os.name == "nt" else "sudo dpkg -i"
+        check("更新包已就绪" in dlh and hint in dlh
               and "x.deb" in dlh,
               "下载成功后浮窗给出本地路径与安装命令，不自动执行")
         T.UPDATE.update(download={"ok": False, "info": "URLError: timed out",
