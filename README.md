@@ -37,7 +37,7 @@
 **Linux**（Debian / Ubuntu / 银河麒麟 / 统信 UOS / Deepin，装完有应用菜单项）
 
 ```bash
-V=2.1.1   # 换成 Release 页上的最新版本号
+V=2.1.2   # 换成 Release 页上的最新版本号
 curl -fLO "https://github.com/The-garden-of-sinner/token-trace/releases/download/v$V/token-trace_${V}_all.deb"
 sudo dpkg -i "token-trace_${V}_all.deb"
 token-trace
