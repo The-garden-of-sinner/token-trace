@@ -153,7 +153,7 @@ python3 trace_server.py        # http://127.0.0.1:8765/，Ctrl+C 退出
 **Linux（Debian / Ubuntu / 银河麒麟 / 统信 UOS / Deepin）**
 
 ```bash
-V=1.3.1   # 换成 Release 页上的最新版本号
+V=2.1.2   # 换成 Release 页上的最新版本号
 curl -fLO "https://github.com/The-garden-of-sinner/token-trace/releases/download/v$V/token-trace_${V}_all.deb"
 sudo dpkg -i "token-trace_${V}_all.deb"
 token-trace                     # 起服务并自动打开浏览器
@@ -314,8 +314,9 @@ tar 成员与 gzip 容器头的 `mtime` 都固定为 0（`GzipFile(..., mtime=0)
 
 ### 版本与更新
 
-当前版本 **v2.1.1**（正式版；版本号写在 `scripts/VERSION`，去掉 `-exp` 后 GitHub Release 会进入 `/releases/latest`）：
+当前版本 **v2.1.2**（正式版；版本号写在 `scripts/VERSION`，去掉 `-exp` 后 GitHub Release 会进入 `/releases/latest`）：
 
+- **v2.1.2（2026-11-23）**：三张演示配图按当前界面重拍（首页月历、会话概览、成本三段拆分与工具未命中归因的全局统计），价目表补入 GPT-6.2 / Gemini 3.8 Flash / Kimi K3.1 Pro / Hy3 等新模型并标清引导价与无官方按量价的口径；修 Windows 自检的安装指引断言与单文件 `status` 子命令的超时参数。自检 **295 项全过**
 - **页眉与更新交互**：版本区顺序改为「当前版本 → 检查更新」，去掉外链箭头；检查结果不再单独出页，改为原页 `:target` 浮窗（有可用更新 / 已是最新 / 失败 / 已禁用四态），有新版本时按钮显示「有可用更新 vX」；检查回跳跳过首页「会话解析中」启动层；更新胶囊上下收紧；首页平台环图例按输入 token 降序，与单平台按模型环对齐。自检 **265 项全过**
 - **DSH 适配器修复**：按 `session-<id>` 父目录定位会话，点开单个会话不再解压全库；助手回复写入调用 `out`，输出全文与 `scope=outputs` 搜索可用；`tool/result` 块标签带工具名；日期统一走 `core.text.day_key()`；子代理补 `root` / `agent_reqs`，首页可自动折叠挂载；`_PARSED` 缓存加 4096 上限清理
 - **版本比较修正**：`_ver_key()` 固定补齐四位主版本并加正式版权重位，预发布版现在能识别同名正式版更新；版本号收敛为标准三段式 `2.1.0`
