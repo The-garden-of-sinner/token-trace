@@ -11,30 +11,41 @@
 价格为「元 / 百万 token」：(输入, 缓存命中, 输出)。美元价按 FX_USD_CNY 折算。
 未收录的模型走 FALLBACK，并在 price_src 里明确标记 "fallback"，不冒充官方价。
 
-价目表核对日期 **2026-11-14**，逐条来源见 RATES 的第四列：
-  - 腾讯混元 hy4 ............ tencent.com 发布稿 / 腾讯云 TokenHub（6 / 0.3 / 18）
+价目表核对日期 **2026-11-23**，逐条来源见 RATES 的第四列：
+  - 腾讯混元 Hy3 / Hy4 ..... 腾讯云「计费概述（套餐订阅）」与 TokenHub 价目页
   - 智谱 GLM-5.3 / Flash ... bigmodel.cn/pricing、docs.bigmodel.cn 定价页
   - DeepSeek V4.1 Flash .... api-docs.deepseek.com 中文定价页（人民币价）
   - 蚂蚁百灵 Ling-3.2 ...... 官方发布 / IT之家（$0.30 / $0.90，缓存价未公布）
-  - OpenAI GPT-6 系列 ...... platform.openai.com/docs/pricing、openai.com 商务定价页
+  - Kimi K3.1 Pro .......... kimi.com 官方发布与开放平台国内 API 价（人民币价）
+  - Google Gemini 3.8 Flash  官方价目页（2026 年底前的引导价）
+  - OpenAI GPT-6.2 / 5.6 ... openai.com 发布页与官方 API 价目（美元价）
   - Anthropic Claude ....... Anthropic 价目页（第三方价目表交叉核对）
-  - 汇率 .................. 2026-11-14 美元中间价约 6.6726（上海银行 6.6732 /
-                              浦发 6.6718 / 国际即时 6.6726），取 6.67
+  - 汇率 .................. 取 6.67：2026-11-23 浦发中间价 6.6719 /
+                              南京银行 6.6760，与 11-14 的 6.6726 基本一致
 
 已知时点差异（不进计算，仅提示读表的人）：
   - Hy4 在腾讯云 TokenHub 至 2026-12-31 按刊例价五折；这里按全价
+  - Gemini 3.8 Flash 的 $0.75 / $3.75 是 2026-12-31 前的引导价，
+    2027-01-01 起翻倍为 $1.50 / $7.50，缓存 $0.075 → $0.15
+  - GPT-5.6 Terra 与 GPT-6.2 均按 ≤272K 短上下文档；超过阈值输入 / 缓存翻倍、
+    输出 1.5 倍，本表不做长上下文加价
   - GPT-5.6 Sol 促销价至 2026-11-30；到期后可能上调
   - Ling-3.2-flash 上线前两周免费（约至 2026-11-19）
   - DeepSeek 分峰谷：北京时间工作日 9:00-12:00、14:00-18:00 为高峰，
     三档价格全部翻倍。本表固定取**空闲时段**价，因此工作日下午的调用会低估
+  - codex-auto-review 是 Codex 自动审查的任务别名，官方按套餐计、不公布按量价；
+    这里沿用中端档并标 approx，不冒充厂商刊例价
 """
 
-FX_USD_CNY = 6.67     # 2026-11-14 美元兑人民币中间价 6.6726，见模块 docstring
+FX_USD_CNY = 6.67     # 2026-11-23 中间价约 6.672，取 6.67，见模块 docstring
 
 RATES = {
     # 腾讯混元（腾讯云 TokenHub 刊例价，2026-11）
     "hy4": (6.0, 0.3, 18.0, "腾讯云 TokenHub"),
     "hy4-preview": (6.0, 0.3, 18.0, "腾讯云 TokenHub"),
+    # 腾讯云「计费概述（套餐订阅）」：Hy3 1 / 0.25 / 4 元每百万，2026-11-23 核对
+    "hy3": (1.0, 0.25, 4.0, "腾讯云 TokenHub / 计费概述"),
+    "hy3-preview": (1.0, 0.25, 4.0, "腾讯云 TokenHub / 计费概述"),
     # 智谱 GLM（bigmodel.cn/pricing 与官方定价文档，2026-11-14 核对）
     "glm-5.3": (8.0, 2.0, 28.0, "智谱开放平台"),
     "glm-5.3-flash": (0.8, 0.23, 2.8, "智谱开放平台"),
@@ -55,6 +66,28 @@ RATES = {
     "gpt-6.1-terra": (1.0 * FX_USD_CNY, 0.05 * FX_USD_CNY, 5.0 * FX_USD_CNY, "OpenAI 价目"),
     "gpt-6-astra": (10.0 * FX_USD_CNY, 1.0 * FX_USD_CNY, 50.0 * FX_USD_CNY, "OpenAI 价目"),
     "gpt-5.6-sol": (4.0 * FX_USD_CNY, 0.40 * FX_USD_CNY, 20.0 * FX_USD_CNY, "OpenAI 价目"),
+    # 2026-11-17 发布的 GPT-6.2：Astra 输入/缓存比上一代降 20%/60%，Sol 与 6.1 Sol 同价。
+    # 官方价 $8 / $0.40 / $40 与 $2 / $0.10 / $10，按 ≤272K 短上下文档计。
+    "gpt-6.2-astra": (8.0 * FX_USD_CNY, 0.40 * FX_USD_CNY, 40.0 * FX_USD_CNY,
+                      "OpenAI 价目（GPT-6.2 发布页）"),
+    "gpt-6.2-sol": (2.0 * FX_USD_CNY, 0.10 * FX_USD_CNY, 10.0 * FX_USD_CNY,
+                    "OpenAI 价目（GPT-6.2 发布页）"),
+    "gpt-5.6-terra": (2.0 * FX_USD_CNY, 0.20 * FX_USD_CNY, 12.0 * FX_USD_CNY,
+                      "OpenAI 价目（≤272K 短上下文）"),
+    # Codex 自动审查的任务别名，官方按套餐计、没有公开按量刊例价；
+    # 沿用中端档并标记近似，避免伪装成官方价（price_src -> approx）。
+    "codex-auto-review": (4.0, 1.0, 12.0, "Codex 自动审查无官方按量价，沿用中端档（近似）"),
+    # Google Gemini 3.8 Flash（2026-12-31 前引导价，$0.75 / $0.075 / $3.75）
+    "gemini-3.8-flash": (0.75 * FX_USD_CNY, 0.075 * FX_USD_CNY, 3.75 * FX_USD_CNY,
+                         "Google AI 价目（2026 年底前引导价）"),
+    # 带后缀的实验 / 变体名没有单独官方价，沿用基础档并标记近似
+    "gemini-3.8-flash-n": (0.75 * FX_USD_CNY, 0.075 * FX_USD_CNY, 3.75 * FX_USD_CNY,
+                           "沿用 Gemini 3.8 Flash 档（近似）"),
+    "gemini-3.8-flash-exp-a": (0.75 * FX_USD_CNY, 0.075 * FX_USD_CNY, 3.75 * FX_USD_CNY,
+                               "沿用 Gemini 3.8 Flash 档（近似）"),
+    # Kimi K3.1 Pro 国内 API 价：13 / 1.3 / 68 元每百万（官方发布 2026-10-24）
+    "kimi-k3.1-pro": (13.0, 1.3, 68.0, "Kimi 开放平台国内 API 价"),
+    "kimi-k3.1-pro-highspeed": (26.0, 1.3, 136.0, "Kimi 开放平台国内 API 价（高速版）"),
     # Anthropic（WorkBuddy 可能出现的模型，按公开价近似）
     "claude-sonnet-5": (2.0 * FX_USD_CNY, 0.20 * FX_USD_CNY, 10.0 * FX_USD_CNY, "Anthropic 价目"),
     "claude-opus-4.8": (5.0 * FX_USD_CNY, 0.50 * FX_USD_CNY, 25.0 * FX_USD_CNY, "Anthropic 价目"),
@@ -152,6 +185,14 @@ if __name__ == "__main__":
         ("DeepSeek-V4.1-Flash", 1_000_000, 0, 0, 1.0),
         ("Ling-3.2-flash", 0, 0, 1_000_000, 6.003),
         ("Step-5-Preview", 1_000_000, 0, 0, 4.0),
+        ("Hy3", 1_000_000, 1_000_000, 1_000_000, 0.25 + 4.0),
+        ("GPT-6.2 Astra", 1_000_000, 0, 0, 8.0 * FX_USD_CNY),
+        ("GPT-6.2 Sol", 1_000_000, 1_000_000, 0, 0.10 * FX_USD_CNY),
+        ("GPT-5.6 Terra", 0, 0, 1_000_000, 12.0 * FX_USD_CNY),
+        ("Gemini-3.8-Flash", 1_000_000, 0, 0, 0.75 * FX_USD_CNY),
+        ("Gemini-3.8-Flash-Exp-A", 1_000_000, 0, 0, 0.75 * FX_USD_CNY),
+        ("Kimi-K3.1-Pro", 1_000_000, 1_000_000, 1_000_000, 1.3 + 68.0),
+        ("codex-auto-review", 1_000_000, 0, 0, 4.0),
     ]
     for model, pin, hit, pout, want in cases:
         got = cost_cny(model, pin, hit, pout)
