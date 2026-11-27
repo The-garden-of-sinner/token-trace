@@ -6,7 +6,7 @@
 
 ![会话索引](docs/demo.png)
 
-*会话索引：平台切换（本机没装 ZCode，那一项置灰并说明原因）、按平台拆分的输入 token 环与近三个月的月历热力图、工作区递归关系、会话列表。截图数据由 `scripts/make_demo.py` 虚构生成，模型 ID 为平台公开标识，不含任何真实用户数据。*
+*会话索引：五个平台的切换、按平台拆分的输入 token 环、近三个月的月历热力图、工作区递归关系与会话列表。截图数据由 `scripts/make_demo.py` 虚构生成，模型 ID 为平台公开标识，不含任何真实用户数据。*
 
 ![Python](https://img.shields.io/badge/python-3.8%2B-blue) ![Harness](https://img.shields.io/badge/harness-5%20platforms-6f42c1) ![Frontend](https://img.shields.io/badge/frontend-0%20script-brightgreen) ![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen) ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -37,7 +37,7 @@
 **Linux**（Debian / Ubuntu / 银河麒麟 / 统信 UOS / Deepin，装完有应用菜单项）
 
 ```bash
-V=2.1.2   # 换成 Release 页上的最新版本号
+V=2.1.3   # 换成 Release 页上的最新版本号
 curl -fLO "https://github.com/The-garden-of-sinner/token-trace/releases/download/v$V/token-trace_${V}_all.deb"
 sudo dpkg -i "token-trace_${V}_all.deb"
 token-trace
@@ -153,7 +153,7 @@ python3 trace_server.py        # http://127.0.0.1:8765/，Ctrl+C 退出
 **Linux（Debian / Ubuntu / 银河麒麟 / 统信 UOS / Deepin）**
 
 ```bash
-V=1.3.1   # 换成 Release 页上的最新版本号
+V=2.1.3   # 换成 Release 页上的最新版本号
 curl -fLO "https://github.com/The-garden-of-sinner/token-trace/releases/download/v$V/token-trace_${V}_all.deb"
 sudo dpkg -i "token-trace_${V}_all.deb"
 token-trace                     # 起服务并自动打开浏览器
@@ -314,10 +314,11 @@ tar 成员与 gzip 容器头的 `mtime` 都固定为 0（`GzipFile(..., mtime=0)
 
 ### 版本与更新
 
-当前版本 **v2.1.2**（正式版；版本号写在 `scripts/VERSION`，去掉 `-exp` 后 GitHub Release 会进入 `/releases/latest`）：
+当前版本 **v2.1.3**（正式版；版本号写在 `scripts/VERSION`，去掉 `-exp` 后 GitHub Release 会进入 `/releases/latest`）：
 
-- **Antigravity 新版数据源**：适配 v2.35.1 起把调用写到 `brain/<sid>/transcript_full.jsonl` 的变化，恢复 11/26–27 的调用与热力图；修复 `gen_metadata.idx` 被误当 step 索引导致整段会话挤到同一天的问题；transcript 完整覆盖时优先使用，老会话回退 gen，空模型名按调用序号补齐；缓存键纳入 WAL 与 transcript 签名。自检 **300 项全过**
-- **价目表补齐**：新增 Gemini 3.8 Flash / 4 Neon、Claude Sonnet 5.5（含点号别名）、GPT-6.2 Astra / Sol、hy4-flash、Hy3；hy4-flash 原先被 hy4 前缀匹配成 12 倍价，已修正；无独立公开价的 Antigravity 路由后缀标 `approx`
+- **v2.1.3（2026-11-27）Antigravity 新版数据源**：适配 v2.35.1 起把调用写到 `brain/<sid>/transcript_full.jsonl` 的变化，恢复 11/26–27 的调用与热力图；修复 `gen_metadata.idx` 被误当 step 索引导致整段会话挤到同一天的问题；transcript 完整覆盖时优先使用，老会话回退 gen，空模型名按调用序号补齐；缓存键纳入 WAL 与 transcript 签名。自检 **300 项全过**
+- **v2.1.3 价目表补齐**：新增 Gemini 4 Neon、Claude Sonnet 5.5（含点号别名）、hy4-flash；hy4-flash 原先被 hy4 前缀匹配成 12 倍价，已修正；无独立公开价的 Antigravity 路由后缀标 `approx`
+- **v2.1.2（2026-11-23）**：三张演示配图按当前界面重拍（首页月历、会话概览、成本三段拆分与工具未命中归因的全局统计），价目表补入 GPT-6.2 / Gemini 3.8 Flash / Kimi K3.1 Pro / Hy3 等新模型并标清引导价与无官方按量价的口径；修 Windows 自检的安装指引断言与单文件 `status` 子命令的超时参数。自检 **295 项全过**
 - **页眉与更新交互**：版本区顺序改为「当前版本 → 检查更新」，去掉外链箭头；检查结果不再单独出页，改为原页 `:target` 浮窗（有可用更新 / 已是最新 / 失败 / 已禁用四态），有新版本时按钮显示「有可用更新 vX」；检查回跳跳过首页「会话解析中」启动层；更新胶囊上下收紧；首页平台环图例按输入 token 降序，与单平台按模型环对齐。自检 **265 项全过**
 - **DSH 适配器修复**：按 `session-<id>` 父目录定位会话，点开单个会话不再解压全库；助手回复写入调用 `out`，输出全文与 `scope=outputs` 搜索可用；`tool/result` 块标签带工具名；日期统一走 `core.text.day_key()`；子代理补 `root` / `agent_reqs`，首页可自动折叠挂载；`_PARSED` 缓存加 4096 上限清理
 - **版本比较修正**：`_ver_key()` 固定补齐四位主版本并加正式版权重位，预发布版现在能识别同名正式版更新；版本号收敛为标准三段式 `2.1.0`
@@ -369,7 +370,7 @@ v1.4.0 及更早的变更（Antigravity 接入、月历热力图、环图闭合�
 
 ![会话概览](docs/demo-session.png)
 
-*会话概览：12 项统计、上下文文本构成环、可见规模与归档 / 退役对比条、按轮 / 按调用 / 工具 / 趋势的入口卡。同一份虚构数据。*
+*会话概览：12 项统计、模型切换与历史压缩提示、上下文文本构成环、可见规模与归档 / 退役对比条，以及按轮 / 按调用 / 工具 / 趋势的入口卡。同一份虚构数据。*
 
 | 路由 | 内容 |
 | --- | --- |
@@ -391,7 +392,7 @@ v1.4.0 及更早的变更（Antigravity 接入、月历热力图、环图闭合�
 
 ![全局统计](docs/demo-stats.png)
 
-*全局统计：同一套平台切换，`?src=dsh` 时所有数字只算 DSH 的 2 个会话。*
+*全局统计：成本三段拆分（缓存 / 未命中 / 输出）、按工具的未命中 token 归因、会话热力图与最贵调用排行；同一套平台切换，`?src=dsh` 时只算 DSH 的会话。*
 
 `src=` 取 `workbuddy` / `codex` / `zcode` / `dsh`，省略即全部；本机没有该平台会话时页面上的对应项置灰。
 
@@ -698,7 +699,7 @@ token（按 `providerData.model` 分组，展示名取全库得票最多的写�
 | `windows/` | Windows 版 `start.cmd` / `start.ps1` / `install-shortcut.ps1`，可选签名入口 `sign-release.ps1` |
 | `scripts/` | 发行构建（`build_win_bat.py`、`build_deb.sh`、`build_deb.py`、`release.sh`、`VERSION`）、回归自检（`selftest.py`）、独立压缩校验（`verify_compact.py`）、演示数据生成（`make_demo.py`，虚构排查会话）、图标生成（`make_icon.py`）、校验清单（`make_checksums.py`） |
 | `assets/` | `TokenTrace.ico`（内嵌进单 bat、供快捷方式用）与 `token-trace.png`（Linux hicolor 图标） |
-| `docs/` | `API.md`（程序接入指南：字段字典、量纲、pandas 示例与扩展性评估）；`architecture.svg` / `architecture.mmd` 架构图与图源；`demo.png`（会话索引）与 `demo-session.png`（会话概览）界面截图，均由 `scripts/make_demo.py` 的虚构数据渲染 |
+| `docs/` | `API.md`（程序接入指南：字段字典、量纲、pandas 示例与扩展性评估）；`architecture.svg` / `architecture.mmd` 架构图与图源；`demo.png`（会话索引）、`demo-session.png`（会话概览）与 `demo-stats.png`（全局统计）界面截图，均由 `scripts/make_demo.py` 的虚构数据渲染 |
 | `REVIEW_CHANGES.md` | 安全与跨平台改造的分阶段变更记录 |
 | `.gitignore` | 排除含会话原文的静态页与运行时产物 |
 | `trace/` | 静态模式产物（不入库），随时可由 `gen_trace.py` 重建 |
@@ -1046,13 +1047,19 @@ WorkBuddy 侧：
 官方刊例价才返回 `list`。最贵调用列表已改为按这个估算值排序，
 否则没有积分字段的平台会永远沉底。
 
-价目表 **2026-11-14 逐条核对过**：混元 Hy4、智谱 GLM-5.3 / Flash、DeepSeek V4.1 Flash、
-蚂蚁百灵 Ling-3.2-flash、OpenAI GPT-6 系列、Anthropic Claude 都取自厂商官方定价页
-（来源写在 `pricing.RATES` 第四列）；美元按当日中间价 `6.6726` 折算，代码里取 `6.67`。
-DeepSeek 直接采用官方中文页的人民币价（空闲时段 1 / 0.02 / 4 元每百万），不再走
-「美元 × 汇率」多绕一层。几个已知时点差异不进计算：Hy4 在 TokenHub 至 2026-12-31
-五折、GPT-5.6 Sol 促销至 11-30、Ling-3.2-flash 上线前两周免费；DeepSeek 工作日下午
-高峰时段三档价格翻倍，本表固定取空闲时段价，因此那段时间的调用会低估。
+价目表 **2026-11-23 逐条核对过**：混元 Hy3 / Hy4、智谱 GLM-5.3 / Flash、DeepSeek V4.1
+Flash、Kimi K3.1 Pro、蚂蚁百灵 Ling-3.2-flash、Google Gemini 3.8 Flash、OpenAI GPT-5.6 /
+6.2 系列、Anthropic Claude 都取自厂商官方定价页（来源写在 `pricing.RATES` 第四列）；
+美元仍按 `6.67` 折算（当日浦发中间价 6.6719 / 南京银行 6.6760，与上次核对的 6.6726
+基本一致）。DeepSeek、Kimi 直接采用官方人民币价，不再走「美元 × 汇率」多绕一层。
+
+几个已知时点差异不进计算：Hy4 在 TokenHub 至 2026-12-31 五折；GPT-5.6 Sol 促销至
+11-30；Gemini 3.8 Flash 的引导价到 2026-12-31 为止，之后输入 / 输出翻倍到 $1.50 /
+$7.50、缓存 $0.075 → $0.15；Ling-3.2-flash 上线前两周免费。GPT-5.6 Terra 与 GPT-6.2
+按 ≤272K 短上下文档计，长上下文的倍率不加价。DeepSeek 工作日下午高峰时段三档价格
+翻倍，本表固定取空闲时段价，因此那段时间的调用会低估。`codex-auto-review` 是 Codex
+自动审查的任务别名，官方按套餐计、不公布按量刊例价，表里沿用中端档并标为 `approx`，
+不冒充官方价；本地 Qwen 模型没有 API 价，仍走 `fallback`。
 
 ZCode 的 sqlite 没有 system 角色，`sources/zcode.py` 的 `system_prompts()` 可以从
 `~/.zcode/cli/rollout/model-io-*.jsonl` 补出系统提示与工具 schema（本机去重后 4 种、

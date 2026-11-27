@@ -127,7 +127,7 @@ if errorlevel 1 (echo Not running on port %PORT%.) else (echo Stopped.)
 exit /b 0
 
 :status
-%PYEXE% %PYARGS% -c "import urllib.request,os;tk=os.environ.get('TRACE_TOKEN','');req=urllib.request.Request('http://127.0.0.1:%PORT%/api/health',timeout=2);tk and req.add_header('Authorization','Bearer '+tk);print(urllib.request.urlopen(req).read().decode())"
+%PYEXE% %PYARGS% -c "import urllib.request,os;tk=os.environ.get('TRACE_TOKEN','');req=urllib.request.Request('http://127.0.0.1:%PORT%/api/health');tk and req.add_header('Authorization','Bearer '+tk);print(urllib.request.urlopen(req,timeout=2).read().decode())" 2>nul
 if errorlevel 1 echo Not running on port %PORT%.
 exit /b 0
 
