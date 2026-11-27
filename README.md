@@ -37,7 +37,7 @@
 **Linux**（Debian / Ubuntu / 银河麒麟 / 统信 UOS / Deepin，装完有应用菜单项）
 
 ```bash
-V=2.1.1   # 换成 Release 页上的最新版本号
+V=2.1.2   # 换成 Release 页上的最新版本号
 curl -fLO "https://github.com/The-garden-of-sinner/token-trace/releases/download/v$V/token-trace_${V}_all.deb"
 sudo dpkg -i "token-trace_${V}_all.deb"
 token-trace
@@ -314,8 +314,10 @@ tar 成员与 gzip 容器头的 `mtime` 都固定为 0（`GzipFile(..., mtime=0)
 
 ### 版本与更新
 
-当前版本 **v2.1.1**（正式版；版本号写在 `scripts/VERSION`，去掉 `-exp` 后 GitHub Release 会进入 `/releases/latest`）：
+当前版本 **v2.1.2**（正式版；版本号写在 `scripts/VERSION`，去掉 `-exp` 后 GitHub Release 会进入 `/releases/latest`）：
 
+- **Antigravity 新版数据源**：适配 v2.35.1 起把调用写到 `brain/<sid>/transcript_full.jsonl` 的变化，恢复 11/26–27 的调用与热力图；修复 `gen_metadata.idx` 被误当 step 索引导致整段会话挤到同一天的问题；transcript 完整覆盖时优先使用，老会话回退 gen，空模型名按调用序号补齐；缓存键纳入 WAL 与 transcript 签名。自检 **300 项全过**
+- **价目表补齐**：新增 Gemini 3.8 Flash / 4 Neon、Claude Sonnet 5.5（含点号别名）、GPT-6.2 Astra / Sol、hy4-flash、Hy3；hy4-flash 原先被 hy4 前缀匹配成 12 倍价，已修正；无独立公开价的 Antigravity 路由后缀标 `approx`
 - **页眉与更新交互**：版本区顺序改为「当前版本 → 检查更新」，去掉外链箭头；检查结果不再单独出页，改为原页 `:target` 浮窗（有可用更新 / 已是最新 / 失败 / 已禁用四态），有新版本时按钮显示「有可用更新 vX」；检查回跳跳过首页「会话解析中」启动层；更新胶囊上下收紧；首页平台环图例按输入 token 降序，与单平台按模型环对齐。自检 **265 项全过**
 - **DSH 适配器修复**：按 `session-<id>` 父目录定位会话，点开单个会话不再解压全库；助手回复写入调用 `out`，输出全文与 `scope=outputs` 搜索可用；`tool/result` 块标签带工具名；日期统一走 `core.text.day_key()`；子代理补 `root` / `agent_reqs`，首页可自动折叠挂载；`_PARSED` 缓存加 4096 上限清理
 - **版本比较修正**：`_ver_key()` 固定补齐四位主版本并加正式版权重位，预发布版现在能识别同名正式版更新；版本号收敛为标准三段式 `2.1.0`
