@@ -864,6 +864,15 @@ def main():
                   and pricing.price_src("gemini-3.8-flash-tiered") == "approx"
                   and pricing.price_src("claude-sonnet-5-5-medium") == "list",
                   "价目表：Gemini 3.8 Flash / 4 Neon 按刊例价，Antigravity 变体标近似，Sonnet 5.5 已收录")
+            check(pricing.rates_for("hy4-flash")[:3] == (0.5, 0.02, 2.0)
+                  and pricing.rates_for("hy3")[:3] == (1.0, 0.25, 4.0)
+                  and pricing.rates_for("gpt-6.2-sol")[:3]
+                  == (2.0 * 6.67, 0.10 * 6.67, 10.0 * 6.67)
+                  and pricing.rates_for("gpt-6.2-astra")[:3]
+                  == (8.0 * 6.67, 0.40 * 6.67, 40.0 * 6.67)
+                  and pricing.rates_for("claude-sonnet-5.5-medium")[:3]
+                  == pricing.rates_for("claude-sonnet-5-5-medium")[:3],
+                  "价目表：hy4-flash 不被 hy4 前缀吃掉，Hy3/GPT-6.2 已收录，Sonnet 5.5 点号别名同价")
         finally:
             T.STORE = orig_store
         # 平台切换：没有会话的平台置灰并写明原因，有数据的可点

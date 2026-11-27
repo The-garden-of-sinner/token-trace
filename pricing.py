@@ -11,7 +11,7 @@
 价格为「元 / 百万 token」：(输入, 缓存命中, 输出)。美元价按 FX_USD_CNY 折算。
 未收录的模型走 FALLBACK，并在 price_src 里明确标记 "fallback"，不冒充官方价。
 
-价目表核对日期 **2026-11-14**（Gemini / Sonnet 5.5 增补 2026-11-27），逐条来源见 RATES 的第四列：
+价目表核对日期 **2026-11-14**（Gemini / Sonnet 5.5 / GPT-6.2 / hy4-flash / Hy3 增补 2026-11-27），逐条来源见 RATES 的第四列：
   - 腾讯混元 hy4 ............ tencent.com 发布稿 / 腾讯云 TokenHub（6 / 0.3 / 18）
   - 智谱 GLM-5.3 / Flash ... bigmodel.cn/pricing、docs.bigmodel.cn 定价页
   - DeepSeek V4.1 Flash .... api-docs.deepseek.com 中文定价页（人民币价）
@@ -21,11 +21,14 @@
   - Gemini 3.8 Flash ....... DeepMind 发布稿 / Google Cloud 价目页（$0.75 / $0.075 / $3.75，引导价至 2026-12-31）
   - Gemini 4 Neon .......... Google Cloud 模型页 / 发布稿（$3.00 / $0.15 / $15.00，2026-11-18 发布）
   - Claude Sonnet 5.5 ...... anthropic.com 发布稿（$2 / $0.10 / $10，缓存读 10-07 起减半）
+  - OpenAI GPT-6.2 系列 .... platform.openai.com/docs/pricing（Astra $8 / $0.40 / $40，Sol $2 / $0.10 / $10）
+  - 混元 hy4-flash / Hy3 ... 腾讯云 TokenHub 刊例价（0.5 / 0.02 / 2；1 / 0.25 / 4，人民币）
   - 汇率 .................. 2026-11-14 美元中间价约 6.6726（上海银行 6.6732 /
                               浦发 6.6718 / 国际即时 6.6726），取 6.67
 
 已知时点差异（不进计算，仅提示读表的人）：
   - Hy4 在腾讯云 TokenHub 至 2026-12-31 按刊例价五折；这里按全价
+  - hy4-flash 另有一条五折至 2026-11-30 12:00；这里同样按全价
   - GPT-5.6 Sol 促销价至 2026-11-30；到期后可能上调
   - Ling-3.2-flash 上线前两周免费（约至 2026-11-19）
   - DeepSeek 分峰谷：北京时间工作日 9:00-12:00、14:00-18:00 为高峰，
@@ -38,6 +41,9 @@ RATES = {
     # 腾讯混元（腾讯云 TokenHub 刊例价，2026-11）
     "hy4": (6.0, 0.3, 18.0, "腾讯云 TokenHub"),
     "hy4-preview": (6.0, 0.3, 18.0, "腾讯云 TokenHub"),
+    # hy4-flash 与 hy4 同族但价差 12 倍：不单列会被前缀匹配成 hy4 档。
+    "hy4-flash": (0.5, 0.02, 2.0, "腾讯云 TokenHub 刊例价（hy4-flash）"),
+    "hy3": (1.0, 0.25, 4.0, "腾讯云 TokenHub 刊例价（Hy3）"),
     # 智谱 GLM（bigmodel.cn/pricing 与官方定价文档，2026-11-14 核对）
     "glm-5.3": (8.0, 2.0, 28.0, "智谱开放平台"),
     "glm-5.3-flash": (0.8, 0.23, 2.8, "智谱开放平台"),
@@ -55,6 +61,9 @@ RATES = {
     # OpenAI（$ / 1M × FX）
     "gpt-6-luna": (0.10 * FX_USD_CNY, 0.01 * FX_USD_CNY, 0.50 * FX_USD_CNY, "OpenAI 价目"),
     "gpt-6.1-sol": (2.0 * FX_USD_CNY, 0.10 * FX_USD_CNY, 10.0 * FX_USD_CNY, "OpenAI 价目"),
+    # GPT-6.2（2026-11-17 发布）：Astra 比 6 Astra 便宜两成，Sol 与 6.1 Sol 同价。
+    "gpt-6.2-astra": (8.0 * FX_USD_CNY, 0.40 * FX_USD_CNY, 40.0 * FX_USD_CNY, "OpenAI 价目（6.2 Astra 标准层）"),
+    "gpt-6.2-sol": (2.0 * FX_USD_CNY, 0.10 * FX_USD_CNY, 10.0 * FX_USD_CNY, "OpenAI 价目（6.2 Sol 标准层）"),
     "gpt-6.1-terra": (1.0 * FX_USD_CNY, 0.05 * FX_USD_CNY, 5.0 * FX_USD_CNY, "OpenAI 价目"),
     "gpt-6-astra": (10.0 * FX_USD_CNY, 1.0 * FX_USD_CNY, 50.0 * FX_USD_CNY, "OpenAI 价目"),
     "gpt-5.6-sol": (4.0 * FX_USD_CNY, 0.40 * FX_USD_CNY, 20.0 * FX_USD_CNY, "OpenAI 价目"),
@@ -65,6 +74,11 @@ RATES = {
                           "Anthropic 价目（Sonnet 5.5，缓存读 10-07 起减半）"),
     "claude-sonnet-5-5-medium": (2.0 * FX_USD_CNY, 0.10 * FX_USD_CNY, 10.0 * FX_USD_CNY,
                                  "Anthropic 价目（Sonnet 5.5 medium 推理档，同标准价）"),
+    # 官方 API ID 用连字符；保留点号别名，别处写成 sonnet-5.5 时不漏匹配。
+    "claude-sonnet-5.5": (2.0 * FX_USD_CNY, 0.10 * FX_USD_CNY, 10.0 * FX_USD_CNY,
+                          "Anthropic 价目（Sonnet 5.5，点号别名）"),
+    "claude-sonnet-5.5-medium": (2.0 * FX_USD_CNY, 0.10 * FX_USD_CNY, 10.0 * FX_USD_CNY,
+                                 "Anthropic 价目（Sonnet 5.5 medium，点号别名）"),
     # Google Gemini（Antigravity 实际使用的模型，2026-11-27 核对）
     "gemini-3.8-flash": (0.75 * FX_USD_CNY, 0.075 * FX_USD_CNY, 3.75 * FX_USD_CNY,
                          "Google 刊例价（3.8 Flash 引导价至 2026-12-31）"),
