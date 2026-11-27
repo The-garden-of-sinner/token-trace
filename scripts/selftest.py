@@ -1584,6 +1584,34 @@ def main():
         finally:
             _shutil.rmtree(_home, ignore_errors=True)
 
+        print("== Antigravity transcript：新版 AGY 令牌与真实日期 ==")
+        import tempfile as _tf
+        _aghome = _tf.mkdtemp(prefix="tt-selftest-agtr-")
+        try:
+            _sid = "tttttttt-0000-0000-0000-000000000001"
+            _tdir = os.path.join(_aghome, "brain", _sid,
+                                 ".system_generated", "logs")
+            os.makedirs(_tdir)
+            _tf_path = os.path.join(_tdir, "transcript_full.jsonl")
+            with open(_tf_path, "w", encoding="utf-8") as _f:
+                for _i, (_day, _tok) in enumerate(
+                        (("2026-11-26T02:00:00Z", 1111),
+                         ("2026-11-27T02:00:00Z", 2222))):
+                    _f.write(json.dumps({
+                        "type": "PLANNER_RESPONSE", "step_index": _i + 2,
+                        "created_at": _day, "model": "gemini-4-neon-xhigh",
+                        "input_tokens": _tok, "cache_read_tokens": 10,
+                        "output_tokens": 20}) + "\n")
+            _tr, _sig = _ag._transcript_calls(_sid, home=_aghome)
+            check(len(_tr) == 2 and _tr[0]["pin"] == 1121
+                  and _tr[1]["ts"] > _tr[0]["ts"] and _sig is not None,
+                  "transcript 解析：token 三段相加、UTC 时间按行递增")
+            check(_ag._ts_utc("2026-11-27T02:00:00Z") > 0
+                  and not _ag._ts_utc("bad-date"),
+                  "transcript 时间戳：Z 结尾 UTC 可解析，坏值不抛异常")
+        finally:
+            _shutil.rmtree(_aghome, ignore_errors=True)
+
         print("== 运行期零写盘 ==")
         check(not os.path.isdir(os.path.join(ROOT, "__pycache__")),
               "项目目录无 __pycache__")

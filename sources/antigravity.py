@@ -26,6 +26,7 @@
 某一次调用；`tool` 留空，不宣称精确到单次调用的工具归属。
 """
 import bisect
+import datetime
 import glob
 import json
 import os
@@ -187,6 +188,60 @@ def _block(k, label, txt, c, ts):
             "ts": ts, "e": _est(txt), "src": "antigravity"}
 
 
+# v2.35.1（2026-11-25）起，AGY 把每次模型调用写进 brain/<sid>/.system_generated/
+# logs/transcript_full.jsonl 的 PLANNER_RESPONSE 行，含 token 与真实 UTC 时间。
+# 旧会话只有 gen_metadata；新版活跃会话的 gen_metadata 可能停在升级前，
+# 必须读 transcript 才能看到升级后的调用。两者是同一批调用，不能叠加。
+def _transcript_path(sid, home=None):
+    return os.path.join(home or AG_HOME, "brain", sid,
+                        ".system_generated", "logs", "transcript_full.jsonl")
+
+
+def _ts_utc(s):
+    """'2026-11-25T02:42:08Z' -> 毫秒时间戳；失败返回 0。"""
+    if not s:
+        return 0
+    try:
+        dt = datetime.datetime.strptime(s[:19], "%Y-%m-%dT%H:%M:%S")
+        return int(dt.replace(tzinfo=datetime.timezone.utc).timestamp() * 1000)
+    except (ValueError, TypeError, OverflowError):
+        return 0
+
+
+def _transcript_calls(sid, home=None):
+    """读新版 transcript 的调用记录。返回 (calls, 文件签名或 None)。"""
+    p = _transcript_path(sid, home)
+    sig = _file_sig(p)
+    if sig is None:
+        return [], None
+    out = []
+    try:
+        with open(p, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if '"input_tokens"' not in line:
+                    continue
+                try:
+                    d = json.loads(line)
+                except ValueError:
+                    continue
+                if d.get("type") != "PLANNER_RESPONSE":
+                    continue
+                ts = _ts_utc(d.get("created_at"))
+                if not ts:
+                    continue
+                out.append({
+                    "idx": int(d.get("step_index") or 0),
+                    "pin": int(d.get("input_tokens") or 0)
+                           + int(d.get("cache_read_tokens") or 0),
+                    "hit": int(d.get("cache_read_tokens") or 0),
+                    "pout": int(d.get("output_tokens") or 0),
+                    "ts": ts, "model": d.get("model") or "unknown",
+                })
+    except (OSError, UnicodeError):
+        return [], None
+    return out, sig
+
+
 def parse(path, keep_ctx=True):
     """解析单个会话库，返回 {sid, title, cwd, ctx, calls, bad, block_idxs, user_idxs}。"""
     sid = os.path.basename(path)[:-3] if path.endswith(".db") else os.path.basename(path)
@@ -230,12 +285,24 @@ def parse(path, keep_ctx=True):
             if txt and keep_ctx:
                 block_idxs.append(idx)
 
+        # 新版 transcript 覆盖全部调用时优先用它：gen_metadata.idx 是调用序号，
+        # 不是 step 索引，拿它去 ts_map 查时间会把整段会话压到升级前的那天。
+        tr, _ = _transcript_calls(sid)
+        if len(tr) >= len(gen) and tr:
+            rows = tr
+        else:
+            rows = [{
+                "idx": idx, "pin": r["pin"], "hit": r["hit"],
+                "pout": r["pout"], "ts": int(ts_map.get(idx, 0) * 1000),
+                "model": r["model"],
+            } for idx, r in ((i, gen[i]) for i in sorted(gen))]
+
         calls = []
-        for idx in sorted(gen):
-            r = gen[idx]
+        for r in rows:
+            idx = r["idx"]
             calls.append({
                 "pin": r["pin"], "hit": r["hit"], "pout": r["pout"],
-                "ts": int(ts_map.get(idx, 0) * 1000), "model": r["model"],
+                "ts": r["ts"], "model": r["model"],
                 "ctxN": bisect.bisect_right(block_idxs, idx) if keep_ctx else 0,
                 "turn": bisect.bisect_right(user_idxs, idx) or 1,
                 "tool": "", "seq": len(calls) + 1,
@@ -269,6 +336,10 @@ def _parse_cached(path):
     wal = _file_sig(path + "-wal")
     if wal is not None:
         key = (key, wal)
+    sid = os.path.basename(path)[:-3] if path.endswith(".db") else os.path.basename(path)
+    _, trsig = _transcript_calls(sid)
+    if trsig is not None:
+        key = (key, trsig)
     hit = _PARSED.get(path)
     if hit and hit[0] == key:
         return hit[1]
@@ -317,8 +388,10 @@ def scan(home=None):
             if r is None:
                 continue
             _wal = p + "-wal"
+            _tr = _transcript_path(r["sid"])
             mt = max(os.path.getmtime(p),
-                     os.path.getmtime(_wal) if os.path.exists(_wal) else 0)
+                     os.path.getmtime(_wal) if os.path.exists(_wal) else 0,
+                     os.path.getmtime(_tr) if os.path.exists(_tr) else 0)
         except (OSError, sqlite3.Error) as e:
             print("token-trace: 跳过 %s（%s: %s）" % (p, type(e).__name__, e))
             continue
