@@ -248,13 +248,27 @@ def parse(path, keep_ctx=True):
         con.close()
 
 
-def _parse_cached(path):
-    """scan() 不需要块正文，按 (mtime_ns, size) 缓存轻量结果。"""
+def _file_sig(path):
+    """(mtime_ns, size)；Antigravity 用 WAL，活跃会话的新增全在 -wal 里。"""
     try:
         st = os.stat(path)
     except OSError:
         return None
-    key = (st.st_mtime_ns, st.st_size)
+    return (st.st_mtime_ns, st.st_size)
+
+
+def _parse_cached(path):
+    """scan() 不需要块正文，按主库 + WAL 的签名缓存轻量结果。
+
+    只看主库会漏掉活跃会话：SQLite WAL 模式下新调用先落 -wal，主库
+    mtime/size 直到 checkpoint 才变，旧键会让页面一直停在上次 checkpoint。
+    """
+    key = _file_sig(path)
+    if key is None:
+        return None
+    wal = _file_sig(path + "-wal")
+    if wal is not None:
+        key = (key, wal)
     hit = _PARSED.get(path)
     if hit and hit[0] == key:
         return hit[1]
@@ -302,7 +316,9 @@ def scan(home=None):
             r = _parse_cached(p)
             if r is None:
                 continue
-            mt = os.path.getmtime(p)
+            _wal = p + "-wal"
+            mt = max(os.path.getmtime(p),
+                     os.path.getmtime(_wal) if os.path.exists(_wal) else 0)
         except (OSError, sqlite3.Error) as e:
             print("token-trace: 跳过 %s（%s: %s）" % (p, type(e).__name__, e))
             continue

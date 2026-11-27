@@ -857,6 +857,13 @@ def main():
                   and pricing.price_src("glm-5.2") == "approx"
                   and pricing.price_src("unknown-model") == "fallback",
                   "价目表：汇率 6.67、DeepSeek 用官方人民币价、近似档与未收录分开标记")
+            check(pricing.rates_for("gemini-4-neon")[:3]
+                  == (3.00 * 6.67, 0.15 * 6.67, 15.0 * 6.67)
+                  and pricing.rates_for("gemini-3.8-flash")[:3]
+                  == (0.75 * 6.67, 0.075 * 6.67, 3.75 * 6.67)
+                  and pricing.price_src("gemini-3.8-flash-tiered") == "approx"
+                  and pricing.price_src("claude-sonnet-5-5-medium") == "list",
+                  "价目表：Gemini 3.8 Flash / 4 Neon 按刊例价，Antigravity 变体标近似，Sonnet 5.5 已收录")
         finally:
             T.STORE = orig_store
         # 平台切换：没有会话的平台置灰并写明原因，有数据的可点
@@ -1523,6 +1530,50 @@ def main():
         hj = T.v_rank({"what": ["<script>"], "sort": ["y"], "p": ["1"]})
         check("%3Cscript" not in hj and "what=block" in hj and "sort=" in hj,
               "分页链接改用白名单值，不继续传播原始非法参数")
+
+        print("== 外部源缓存：WAL 追加必须让 Antigravity 重新解析 ==")
+        import sqlite3
+        import tempfile
+        import shutil as _shutil
+        from sources import antigravity as _ag
+
+        def _pv(n):
+            out = bytearray()
+            while True:
+                b = n & 0x7f
+                n >>= 7
+                out.append(b | (0x80 if n else 0))
+                if not n:
+                    return bytes(out)
+
+        def _pbuf(fld, payload):
+            return _pv(fld << 3 | 2) + _pv(len(payload)) + payload
+
+        def _pint(fld, value):
+            return _pv(fld << 3) + _pv(value)
+
+        _blob = _pbuf(1, _pbuf(4, _pint(2, 100) + _pint(3, 10))
+                      + _pbuf(19, b"test-model"))
+        _home = tempfile.mkdtemp(prefix="tt-selftest-agwal-")
+        try:
+            _cdir = os.path.join(_home, "conversations")
+            os.makedirs(_cdir)
+            _db = os.path.join(_cdir, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.db")
+            _con = sqlite3.connect(_db)
+            _con.execute("pragma journal_mode=wal")
+            _con.execute("create table gen_metadata(idx integer primary key, data blob)")
+            _con.execute("create table steps(idx integer, step_type integer, metadata blob, step_payload blob)")
+            _con.execute("insert into gen_metadata values(1, ?)", (_blob,))
+            _con.commit()
+            _n0 = sum(s["calls"] for s in _ag.scan(home=_home))
+            _con.execute("insert into gen_metadata values(2, ?)", (_blob,))
+            _con.commit()
+            _n1 = sum(s["calls"] for s in _ag.scan(home=_home))
+            check(_n0 == 1 and _n1 == 2,
+                  "WAL 追加后 scan() 看见新调用，不再只认主库签名（%d -> %d）" % (_n0, _n1))
+            _con.close()
+        finally:
+            _shutil.rmtree(_home, ignore_errors=True)
 
         print("== 运行期零写盘 ==")
         check(not os.path.isdir(os.path.join(ROOT, "__pycache__")),

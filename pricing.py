@@ -11,13 +11,16 @@
 价格为「元 / 百万 token」：(输入, 缓存命中, 输出)。美元价按 FX_USD_CNY 折算。
 未收录的模型走 FALLBACK，并在 price_src 里明确标记 "fallback"，不冒充官方价。
 
-价目表核对日期 **2026-11-14**，逐条来源见 RATES 的第四列：
+价目表核对日期 **2026-11-14**（Gemini / Sonnet 5.5 增补 2026-11-27），逐条来源见 RATES 的第四列：
   - 腾讯混元 hy4 ............ tencent.com 发布稿 / 腾讯云 TokenHub（6 / 0.3 / 18）
   - 智谱 GLM-5.3 / Flash ... bigmodel.cn/pricing、docs.bigmodel.cn 定价页
   - DeepSeek V4.1 Flash .... api-docs.deepseek.com 中文定价页（人民币价）
   - 蚂蚁百灵 Ling-3.2 ...... 官方发布 / IT之家（$0.30 / $0.90，缓存价未公布）
   - OpenAI GPT-6 系列 ...... platform.openai.com/docs/pricing、openai.com 商务定价页
   - Anthropic Claude ....... Anthropic 价目页（第三方价目表交叉核对）
+  - Gemini 3.8 Flash ....... DeepMind 发布稿 / Google Cloud 价目页（$0.75 / $0.075 / $3.75，引导价至 2026-12-31）
+  - Gemini 4 Neon .......... Google Cloud 模型页 / 发布稿（$3.00 / $0.15 / $15.00，2026-11-18 发布）
+  - Claude Sonnet 5.5 ...... anthropic.com 发布稿（$2 / $0.10 / $10，缓存读 10-07 起减半）
   - 汇率 .................. 2026-11-14 美元中间价约 6.6726（上海银行 6.6732 /
                               浦发 6.6718 / 国际即时 6.6726），取 6.67
 
@@ -58,6 +61,21 @@ RATES = {
     # Anthropic（WorkBuddy 可能出现的模型，按公开价近似）
     "claude-sonnet-5": (2.0 * FX_USD_CNY, 0.20 * FX_USD_CNY, 10.0 * FX_USD_CNY, "Anthropic 价目"),
     "claude-opus-4.8": (5.0 * FX_USD_CNY, 0.50 * FX_USD_CNY, 25.0 * FX_USD_CNY, "Anthropic 价目"),
+    "claude-sonnet-5-5": (2.0 * FX_USD_CNY, 0.10 * FX_USD_CNY, 10.0 * FX_USD_CNY,
+                          "Anthropic 价目（Sonnet 5.5，缓存读 10-07 起减半）"),
+    "claude-sonnet-5-5-medium": (2.0 * FX_USD_CNY, 0.10 * FX_USD_CNY, 10.0 * FX_USD_CNY,
+                                 "Anthropic 价目（Sonnet 5.5 medium 推理档，同标准价）"),
+    # Google Gemini（Antigravity 实际使用的模型，2026-11-27 核对）
+    "gemini-3.8-flash": (0.75 * FX_USD_CNY, 0.075 * FX_USD_CNY, 3.75 * FX_USD_CNY,
+                         "Google 刊例价（3.8 Flash 引导价至 2026-12-31）"),
+    "gemini-4-neon": (3.00 * FX_USD_CNY, 0.15 * FX_USD_CNY, 15.0 * FX_USD_CNY,
+                      "Google 刊例价（4 Neon，2026-11-18 发布）"),
+    # 这两个后缀是 Antigravity 内部的路由 / 计费变体，没有单独公开价；
+    # 按同族标准档近似，price_src 会标 approx，不冒充官方价。
+    "gemini-3.8-flash-n": (0.75 * FX_USD_CNY, 0.075 * FX_USD_CNY, 3.75 * FX_USD_CNY,
+                           "Antigravity 路由后缀，按 3.8 Flash 标准档近似"),
+    "gemini-3.8-flash-tiered": (0.75 * FX_USD_CNY, 0.075 * FX_USD_CNY, 3.75 * FX_USD_CNY,
+                                "Antigravity 分级计费后缀，按 3.8 Flash 标准档近似"),
 }
 # 未收录模型的中端保守档：只用于排序，不代表任何厂商报价。
 FALLBACK = (4.0, 1.0, 12.0, "未收录，按中端档估算")

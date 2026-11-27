@@ -38,9 +38,10 @@ def _sig():
         except OSError:
             continue
         parts.append((f, st.st_mtime_ns, st.st_size))
-    # Antigravity 用会话库 + WAL，签名要连 -wal 一起看。
+    # Antigravity 用会话库 + WAL：只读连接每次都会改 -shm 的时间戳，
+    # 把它算进签名只会造成无谓重扫，真正的内容变化在 -wal。
     for f in antigravity.session_files():
-        for suf in ("", "-wal", "-shm"):
+        for suf in ("", "-wal"):
             try:
                 st = os.stat(f + suf)
             except OSError:
