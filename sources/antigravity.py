@@ -235,7 +235,7 @@ def _transcript_calls(sid, home=None):
                            + int(d.get("cache_read_tokens") or 0),
                     "hit": int(d.get("cache_read_tokens") or 0),
                     "pout": int(d.get("output_tokens") or 0),
-                    "ts": ts, "model": d.get("model") or "unknown",
+                    "ts": ts, "model": d.get("model") or "",
                 })
     except (OSError, UnicodeError):
         return [], None
@@ -289,6 +289,12 @@ def parse(path, keep_ctx=True):
         # 不是 step 索引，拿它去 ts_map 查时间会把整段会话压到升级前的那天。
         tr, _ = _transcript_calls(sid)
         if len(tr) >= len(gen) and tr:
+            # transcript 的 model 常为空（老会话由 gen 写入模型名），按调用
+            # 序号从 gen 补齐；只在 transcript 自己有值时才用它的新模型名。
+            gmodels = [gen[i]["model"] for i in sorted(gen)]
+            for i, row in enumerate(tr):
+                if row["model"] in ("", "unknown") and i < len(gmodels):
+                    row["model"] = gmodels[i]
             rows = tr
         else:
             rows = [{
