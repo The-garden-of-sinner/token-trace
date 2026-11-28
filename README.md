@@ -37,7 +37,7 @@
 **Linux**（Debian / Ubuntu / 银河麒麟 / 统信 UOS / Deepin，装完有应用菜单项）
 
 ```bash
-V=2.1.3   # 换成 Release 页上的最新版本号
+V=2.1.4   # 换成 Release 页上的最新版本号
 curl -fLO "https://github.com/The-garden-of-sinner/token-trace/releases/download/v$V/token-trace_${V}_all.deb"
 sudo dpkg -i "token-trace_${V}_all.deb"
 token-trace
@@ -153,7 +153,7 @@ python3 trace_server.py        # http://127.0.0.1:8765/，Ctrl+C 退出
 **Linux（Debian / Ubuntu / 银河麒麟 / 统信 UOS / Deepin）**
 
 ```bash
-V=2.1.3   # 换成 Release 页上的最新版本号
+V=2.1.4   # 换成 Release 页上的最新版本号
 curl -fLO "https://github.com/The-garden-of-sinner/token-trace/releases/download/v$V/token-trace_${V}_all.deb"
 sudo dpkg -i "token-trace_${V}_all.deb"
 token-trace                     # 起服务并自动打开浏览器
@@ -314,8 +314,9 @@ tar 成员与 gzip 容器头的 `mtime` 都固定为 0（`GzipFile(..., mtime=0)
 
 ### 版本与更新
 
-当前版本 **v2.1.3**（正式版；版本号写在 `scripts/VERSION`，去掉 `-exp` 后 GitHub Release 会进入 `/releases/latest`）：
+当前版本 **v2.1.4**（正式版；版本号写在 `scripts/VERSION`，去掉 `-exp` 后 GitHub Release 会进入 `/releases/latest`）：
 
+- **v2.1.4（2026-11-28）DSH 工具字段修复**：真实 DSH 的工具参数在 `data.arguments`、工具返回在 `data.message.content[].text`，旧代码只读 `data.input` / `data.content`，导致 563 个工具参数块与 563 个工具返回块全部是空 `{}`；`callId` 藏在 `message.toolCallId` / `message.source.callId`，旧代码读不到只能退到 `last_tool` 猜工具名。三处改为真实字段优先、旧简化写法兼容；调用切分与轮次口径不变。自检 **302 项全过**
 - **v2.1.3（2026-11-27）Antigravity 新版数据源**：适配 v2.35.1 起把调用写到 `brain/<sid>/transcript_full.jsonl` 的变化，恢复 11/26–27 的调用与热力图；修复 `gen_metadata.idx` 被误当 step 索引导致整段会话挤到同一天的问题；transcript 完整覆盖时优先使用，老会话回退 gen，空模型名按调用序号补齐；缓存键纳入 WAL 与 transcript 签名。自检 **300 项全过**
 - **v2.1.3 价目表补齐**：新增 Gemini 4 Neon、Claude Sonnet 5.5（含点号别名）、hy4-flash；hy4-flash 原先被 hy4 前缀匹配成 12 倍价，已修正；无独立公开价的 Antigravity 路由后缀标 `approx`
 - **v2.1.2（2026-11-23）**：三张演示配图按当前界面重拍（首页月历、会话概览、成本三段拆分与工具未命中归因的全局统计），价目表补入 GPT-6.2 / Gemini 3.8 Flash / Kimi K3.1 Pro / Hy3 等新模型并标清引导价与无官方按量价的口径；修 Windows 自检的安装指引断言与单文件 `status` 子命令的超时参数。自检 **295 项全过**

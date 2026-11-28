@@ -355,5 +355,6 @@ by_model = df.groupby("model").agg(
 | 2026-11-17 v2.0.0.3-exp | `build_deb.sh` 补打 `core/` 包（修 deb 安装后缺模块）；`core.text._ms` 支持 ISO8601、`codex.py` 复用公共实现；`/search?src=` 概览改报该平台会话数；合成演示数据补齐模型名变体 / 压缩点 token 骤降 / 跨自然日并隔离外部源；自检 244 → 245 项；本文档补 `src` / `cost` 字段与 `?src=` 参数 |
 | 2026-11-17 v2.1.0 | 转正为三段式正式版；`_ver_key()` 补四位主版本 + 正式版权重位（预发布版可识别同名正式版）；DSH 适配器修 sid 父目录定位 / 输出块 / 工具名 / `day_key` / 子代理关联 / 缓存上限；`/search?src=` 概览改用友好平台名 |
 | 2026-11-20 v2.1.1 | 页眉版本区互换顺序并去掉「检查更新」外链箭头；检查结果由独立页改为原页 `:target` 浮窗（四态），有新版本按钮显示「有可用更新 vX」；检查回跳跳过首页启动层；更新胶囊上下收紧；首页平台环图例按 token 降序，与单平台按模型环一致；自检 261 → 265 项 |
+| 2026-11-28 v2.1.4 | DSH 工具参数取 `tool/call.data.arguments`、工具返回取 `tool/result.data.message.content[].text`（旧代码读 `data.input` / `data.content`，真实数据里这两个字段不存在，所有工具块都是空 `{}`）；工具名认领补齐 `message.toolCallId` / `message.source.callId`；JSON 端点与返回结构不变；自检 300 → 302 项 |
 | 2026-11-27 v2.1.3 | 修复 Antigravity 活跃会话缓存不随 WAL 刷新；适配 v2.35.1 写入 `brain/<sid>/transcript_full.jsonl`，按真实 UTC 时间分日，transcript 完整覆盖时优先使用、老会话回退 gen、空模型名按 gen 调用序号补齐；价目表补 Gemini 4 Neon / Sonnet 5.5 / hy4-flash，修正 hy4-flash 前缀误匹配 12 倍价；与 v2.1.2 的价目表改动合并；JSON 端点与返回结构不变；自检 300 项 |
 | 2026-11-23 v2.1.2 | JSON 端点与字段不变；价目表补入 GPT-6.2 / GPT-5.6 Terra / Gemini 3.8 Flash / Kimi K3.1 Pro / Hy3 等新模型，`codex-auto-review` 无官方按量价标 approx；修 Windows 自检的安装指引断言与 `.bat` 的 `status` 子命令；README 三张配图按当前界面重拍；自检 265 → 295 项 |
