@@ -184,9 +184,15 @@ def main():
                       "usage": {"inputTokens": 10, "outputTokens": 5,
                                 "cacheReadTokens": 100, "cacheWriteTokens": 0}}},
             {"type": "tool/call", "seq": 4, "time": 1780000001100,
-             "data": {"name": "bash", "callId": "c1"}},
+             "data": {"name": "bash", "callId": "c1",
+                      "arguments": "{\"cmd\":\"ls\"}"}},
+            # 真实 DSH 的 tool/result：正文在 data.message.content，
+            # callId 在 message.toolCallId / message.source.callId（data 顶层没有）
             {"type": "tool/result", "seq": 5, "time": 1780000001200,
-             "data": {"callId": "c1", "content": "ok"}},
+             "data": {"turn": 1, "step": 1,
+                      "message": {"role": "tool", "toolCallId": "c1",
+                                  "source": {"kind": "tool", "callId": "c1"},
+                                  "content": [{"type": "text", "text": "ok"}]}}},
             {"type": "turn/start", "seq": 6, "time": 1780000002000, "data": {}},
             {"type": "user/message", "seq": 7, "time": 1780000002100,
              "data": {"content": "第二问"}},
@@ -236,6 +242,10 @@ def main():
                   "dsh 助手回复写入 out（思考 + 回答），输出全文与搜索可用")
             check(any(b["l"] == "工具返回 · bash" for b in ctx),
                   "dsh tool/result 块标签带工具名，与 Codex / ZCode 一致")
+            check(any(b["k"] == "tool_result" and b["t"] == "ok" for b in ctx),
+                  "dsh tool/result 正文取 data.message.content（真实格式），不是空 {}")
+            check(any(b["k"] == "tool_call" and b["t"] == '{"cmd":"ls"}' for b in ctx),
+                  "dsh tool/call 参数取 data.arguments（真实格式），不是空 {}")
             rel, unmatched = T.subagent_relations(ss)
             check(any(x["id"] == "dsh-session-t2" for x in rel.get("dsh-session-t1", []))
                   and not unmatched,

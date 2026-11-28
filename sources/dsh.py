@@ -220,18 +220,38 @@ def parse(path, keep_ctx=True):
                 if tid:
                     tool_names[tid] = name
             if keep_ctx:
-                txt = data.get("input") if isinstance(data.get("input"), str) else json.dumps(
-                    data.get("input") or {}, ensure_ascii=False)
+                # 真实 DSH 用 data.arguments（已经是 JSON 字符串）；测试样例
+                # 里的 data.input 是简化写法。两种都收，别把参数写成 "{}"。
+                arg = data.get("arguments")
+                if arg is None:
+                    arg = data.get("input")
+                txt = arg if isinstance(arg, str) else json.dumps(arg or {}, ensure_ascii=False)
                 ctx.append({"k": "tool_call", "l": "工具参数 · %s" % name, "n": len(txt),
                             "t": txt, "c": name[:120], "ts": ts, "e": _est(txt), "src": "dsh"})
             nblocks += 1
             continue
 
         if t == "tool/result":
-            txt = data.get("content") if isinstance(data.get("content"), str) else json.dumps(
-                data.get("content") or {}, ensure_ascii=False)
+            # 真实 DSH 把工具返回放在 data.message.content（message 里还带
+            # source.callId / toolCallId），data 顶层没有 content；测试样例里
+            # 那种 data.content 是简化写法，两种都要认，否则全文全是 "{}"。
+            result = data.get("message") if isinstance(data.get("message"), dict) else data
+            if isinstance(result.get("content"), str):
+                txt = result["content"]
+            elif isinstance(result.get("content"), list):
+                txt = _text(result["content"])
+            elif isinstance(result.get("content"), dict):
+                txt = json.dumps(result["content"], ensure_ascii=False)
+            else:
+                txt = _text(((data.get("message") or {}).get("content"))) \
+                    if isinstance(data.get("message"), dict) else ""
+            # callId 在事件顶层、data 顶层、以及 message.source/toolCallId 都出现过；
+            # 全收，工具名才能从 tool/call 准确认领，而不是退回 last_tool 猜。
+            src = result.get("source") or {}
             tid = str(data.get("callId") or data.get("toolCallId")
-                      or data.get("toolUseId") or data.get("id") or "")
+                      or data.get("toolUseId") or data.get("id")
+                      or result.get("callId") or result.get("toolCallId")
+                      or src.get("callId") or src.get("toolCallId") or "")
             tname = tool_names.get(tid) or last_tool
             if keep_ctx:
                 ctx.append({"k": "tool_result",
